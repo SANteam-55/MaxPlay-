@@ -172,11 +172,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               }, { merge: true }).catch(() => {});
             }
           } catch (e) {
-            setUser(DEFAULT_MOCK_USER);
+            setUser(null);
+            localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
           }
         } else {
-          setUser(DEFAULT_MOCK_USER);
-          localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(DEFAULT_MOCK_USER));
+          // Unauthenticated by default - direct to Sign In / Register
+          setUser(null);
         }
       }
       setIsLoading(false);
@@ -232,13 +233,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsLoading(false);
       return true;
     } catch (err) {
-      // Fallback local login if offline/demo or unconfigured auth provider
-      const fallbackUid = 'usr_' + Math.abs(email.split('').reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0)).toString(36) + '_' + Date.now().toString(36).slice(-4);
+      // Fallback local login if offline or unconfigured auth provider
+      const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+      const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
+      const userDisplayName = email && email.includes('@') ? email.split('@')[0] : (email || 'MaxPlay User');
       const newUser: UserProfile = {
-        ...DEFAULT_MOCK_USER,
         uid: fallbackUid,
-        email: email || DEFAULT_MOCK_USER.email,
-        displayName: email ? email.split('@')[0] : DEFAULT_MOCK_USER.displayName,
+        email: email || `${userDisplayName.toLowerCase()}@maxplay.app`,
+        displayName: userDisplayName,
+        photoURL: '',
+        gender: 'Male',
+        age: 20,
+        idNumber: generatedIdNumber,
+        isPremium: false,
+        points: 50,
+        bio: 'MaxPlay Streamer',
+        status: 'active',
+        isBlocked: false,
+        role: 'user',
+        createdAt: new Date().toISOString()
       };
       setUser(newUser);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(newUser));
@@ -277,6 +290,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const res = await createUserWithEmailAndPassword(auth, email, pass);
       const userRef = doc(db, 'users', res.user.uid);
+      const generatedIdNumber = res.user.uid.substring(0, 8);
       const newProfileData = {
         id: res.user.uid,
         uid: res.user.uid,
@@ -289,7 +303,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         age: 18,
         bio: 'New MaxPlay Streamer',
         isPremium: false,
-        points: 100,
+        points: 50,
         role: 'user',
         status: 'active',
         createdAt: new Date().toISOString(),
@@ -304,9 +318,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         photoURL: '',
         gender: 'Male',
         age: 18,
-        idNumber: res.user.uid.substring(0, 8),
+        idNumber: generatedIdNumber,
         isPremium: false,
-        points: 100,
+        points: 50,
         bio: newProfileData.bio
       };
       setUser(profile);
@@ -315,11 +329,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return true;
     } catch (err) {
       const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+      const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
+      const userDisplayName = name || (email && email.includes('@') ? email.split('@')[0] : 'MaxPlay User');
       const newUser: UserProfile = {
-        ...DEFAULT_MOCK_USER,
         uid: fallbackUid,
-        displayName: name || 'MaxPlay User',
-        email: email || 'user@maxplay.app',
+        email: email || `${userDisplayName.toLowerCase().replace(/\s+/g, '')}@maxplay.app`,
+        displayName: userDisplayName,
+        photoURL: '',
+        gender: 'Male',
+        age: 18,
+        idNumber: generatedIdNumber,
+        isPremium: false,
+        points: 50,
+        bio: 'New MaxPlay Streamer',
+        status: 'active',
+        isBlocked: false,
+        role: 'user',
+        createdAt: new Date().toISOString()
       };
       setUser(newUser);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(newUser));
@@ -338,7 +364,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           age: newUser.age,
           bio: newUser.bio,
           isPremium: false,
-          points: 100,
+          points: 50,
           role: 'user',
           status: 'active',
           createdAt: new Date().toISOString(),
