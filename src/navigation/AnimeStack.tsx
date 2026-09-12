@@ -36,22 +36,26 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
     }
   };
 
-  switch (current.name) {
-    case 'detail':
-      return (
-        <ContentDetailScreen
-          content={current.item}
-          onBack={pop}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'anime':
-    default:
-      return (
+  return (
+    <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+      {/* Base AnimeScreen - Permanently Mounted */}
+      <div className={`h-full w-full ${current.name !== 'anime' ? 'pointer-events-none' : ''}`}>
         <AnimeScreen
           onSelectContent={handleSelect}
           onOpenSearch={onOpenSearch}
         />
-      );
-  }
+      </div>
+
+      {/* Detail Screen Overlay */}
+      {current.name === 'detail' && (
+        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
+          <ContentDetailScreen
+            content={current.item}
+            onBack={pop}
+            onSelectContent={handleSelect}
+          />
+        </div>
+      )}
+    </div>
+  );
 };

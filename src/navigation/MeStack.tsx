@@ -48,53 +48,10 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
     }
   };
 
-  switch (current.name) {
-    case 'detail':
-      return (
-        <ContentDetailScreen
-          content={current.item}
-          onBack={pop}
-          onSelectContent={(item) => push({ name: 'detail', item })}
-        />
-      );
-    case 'edit-profile':
-      return <EditProfileScreen onBack={pop} />;
-    case 'settings':
-      return (
-        <SettingsScreen
-          onBack={pop}
-          onLogout={onLogout}
-          onOpenFeedback={() => push({ name: 'feedback' })}
-        />
-      );
-    case 'feedback':
-      return <FeedbackScreen onBack={pop} />;
-    case 'history':
-      return (
-        <WatchHistoryScreen
-          onBack={pop}
-          onPlayContent={handlePlayContent}
-        />
-      );
-    case 'my-list':
-      return (
-        <MyListScreen
-          onBack={pop}
-          onPlayContent={handlePlayContent}
-        />
-      );
-    case 'messages':
-      return <MessagesScreen onBack={pop} onPlayContent={handlePlayContent} />;
-    case 'my-comments':
-      return (
-        <MyCommentsScreen 
-          onBack={pop}
-          onPlayContent={handlePlayContent}
-        />
-      );
-    case 'me':
-    default:
-      return (
+  return (
+    <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+      {/* Base MeScreen - Permanently Mounted */}
+      <div className={`h-full w-full ${current.name !== 'me' ? 'pointer-events-none' : ''}`}>
         <MeScreen
           onOpenEditProfile={() => push({ name: 'edit-profile' })}
           onOpenSettings={() => push({ name: 'settings' })}
@@ -106,8 +63,50 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
           onLogout={onLogout}
           onPlayContent={handlePlayContent}
         />
-      );
-  }
+      </div>
+
+      {/* Stack Overlay Screens */}
+      {current.name !== 'me' && (
+        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
+          {current.name === 'detail' && (
+            <ContentDetailScreen
+              content={current.item}
+              onBack={pop}
+              onSelectContent={(item) => push({ name: 'detail', item })}
+            />
+          )}
+          {current.name === 'edit-profile' && <EditProfileScreen onBack={pop} />}
+          {current.name === 'settings' && (
+            <SettingsScreen
+              onBack={pop}
+              onLogout={onLogout}
+              onOpenFeedback={() => push({ name: 'feedback' })}
+            />
+          )}
+          {current.name === 'feedback' && <FeedbackScreen onBack={pop} />}
+          {current.name === 'history' && (
+            <WatchHistoryScreen
+              onBack={pop}
+              onPlayContent={handlePlayContent}
+            />
+          )}
+          {current.name === 'my-list' && (
+            <MyListScreen
+              onBack={pop}
+              onPlayContent={handlePlayContent}
+            />
+          )}
+          {current.name === 'messages' && <MessagesScreen onBack={pop} onPlayContent={handlePlayContent} />}
+          {current.name === 'my-comments' && (
+            <MyCommentsScreen 
+              onBack={pop}
+              onPlayContent={handlePlayContent}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
 

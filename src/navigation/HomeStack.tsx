@@ -50,43 +50,10 @@ export const HomeStack: React.FC<HomeStackProps> = ({
     push({ name: 'network_detail', network });
   };
 
-  switch (current.name) {
-    case 'network_detail':
-      return (
-        <NetworkDetailScreen
-          network={current.network}
-          onBack={pop}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'collection_detail':
-      return (
-        <CollectionDetailScreen
-          collection={current.item}
-          onBack={pop}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'detail':
-      return (
-        <ContentDetailScreen
-          content={current.item}
-          onBack={pop}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'filter':
-      return (
-        <FilterScreen
-          initialFilter={current.query}
-          onBack={pop}
-          onOpenSearch={onOpenSearch}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'home':
-    default:
-      return (
+  return (
+    <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+      {/* Base HomeScreen - Permanently Mounted to preserve exact scroll position */}
+      <div className={`h-full w-full ${current.name !== 'home' ? 'pointer-events-none' : ''}`}>
         <HomeScreen
           onSelectContent={handleSelect}
           onSelectNetwork={handleSelectNetwork}
@@ -96,6 +63,42 @@ export const HomeStack: React.FC<HomeStackProps> = ({
             push({ name: 'filter', query: category });
           }}
         />
-      );
-  }
+      </div>
+
+      {/* Stack Overlay Screens */}
+      {current.name !== 'home' && (
+        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
+          {current.name === 'network_detail' && (
+            <NetworkDetailScreen
+              network={current.network}
+              onBack={pop}
+              onSelectContent={handleSelect}
+            />
+          )}
+          {current.name === 'collection_detail' && (
+            <CollectionDetailScreen
+              collection={current.item}
+              onBack={pop}
+              onSelectContent={handleSelect}
+            />
+          )}
+          {current.name === 'detail' && (
+            <ContentDetailScreen
+              content={current.item}
+              onBack={pop}
+              onSelectContent={handleSelect}
+            />
+          )}
+          {current.name === 'filter' && (
+            <FilterScreen
+              initialFilter={current.query}
+              onBack={pop}
+              onOpenSearch={onOpenSearch}
+              onSelectContent={handleSelect}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
 };

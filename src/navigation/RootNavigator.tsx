@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { SplashScreen } from '../screens/auth/SplashScreen';
 import { OnboardingScreen } from '../screens/auth/OnboardingScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
@@ -9,36 +9,123 @@ import { HomeStack } from './HomeStack';
 import { SearchStack } from './SearchStack';
 import { MeStack } from './MeStack';
 import { AnimeStack } from './AnimeStack';
-import { ContentItem } from '../types';
 import { useAuth } from '../hooks/useAuth';
 import { STORAGE_KEYS } from '../utils/constants';
 import { useGeneralSettings } from '../hooks/useGeneralSettings';
 import { MaintenanceScreen } from '../screens/common/MaintenanceScreen';
 import { SuspendedAccountModal } from '../components/common/SuspendedAccountModal';
-
+import { motion, AnimatePresence } from 'motion/react';
 
 export const RootNavigator: React.FC = () => {
   const { isAuthenticated, logout } = useAuth();
   const { maintenanceMode, appName } = useGeneralSettings();
 
+  // PWA State Lock - Check if user is resuming an existing session or standalone mode
+  const isPwaStandalone = typeof window !== 'undefined' && 
+    (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true);
   
-  // Navigation States
-  const [showSplash, setShowSplash] = useState(true);
+  const hasActiveSession = typeof window !== 'undefined' && Boolean(sessionStorage.getItem('MAXPLAY_SESSION_ACTIVE'));
+
+  // Skip splash screen if resuming PWA or session already active
+  const [showSplash, setShowSplash] = useState(!hasActiveSession);
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return !localStorage.getItem(STORAGE_KEYS.ONBOARDING_COMPLETED);
   });
   const [authScreen, setAuthScreen] = useState<'login' | 'register' | 'forgot'>('login');
-  const [activeTab, setActiveTab] = useState<TabType>('home');
+  
+  // Restore saved active tab from PWA storage
+  const [activeTab, setActiveTabState] = useState<TabType>(() => {
+    const saved = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
+    return (saved && ['home', 'search', 'anime', 'me'].includes(saved)) ? saved : 'home';
+  });
+
   const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({});
+  const [exitToastVisible, setExitToastVisible] = useState(false);
+  const lastBackPressTime = useRef<number>(0);
 
   const isCurrentDetailOpen = Boolean(detailOpenByTab[activeTab]);
 
+  // Sync PWA active tab state
+  const setActiveTab = (tab: TabType) => {
+    setActiveTabState(tab);
+    localStorage.setItem('MAXPLAY_PWA_LAST_TAB', tab);
+    try {
+      window.history.pushState({ tab, isDetailOpen: false }, '', `/#${tab}`);
+    } catch (_) {}
+  };
+
+  // Mark PWA session as active once initialized
+  useEffect(() => {
+    sessionStorage.setItem('MAXPLAY_SESSION_ACTIVE', 'true');
+  }, []);
+
+  // Handle Detail Open changes and push history state
   const handleDetailOpenChange = (tab: string, isOpen: boolean) => {
     setDetailOpenByTab(prev => {
       if (prev[tab] === isOpen) return prev;
       return { ...prev, [tab]: isOpen };
     });
+
+    try {
+      if (isOpen) {
+        window.history.pushState({ tab, isDetailOpen: true }, '', `/#${tab}-detail`);
+      }
+    } catch (_) {}
   };
+
+  // Hardware/Phone Triangle Back Button Interceptor
+  useEffect(() => {
+    // Push initial history state if not set
+    if (!window.history.state) {
+      window.history.replaceState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', `/#${activeTab}`);
+    }
+
+    const handlePopState = (e: PopStateEvent) => {
+      // 1. If a detail modal is open on active tab, close it
+      if (isCurrentDetailOpen) {
+        setDetailOpenByTab(prev => ({ ...prev, [activeTab]: false }));
+        return;
+      }
+
+      // 2. If on a non-home tab (e.g., Search, Me, Anime), go back to Home tab
+      if (activeTab !== 'home') {
+        setActiveTabState('home');
+        localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
+        return;
+      }
+
+      // 3. If already on Home tab with no details open, handle Double-Back to Exit
+      const now = Date.now();
+      if (now - lastBackPressTime.current < 2500) {
+        // Allow app exit / native back
+        setExitToastVisible(false);
+      } else {
+        lastBackPressTime.current = now;
+        setExitToastVisible(true);
+        // Push state back so app doesn't immediately close on first back press
+        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', '/#home');
+        setTimeout(() => setExitToastVisible(false), 2500);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [activeTab, isCurrentDetailOpen]);
+
+  // Page visibility listener for PWA resume (Prevents app reset when minimizing/switching apps)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // App resumed from background - restore tab state without resetting
+        const savedTab = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
+        if (savedTab && ['home', 'search', 'anime', 'me'].includes(savedTab)) {
+          setActiveTabState(savedTab);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   if (maintenanceMode) {
     return <MaintenanceScreen appName={appName} />;
@@ -48,7 +135,10 @@ export const RootNavigator: React.FC = () => {
   if (showSplash) {
     return (
       <SplashScreen
-        onFinish={() => setShowSplash(false)}
+        onFinish={() => {
+          setShowSplash(false);
+          sessionStorage.setItem('MAXPLAY_SESSION_ACTIVE', 'true');
+        }}
       />
     );
   }
@@ -148,6 +238,22 @@ export const RootNavigator: React.FC = () => {
           downloadBadgeCount={0}
         />
       )}
+
+      {/* Double Back-button Exit Toast Popup */}
+      <AnimatePresence>
+        {exitToastVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[9999] px-5 py-2.5 bg-[#1C1C1E]/95 backdrop-blur-md border border-white/15 text-white text-xs font-semibold rounded-full shadow-2xl flex items-center gap-2 pointer-events-none"
+          >
+            <span>📱</span>
+            <span>Press back again to exit MaxPlay</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

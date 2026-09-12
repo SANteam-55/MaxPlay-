@@ -31,29 +31,34 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
     onSelectContent(item);
   };
 
-  switch (current.name) {
-    case 'detail':
-      return (
-        <ContentDetailScreen
-          content={current.item}
-          onBack={pop}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'filter':
-      return (
-        <FilterScreen
-          onBack={pop}
-          onOpenSearch={() => { /* fallback */ }}
-          onSelectContent={handleSelect}
-        />
-      );
-    case 'search':
-    default:
-      return (
+  return (
+    <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+      {/* Base SearchScreen - Permanently Mounted */}
+      <div className={`h-full w-full ${current.name !== 'search' ? 'pointer-events-none' : ''}`}>
         <SearchScreen
           onSelectContent={handleSelect}
         />
-      );
-  }
+      </div>
+
+      {/* Stack Overlay Screens */}
+      {current.name !== 'search' && (
+        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
+          {current.name === 'detail' && (
+            <ContentDetailScreen
+              content={current.item}
+              onBack={pop}
+              onSelectContent={handleSelect}
+            />
+          )}
+          {current.name === 'filter' && (
+            <FilterScreen
+              onBack={pop}
+              onOpenSearch={() => { /* fallback */ }}
+              onSelectContent={handleSelect}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
 };

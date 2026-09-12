@@ -15,7 +15,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onNavigateToForgotPassword,
   onSuccess,
 }) => {
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -141,10 +141,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </button>
 
           <button
-            onClick={() => {
-              const randomNum = Math.floor(1000 + Math.random() * 9000);
-              login(`user_${randomNum}@gmail.com`, 'password');
-              onSuccess();
+            onClick={async () => {
+              setLoading(true);
+              setError('');
+              try {
+                await loginWithGoogle();
+                onSuccess();
+              } catch (err: any) {
+                setError(err.message || 'Google sign in failed');
+              } finally {
+                setLoading(false);
+              }
             }}
             type="button"
             className="flex h-[48px] w-full items-center justify-center gap-3 rounded-xl bg-white text-sm font-semibold text-black transition hover:bg-gray-100 cursor-pointer"
