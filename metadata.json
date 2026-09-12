@@ -1,0 +1,6 @@
+{
+  "name": "MaxPlay",
+  "description": "MaxPlay - Managed by SAN TEAM. Movie & TV Show Streaming Platform with Seamless Chunk Video Player, Downloads, and Admin Panel",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

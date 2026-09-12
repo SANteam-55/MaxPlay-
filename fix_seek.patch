@@ -1,0 +1,61 @@
+--- src/components/player/InlinePlayer.tsx
++++ src/components/player/InlinePlayer.tsx
+@@ -40,6 +40,7 @@
+   const videoRef = useRef<HTMLVideoElement>(null);
+   const containerRef = useRef<HTMLDivElement>(null);
+   const currentSrcRef = useRef<string | null>(null);
++  const pendingSeekTimeRef = useRef<number | null>(null);
+   const shouldPlayRef = useRef<boolean>(false);
+   const isLoadedRef = useRef<boolean>(false);
+ 
+@@ -83,10 +84,10 @@
+       videoRef.current.src = activeVideoUrl;
+       videoRef.current.load();
+       
+-      // Restore time on URL change
+-      const targetTime = currentTime > 0 ? currentTime : initialTime;
+-      if (targetTime > 0) {
+-        videoRef.current.currentTime = targetTime;
++      // Save time to restore when new URL loads
++      const targetTimeToRestore = currentTime > 0 ? currentTime : initialTime;
++      if (targetTimeToRestore > 0) {
++        pendingSeekTimeRef.current = targetTimeToRestore;
+       }
+ 
+       if (wasPlaying) {
+@@ -113,8 +114,8 @@
+       if (videoRef.current.duration > 0 && initialTime >= videoRef.current.duration - 5) {
+         targetTime = 0;
+       }
+-      videoRef.current.currentTime = targetTime;
+-      setCurrentTime(targetTime);
++      pendingSeekTimeRef.current = targetTime;
++      if (videoRef.current.readyState >= 1) videoRef.current.currentTime = targetTime;
+     }
+   }, [initialTime]);
+ 
+@@ -124,14 +125,18 @@
+     if (videoRef.current) {
+       setDuration(videoRef.current.duration || 0);
+       
+-      let targetTime = initialTime;
+-      if (videoRef.current.duration > 0 && initialTime >= videoRef.current.duration - 5) {
+-        targetTime = 0; // Reset to start if practically finished
+-      }
+-
+-      if (targetTime > 0 && Math.abs(videoRef.current.currentTime - targetTime) > 1) {
+-        videoRef.current.currentTime = targetTime;
++      let seekTime = pendingSeekTimeRef.current !== null ? pendingSeekTimeRef.current : initialTime;
++      
++      if (videoRef.current.duration > 0 && seekTime >= videoRef.current.duration - 5) {
++        seekTime = 0; // Reset to start if practically finished
+       }
++      
++      if (seekTime > 0 && Math.abs(videoRef.current.currentTime - seekTime) > 1) {
++        videoRef.current.currentTime = seekTime;
++        setCurrentTime(seekTime);
++      }
++      
++      pendingSeekTimeRef.current = null;
+     }
+   };

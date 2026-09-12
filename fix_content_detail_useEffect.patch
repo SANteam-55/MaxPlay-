@@ -1,0 +1,15 @@
+--- src/screens/content/ContentDetailScreen.tsx
++++ src/screens/content/ContentDetailScreen.tsx
+@@ -73,6 +73,12 @@
+ 
+   const initialHistory = React.useMemo(() => getInitialHistory(), [item.id]);
+ 
++  useEffect(() => {
++    setActiveEpisodeIndex(initialHistory?.episodeIndex ?? 0);
++    setSelectedSeasonIndex(initialHistory?.seasonIndex ?? 0);
++    setActivePartIndex(initialHistory?.partIndex ?? 0);
++  }, [item.id, initialHistory]);
++
+   const [episodes, setEpisodes] = useState<EpisodeItem[]>([]);
+   const [comments, setComments] = useState<CommentItem[]>([]);
+   const [myListIds, setMyListIds] = useState<string[]>([]);

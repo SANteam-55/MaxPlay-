@@ -1,0 +1,13 @@
+--- firestore.rules
++++ firestore.rules
+@@ -53,5 +53,10 @@
+       allow read: if true;
+       allow write: if true;
+     }
++
++    // Collection group query for comments
++    match /{path=**}/comments/{commentId} {
++      allow read: if true;
++    }
+   }
+ }

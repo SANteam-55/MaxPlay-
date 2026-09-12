@@ -1,0 +1,19 @@
+--- src/components/player/InlinePlayer.tsx
++++ src/components/player/InlinePlayer.tsx
+@@ -90,7 +90,7 @@
+             .then(() => {
+               setIsPlaying(true);
+               setHasStarted(true);
+-              setIsLoading(false);
++              // Let onPlaying or handleLoadedData clear the loading state
+             })
+             .catch((e) => {
+               if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
+@@ -141,7 +141,6 @@
+           .then(() => {
+             setIsPlaying(true);
+             setHasStarted(true);
+-            // Let onPlaying handle loading state
+           })
+           .catch((e) => {
+             if (e.name !== 'AbortError') console.log('Video playback error:', e);

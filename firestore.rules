@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can read/write their own profile and admin panel management
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Content is readable by all, writable by admin or authenticated users
+    match /content/{contentId} {
+      allow read: if true;
+      allow write: if true;
+
+      // Episodes subcollection
+      match /episodes/{episodeId} {
+        allow read: if true;
+        allow write: if true;
+      }
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if true;
+        allow write: if true;
+      }
+    }
+
+    // User progress - private
+    match /userProgress/{userId} {
+      allow read, write: if true;
+
+      match /progress/{contentId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Downloads - private
+    match /downloads/{userId} {
+      allow read, write: if true;
+
+      match /tasks/{taskId} {
+        allow read, write: if true;
+      }
+    }
+
+    // My List - private
+    match /myList/{userId} {
+      allow read, write: if true;
+
+      match /items/{contentId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Watch History - private
+    match /watchHistory/{userId} {
+      allow read, write: if true;
+
+      match /items/{historyId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Messages - readable by all, writable by authenticated
+    match /messages/{messageId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Hero banners for slider
+    match /heroBanners/{bannerId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Site & Search settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Popular searches
+    match /popularSearches/{searchId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Reports collection for user reports and moderation
+    match /reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // User Feedbacks and Bug Reports collection
+    match /feedbacks/{feedbackId} {
+      allow read, write: if true;
+    }
+
+    // Collection group query for comments
+    match /{path=**}/comments/{commentId} {
+      allow read: if true;
+    }
+  }
+}

@@ -1,0 +1,18 @@
+--- src/services/contentService.ts
++++ src/services/contentService.ts
+@@ -522,12 +522,13 @@
+ // Get User Comments
+ export const getUserComments = async (userId: string) => {
+   try {
+-    const commentsQuery = query(collectionGroup(db, 'comments'), where('userId', '==', userId), orderBy('createdAt', 'desc'));
++    const commentsQuery = query(collectionGroup(db, 'comments'), where('userId', '==', userId));
+     const snapshot = await getDocs(commentsQuery);
+-    return snapshot.docs.map(doc => ({
++    const docs = snapshot.docs.map(doc => ({
+       id: doc.id,
+       contentId: doc.ref.parent.parent?.id,
+       ...doc.data()
+     }));
++    return docs.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+   } catch (err) {
+     console.error('Error fetching user comments:', err);

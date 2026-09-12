@@ -1,0 +1,11 @@
+--- src/screens/content/ContentDetailScreen.tsx
++++ src/screens/content/ContentDetailScreen.tsx
+@@ -194,7 +194,7 @@
+     return [currentEpisode?.videoUrl];
+   };
+ 
+-  const rawParts = (isMovie ? getMovieParts() : getEpisodeParts()).filter(Boolean);
++  const rawParts = Array.from(new Set((isMovie ? getMovieParts() : getEpisodeParts()).filter(Boolean)));
+ 
+   const currentEpisodeParts: string[] = rawParts.length > 0
+     ? (rawParts as string[])

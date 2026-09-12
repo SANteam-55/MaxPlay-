@@ -1,0 +1,22 @@
+--- src/screens/content/ContentDetailScreen.tsx
++++ src/screens/content/ContentDetailScreen.tsx
+@@ -304,8 +304,18 @@
+   if (showFullscreenPlayer) {
++    const epData = {
++      id: activeEpisodeId,
++      contentId: item.id,
++      title: isMovie ? item.title : `${item.title} - ${currentEpisode?.title || 'Episode ' + (activeEpisodeIndex + 1)}`,
++      duration: currentEpisode?.duration || item.duration || 1440,
++      posterUrl: item.backdropUrl || item.posterUrl,
++      videoUrl: currentVideoUrl,
++      videoLinks: currentEpisodeParts,
++      qualities: {},
++      audioTracks: [{ id: 'aud-orig', language: 'Original', label: 'Original Audio', isOriginal: true }],
++      subtitles: []
++    };
+     return (
+       <FullscreenPlayerScreen
+-        item={item}
+-        initialEpisodeIndex={activeEpisodeIndex}
++        episodeData={epData as any}
+         initialTime={playbackPosition}

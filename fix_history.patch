@@ -1,0 +1,29 @@
+--- src/screens/content/ContentDetailScreen.tsx
++++ src/screens/content/ContentDetailScreen.tsx
+@@ -60,19 +60,37 @@
+     seasons: 2,
+     episodes: 24
+   };
+ 
++  // Get initial state from history
++  const getInitialHistory = () => {
++    try {
++      const historyStr = localStorage.getItem(STORAGE_KEYS.WATCH_HISTORY) || '[]';
++      const history = JSON.parse(historyStr);
++      return history.find((h: any) => h.contentId === item.id);
++    } catch (e) {
++      return null;
++    }
++  };
++
++  const initialHistory = React.useMemo(() => getInitialHistory(), [item.id]);
++
+   const [episodes, setEpisodes] = useState<EpisodeItem[]>([]);
+   const [comments, setComments] = useState<CommentItem[]>([]);
+   const [myListIds, setMyListIds] = useState<string[]>([]);
+-  const [activeEpisodeIndex, setActiveEpisodeIndex] = useState(0);
++  const [activeEpisodeIndex, setActiveEpisodeIndex] = useState(initialHistory?.episodeIndex ?? 0);
+   const [selectedLanguage, setSelectedLanguage] = useState('Hindi Dub');
+-  const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(0);
++  const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(initialHistory?.seasonIndex ?? 0);
+   const [activeTab, setActiveTab] = useState<'foryou' | 'comments'>('foryou');

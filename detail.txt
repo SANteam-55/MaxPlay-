@@ -1,0 +1,207 @@
+9:interface ContentDetailScreenProps {
+10-  content: ContentItem | null;
+11-  onBack: () => void;
+12-  onStartDownload?: (content: ContentItem) => void;
+13-}
+14-
+15:export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({ content, onBack, onStartDownload }) => {
+16-  const { user } = useAuthContext();
+17-  const [activeTab, setActiveTab] = useState<'forYou' | 'comments'>('forYou');
+18-  
+19-  const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(0);
+20-  const [selectedEpisodeIndex, setSelectedEpisodeIndex] = useState(0);
+21-  const [selectedPartIndex, setSelectedPartIndex] = useState(0);
+22-  
+23-  const [isMyList, setIsMyList] = useState(false);
+24-  
+25-  const [comments, setComments] = useState<any[]>([]);
+26-  const [newComment, setNewComment] = useState('');
+27-  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+28-  
+29-  const [playbackPosition, setPlaybackPosition] = useState(0);
+30-  const [activeLanguage, setActiveLanguage] = useState<string>('');
+31-  const [showDetails, setShowDetails] = useState(false);
+32-
+33-  const isSeries = content?.type === 'series' || content?.type === 'anime' || content?.type === 'short_tv';
+34-  const isMovie = content?.type === 'movie';
+35-
+36-  // Subscribe to My List
+37-  useEffect(() => {
+38-    if (!user || !content) return;
+39-    const unsubscribe = subscribeToMyList(user.uid, (items) => {
+40-      const match = items.includes(content.id);
+41-      setIsMyList(match);
+42-    });
+43-    return () => unsubscribe();
+44-  }, [user, content]);
+45-
+46-  // Subscribe to Comments
+47-  useEffect(() => {
+48-    if (!content) return;
+49-    const unsubscribe = subscribeToComments(content.id, (fetchedComments) => {
+50-      setComments(fetchedComments);
+51-    });
+52-    return () => unsubscribe();
+53-  }, [content]);
+54-
+55-  if (!content) return null;
+56-
+57-  // --- Derive Active Playback Data ---
+58-  let playerTitle = content.title;
+59-  let playerVideoUrl = content.videoUrl;
+60-  let playerQualityLinks = content.qualityLinks;
+61-  let playerVideoSources = content.videoSources;
+62-  let playerChunks = content.chunks;
+63-  let hasNext = false;
+64-  let activeEpisodeList: any[] = [];
+65-  let totalEpisodes = 0;
+66-  let activeParts: any[] = [];
+67-
+68-  if (isSeries && content.seasonsData && content.seasonsData[selectedSeasonIndex]) {
+69-    const season = content.seasonsData[selectedSeasonIndex];
+70-    activeEpisodeList = season.episodes || [];
+71-    totalEpisodes = activeEpisodeList.length;
+72-    if (activeEpisodeList[selectedEpisodeIndex]) {
+73-      const ep = activeEpisodeList[selectedEpisodeIndex];
+74-      playerTitle = `${content.title} - ${season.title || `Season ${selectedSeasonIndex + 1}`} : ${ep.title}`;
+75-      activeParts = ep.videoLinks || [];
+76-      
+77-      if (activeParts.length > 0 && selectedPartIndex < activeParts.length) {
+78-          playerVideoUrl = activeParts[selectedPartIndex];
+79-          playerTitle = `${playerTitle} (Part ${selectedPartIndex + 1})`;
+80-      } else {
+81-          if (ep.videoUrl) playerVideoUrl = ep.videoUrl;
+82-          if (ep.qualityLinks) playerQualityLinks = ep.qualityLinks;
+83-          if (ep.videoSources) playerVideoSources = ep.videoSources;
+84-          if (ep.chunks) playerChunks = ep.chunks;
+85-      }
+86-      
+87-      if (activeEpisodeList.length > selectedEpisodeIndex + 1) {
+88-        hasNext = true;
+89-      } else if (content.seasonsData.length > selectedSeasonIndex + 1 && content.seasonsData[selectedSeasonIndex + 1].episodes?.length > 0) {
+90-        hasNext = true;
+91-      }
+92-    }
+93-  } else if (isMovie) {
+94-      activeParts = content.videoLinks || [];
+95-      if (activeParts.length > 0 && selectedPartIndex < activeParts.length) {
+96-          playerVideoUrl = activeParts[selectedPartIndex];
+97-          playerTitle = `${content.title} (Part ${selectedPartIndex + 1})`;
+98-          if (activeParts.length > selectedPartIndex + 1) hasNext = true;
+99-      }
+100-  }
+101-
+102-  // Find available languages from current active item
+103-  const availableLanguages = useMemo(() => {
+104-    if (playerVideoSources && typeof playerVideoSources === 'object') {
+105-      return Object.keys(playerVideoSources);
+106-    }
+107-    return [];
+108-  }, [playerVideoSources]);
+109-
+110-  useEffect(() => {
+111-    if (!activeLanguage && availableLanguages.length > 0) {
+112-      setActiveLanguage(availableLanguages[0]);
+113-    }
+114-  }, [availableLanguages, activeLanguage]);
+115-
+116-  // --- Handlers ---
+117-  const handleMyListToggle = async () => {
+118-    if (!user) {
+119-      alert("Please login to add to My List");
+120-      return;
+121-    }
+122-    await toggleMyListItem(user.uid, content.id, isMyList);
+123-  };
+124-
+125-  const handleNextEpisode = () => {
+126-    setPlaybackPosition(0);
+127-    
+128-    // Auto-sequence logic for parts
+129-    if (activeParts.length > 0 && selectedPartIndex + 1 < activeParts.length) {
+130-        setSelectedPartIndex(prev => prev + 1);
+131-        return;
+132-    }
+133-
+134-    // Reset part index when moving to next episode
+135-    setSelectedPartIndex(0);
+136-
+137-    if (isSeries && content.seasonsData) {
+138-      const season = content.seasonsData[selectedSeasonIndex];
+139-      if (season.episodes && season.episodes.length > selectedEpisodeIndex + 1) {
+140-        setSelectedEpisodeIndex(prev => prev + 1);
+141-      } else if (content.seasonsData.length > selectedSeasonIndex + 1) {
+142-        setSelectedSeasonIndex(prev => prev + 1);
+143-        setSelectedEpisodeIndex(0);
+144-      }
+145-    } else if (isMovie && activeParts.length > selectedPartIndex + 1) {
+146-      setSelectedPartIndex(prev => prev + 1);
+147-    }
+148-  };
+149-
+150-  const handleProgress = (time: number, isFinished?: boolean) => {
+151-    if (!user || !content || time < 5) return;
+152-    const isEpi = isSeries ? `S${selectedSeasonIndex}E${selectedEpisodeIndex}` : (isMovie && content.episodesList?.length ? `P${selectedPartIndex}` : undefined);
+153-    if (Math.floor(time) % 15 === 0 || isFinished) {
+154-      saveUserProgress(user.uid, content.id, { time, duration: content.duration, episode: isEpi });
+155-    }
+156-  };
+157-
+158-  const submitComment = async () => {
+159-    if (!user || !newComment.trim()) return;
+160-    setIsSubmittingComment(true);
+161-    try {
+162-      await addCommentToContent(content.id, { uid: user.uid, displayName: user.email?.split('@')[0] || 'User' }, newComment.trim());
+163-      setNewComment('');
+164-    } catch (e) {
+165-      console.error(e);
+166-      alert('Failed to post comment.');
+167-    } finally {
+168-      setIsSubmittingComment(false);
+169-    }
+170-  };
+171-
+172-  const posterOrBackdrop = content.backdropUrl || content.posterUrl;
+173-
+174-  return (
+175-    <div className="flex flex-col min-h-screen bg-[#050505] text-white w-full overflow-x-hidden pb-24 font-sans">
+176-      
+177-      {/* 1. Video Player Area - FIXED TOP */}
+178-      <div className="sticky top-0 z-50 w-full bg-black shadow-2xl" style={{ aspectRatio: '16/9', maxHeight: '40vh' }}>
+179-        <InlinePlayer
+180-          videoUrl={playerVideoUrl}
+181-          qualityLinks={playerQualityLinks}
+182-          videoSources={playerVideoSources}
+183-          chunks={playerChunks}
+184-          posterUrl={posterOrBackdrop}
+185-          title={playerTitle || 'Video'}
+186-          initialTime={playbackPosition}
+187-          autoPlay={true}
+188-          activeLanguage={activeLanguage}
+189-          onLanguageChange={setActiveLanguage}
+190-          onProgress={handleProgress}
+191-          onNext={hasNext ? handleNextEpisode : undefined}
+192-          onBack={onBack}
+193-        />
+194-      </div>
+195-
+196-      <div className="px-4 sm:px-6 pt-5 pb-6 bg-[#050505] z-10">
+197-        
+198-        {/* Title */}
+199-        <div className="flex items-start justify-between mb-2">
+200-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
+201-                {content.title}
+202-            </h1>
+203-        </div>
+204-        
+205-        {/* Badges / Metadata */}
+206-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-white/60 mb-6">
+207-          <div className="flex items-center gap-1.5 text-purple-400 font-semibold">
+208-              {isSeries ? <Tv className="w-4 h-4" /> : <Film className="w-4 h-4" />}
+209-              <span className="uppercase">{content.type || (isSeries ? 'SERIES' : 'MOVIE')}</span>
+210-          </div>
+211-          <span className="text-white/30">|</span>
+212-          {content.rating && (
+213-            <div className="flex items-center gap-1 text-amber-400 font-semibold">
+214-              <Star className="w-4 h-4 fill-amber-400" />
+215-              <span>{content.rating}</span>

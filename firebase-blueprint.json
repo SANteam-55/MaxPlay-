@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "LegalContent": {
+      "title": "Legal and App Content",
+      "description": "Informational content for the app like Privacy Policy, Terms, and About Us",
+      "type": "object",
+      "properties": {
+        "privacyPolicy": {
+          "type": "string",
+          "description": "Markdown or HTML content for Privacy Policy"
+        },
+        "userAgreement": {
+          "type": "string",
+          "description": "Markdown or HTML content for User Agreement"
+        },
+        "aboutUs": {
+          "type": "string",
+          "description": "Content for About Us section"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/settings/legal": {
+      "schema": "LegalContent",
+      "description": "Storage for legal and about us content"
+    }
+  }
+}

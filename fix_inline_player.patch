@@ -1,0 +1,12 @@
+--- src/components/player/InlinePlayer.tsx
++++ src/components/player/InlinePlayer.tsx
+@@ -81,6 +81,9 @@
+       const wasPlaying = isPlaying || hasStarted || shouldPlayRef.current;
+       videoRef.current.src = activeVideoUrl;
+       videoRef.current.load();
++      if (initialTime > 0) {
++        videoRef.current.currentTime = initialTime;
++      }
+ 
+       if (wasPlaying) {
+         shouldPlayRef.current = true;
