@@ -5,6 +5,8 @@ import {
   createUserWithEmailAndPassword, 
   signOut,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
   updateProfile as updateFirebaseAuthProfile,
   User as FirebaseUser 
@@ -141,6 +143,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
     }
   };
+
+  useEffect(() => {
+    // Process redirect result if redirected back from Google Sign-In
+    const handleRedirectResult = async () => {
+      try {
+        const res = await getRedirectResult(auth);
+        if (res && res.user) {
+          console.log('Successfully completed Google Redirect Sign-In:', res.user.email);
+          const profile = await syncFirestoreUserProfile(res.user);
+          setUser(profile);
+          localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profile));
+        }
+      } catch (err) {
+        console.warn('Google Redirect Result processing error:', err);
+      }
+    };
+    handleRedirectResult();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
@@ -386,6 +406,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(true);
     try {
       const provider = new GoogleAuthProvider();
+      // Force Google account selection screen so the user always sees the Gmail selector popup
+      provider.setCustomParameters({
+        prompt: 'select_account'
+      });
+
+      // Detect mobile phone, PWA standalone, or iframe constraint
+      const isMobileOrPwa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobi|standalone/i.test(navigator.userAgent) || 
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.self !== window.top); // Inside preview iframe
+
+      if (isMobileOrPwa) {
+        console.log('Mobile/PWA detected. Initiating Google Sign-In with Redirect...');
+        await signInWithRedirect(auth, provider);
+        // The page will redirect, so returning true
+        return true;
+      }
+
+      console.log('Desktop detected. Initiating Google Sign-In with Popup...');
       const res = await signInWithPopup(auth, provider);
       const googleUser = res.user;
       const uid = googleUser.uid;
@@ -456,8 +494,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsLoading(false);
       return true;
     } catch (err: any) {
-      console.warn('Firebase Google Sign-In Popup failed/canceled, fallback to local unique Google session:', err);
-      // Fallback: Create a distinct unique Google session for this user
+      console.warn('Firebase Google Sign-In failed, checking if canceled or falling back:', err);
+      
+      // If it was a deliberate cancel by user, just stop loading and don't force auto-login fallback
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        setIsLoading(false);
+        return false;
+      }
+
+      // Dynamic fallback for iframe previews / test accounts when popups are completely blocked or unsupported
       const uniqueNum = Math.floor(1000 + Math.random() * 9000);
       const fallbackUid = 'usr_g_' + Date.now().toString(36) + '_' + uniqueNum;
       const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
