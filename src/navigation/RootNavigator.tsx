@@ -33,10 +33,15 @@ export const RootNavigator: React.FC = () => {
   });
   const [authScreen, setAuthScreen] = useState<'login' | 'register' | 'forgot'>('login');
   
-  // Restore saved active tab from PWA storage
+  // Restore saved active tab from PWA storage only if it's an ongoing session (resumed)
   const [activeTab, setActiveTabState] = useState<TabType>(() => {
-    const saved = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
-    return (saved && ['home', 'search', 'anime', 'me'].includes(saved)) ? saved : 'home';
+    if (hasActiveSession) {
+      const saved = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
+      return (saved && ['home', 'search', 'anime', 'me'].includes(saved)) ? saved : 'home';
+    }
+    // For a fresh start, always go to home
+    localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
+    return 'home';
   });
 
   const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({});
@@ -54,9 +59,13 @@ export const RootNavigator: React.FC = () => {
     } catch (_) {}
   };
 
-  // Mark PWA session as active once initialized
+  // Mark PWA session as active once initialized and set up initial back-buffer state
   useEffect(() => {
     sessionStorage.setItem('MAXPLAY_SESSION_ACTIVE', 'true');
+    try {
+      // Ensure we always have a dummy history state on PWA start so that a back gesture is intercepted instead of closing the app immediately
+      window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', window.location.hash || `/#${activeTab}`);
+    } catch (_) {}
   }, []);
 
   // Handle Detail Open changes and push history state
@@ -75,15 +84,12 @@ export const RootNavigator: React.FC = () => {
 
   // Hardware/Phone Triangle Back Button Interceptor
   useEffect(() => {
-    // Push initial history state if not set
-    if (!window.history.state) {
-      window.history.replaceState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', `/#${activeTab}`);
-    }
-
     const handlePopState = (e: PopStateEvent) => {
       // 1. If a detail modal is open on active tab, close it
       if (isCurrentDetailOpen) {
         setDetailOpenByTab(prev => ({ ...prev, [activeTab]: false }));
+        // Put the history state back so the history stack is still populated for subsequent back clicks
+        window.history.pushState({ tab: activeTab, isDetailOpen: false }, '', `/#${activeTab}`);
         return;
       }
 
@@ -91,13 +97,15 @@ export const RootNavigator: React.FC = () => {
       if (activeTab !== 'home') {
         setActiveTabState('home');
         localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
+        // Put the history state back for Home tab
+        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', '/#home');
         return;
       }
 
       // 3. If already on Home tab with no details open, handle Double-Back to Exit
       const now = Date.now();
       if (now - lastBackPressTime.current < 2500) {
-        // Allow app exit / native back
+        // Allow app exit / native back - we don't push state back, so the next back gesture exits the PWA container
         setExitToastVisible(false);
       } else {
         lastBackPressTime.current = now;

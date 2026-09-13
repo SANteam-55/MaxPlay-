@@ -1662,9 +1662,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           </div>
           
           {/* Dynamic Single-Line Metadata Ribbon */}
-          <div className="flex flex-wrap items-center gap-2 text-xs mb-3 font-medium relative z-10">
+          <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs mb-3 font-medium relative z-10 overflow-x-auto whitespace-nowrap scrollbar-none py-1 select-none">
             {/* Content Type Badge */}
-            <span className={`px-2.5 py-0.5 rounded-md font-extrabold uppercase text-[10px] tracking-wider border shadow-sm ${
+            <span className={`shrink-0 px-2.5 py-0.5 rounded-md font-extrabold uppercase text-[9px] sm:text-[10px] tracking-wider border shadow-sm ${
               isMovie 
                 ? 'bg-[#f43f5e]/15 text-[#f43f5e] border-[#f43f5e]/30' 
                 : (content.type === 'anime' ? 'bg-[#06b6d4]/15 text-[#06b6d4] border-[#06b6d4]/30' : 'bg-[#a855f7]/15 text-[#a855f7] border-[#a855f7]/30')
@@ -1674,7 +1674,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
             {/* Star Rating Badge */}
             {content.rating ? (
-              <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-[#f59e0b]/15 text-[#f59e0b] border border-[#f59e0b]/30 font-extrabold text-[11px]">
+              <span className="shrink-0 flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-[#f59e0b]/15 text-[#f59e0b] border border-[#f59e0b]/30 font-extrabold text-[10px] sm:text-[11px]">
                 <Star className="w-3 h-3 fill-[#f59e0b]" />
                 <span>{ratingValue}</span>
               </span>
@@ -1682,21 +1682,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
             {/* Dynamic Quality Badge */}
             {displayQualityTag && (
-              <span className="px-2.5 py-0.5 rounded-md bg-white/10 text-white/90 border border-white/15 font-bold text-[10px]">
+              <span className="shrink-0 px-2.5 py-0.5 rounded-md bg-white/10 text-white/90 border border-white/15 font-bold text-[9px] sm:text-[10px]">
                 {displayQualityTag}
               </span>
             )}
 
             {/* Year & Format */}
-            {releaseYear && <span className="text-white/60 font-semibold">{releaseYear}</span>}
+            {releaseYear && <span className="shrink-0 text-white/60 font-semibold">{releaseYear}</span>}
             {countryName && (
               <>
-                <span className="text-white/20">•</span>
-                <span className="text-white/60 font-semibold">{countryName}</span>
+                <span className="shrink-0 text-white/20">•</span>
+                <span className="shrink-0 text-white/60 font-semibold">{countryName}</span>
               </>
             )}
-            <span className="text-white/20">•</span>
-            <span className="text-[#c084fc] font-bold">
+            <span className="shrink-0 text-white/20">•</span>
+            <span className="shrink-0 text-[#c084fc] font-bold">
               {isMovie ? 'Feature Film' : `${seasonsCount} Season${seasonsCount > 1 ? 's' : ''}`}
             </span>
           </div>
