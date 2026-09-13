@@ -4,10 +4,13 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { SectionHeader } from '../../components/common/SectionHeader';
 import { RankBadge } from '../../components/common/RankBadge';
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 import { useContent } from '../../hooks/useContent';
 import { ContentItem } from '../../types';
 import { STORAGE_KEYS } from '../../utils/constants';
 import { subscribeToSearchSettings } from '../../services/contentService';
+import { adManager } from '../../services/adService';
+import { useAuth } from '../../hooks/useAuth';
 
 interface SearchScreenProps {
   onBack?: () => void;
@@ -18,7 +21,13 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   onBack,
   onSelectContent,
 }) => {
+  const { user } = useAuth();
   const { contentList, loading } = useContent();
+
+  const handleContentClick = (item: ContentItem) => {
+    adManager.handleContentCardClick(!!user?.isPremium);
+    onSelectContent?.(item);
+  };
   const [query, setQuery] = useState('');
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [activeHotTab, setActiveHotTab] = useState<'movies' | 'series' | 'short_tv' | 'music'>('movies');
@@ -316,6 +325,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
 
             {/* Hot Items List */}
             <div className="mt-3 flex flex-col gap-2.5">
+              {/* NATIVE BANNER AD */}
+              <NativeBanner />
+              
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-3 rounded-xl bg-[#121212] p-2.5">

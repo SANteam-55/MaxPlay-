@@ -12,6 +12,7 @@ import {
   collection, addDoc, getDocs, query, where, orderBy, onSnapshot 
 } from 'firebase/firestore';
 import { UserFeedback } from '../../types';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface FeedbackScreenProps {
   onBack: () => void;
@@ -329,6 +330,9 @@ export const FeedbackScreen: React.FC<FeedbackScreenProps> = ({ onBack }) => {
                 </div>
               </div>
             </div>
+
+            {/* NATIVE BANNER AD */}
+            <NativeBanner />
 
             {/* Step 1: Category Selection Grid */}
             <div className="flex flex-col gap-2">

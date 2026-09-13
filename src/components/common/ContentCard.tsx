@@ -1,6 +1,8 @@
 import React from 'react';
 import { Star, Pencil } from 'lucide-react';
 import { ContentItem } from '../../types';
+import { triggerCardPopunder } from '../../utils/adsHelper';
+import { useAuth } from '../../hooks/useAuth';
 
 interface ContentCardProps {
   item: ContentItem;
@@ -17,9 +19,13 @@ export const ContentCard: React.FC<ContentCardProps> = ({
   width = 120,
   height = 180,
 }) => {
+  const { user } = useAuth();
   return (
     <div
-      onClick={() => onPress?.(item)}
+      onClick={() => {
+        triggerCardPopunder(!!user?.isPremium);
+        onPress?.(item);
+      }}
       className="group relative cursor-pointer flex-shrink-0 transition-transform duration-200 active:scale-95"
       style={{ width }}
     >
@@ -66,7 +72,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
       {/* Info section below poster */}
       <div className="mt-2 text-left">
-        <h3 className="line-clamp-2 text-[13px] font-medium text-white group-hover:text-[#8B5CF6] transition-colors">
+        <h3 className="truncate block text-[13px] font-medium text-white group-hover:text-[#8B5CF6] transition-colors" title={item.title}>
           {item.title}
         </h3>
         <p className="mt-0.5 text-[11px] text-[#6B7280]">

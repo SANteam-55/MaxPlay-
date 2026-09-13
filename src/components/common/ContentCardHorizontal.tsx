@@ -1,6 +1,8 @@
 import React from 'react';
 import { Play, MoreVertical } from 'lucide-react';
 import { GRADIENTS } from '../../utils/colors';
+import { triggerCardPopunder } from '../../utils/adsHelper';
+import { useAuth } from '../../hooks/useAuth';
 
 interface ContentCardHorizontalProps {
   thumbnailUrl: string;
@@ -23,9 +25,13 @@ export const ContentCardHorizontal: React.FC<ContentCardHorizontalProps> = ({
   onMenuPress,
   showPlayButton = true,
 }) => {
+  const { user } = useAuth();
   return (
     <div
-      onClick={onPress}
+      onClick={() => {
+        triggerCardPopunder(!!user?.isPremium);
+        onPress?.();
+      }}
       className="flex cursor-pointer items-center justify-between rounded-xl bg-[#121212] p-2.5 transition-all hover:bg-[#1C1C1E] active:scale-[0.98]"
     >
       <div className="flex items-center gap-3 overflow-hidden">

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Home, Search, Sparkles, User } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useAuth } from '../hooks/useAuth';
+import { adManager } from '../services/adService';
 
 export type TabType = 'home' | 'search' | 'anime' | 'me';
 
@@ -14,6 +16,13 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
   activeTab,
   onTabChange,
 }) => {
+  const { user } = useAuth();
+  
+  const handleTabClick = (tabId: TabType) => {
+    adManager.handleTabClick(tabId, !!user?.isPremium);
+    onTabChange(tabId);
+  };
+
   const tabs = [
     { id: 'home' as const, label: 'Home', icon: Home },
     { id: 'search' as const, label: 'Search', icon: Search },
@@ -31,7 +40,7 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
           <motion.button
             key={tab.id}
             whileTap={{ scale: 0.8, rotate: isActive ? 0 : tab.id === 'search' ? -6 : 4 }}
-            onClick={() => onTabChange(tab.id)}
+            onClick={() => handleTabClick(tab.id)}
             className={`relative flex flex-1 flex-col items-center justify-center py-1.5 cursor-pointer outline-none transition-colors duration-200 ${
               isActive ? 'text-white' : 'text-[#71717A] hover:text-[#A1A1AA]'
             }`}

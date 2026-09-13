@@ -6,6 +6,9 @@ import { SkeletonGrid } from '../../components/common/LoadingSkeleton';
 import { BottomSheet } from '../../components/common/BottomSheet';
 import { GradientButton } from '../../components/common/GradientButton';
 import { ContentItem } from '../../types';
+import { NativeBanner } from '../../components/ads/NativeBanner';
+import { adManager } from '../../services/adService';
+import { useAuth } from '../../hooks/useAuth';
 
 import { useContent } from '../../hooks/useContent';
 
@@ -22,7 +25,13 @@ export const FilterScreen: React.FC<FilterScreenProps> = ({
   onSelectContent,
   initialFilter,
 }) => {
+  const { user } = useAuth();
   const { contentList, loading } = useContent();
+
+  const handleContentClick = (item: ContentItem) => {
+    adManager.handleContentCardClick(!!user?.isPremium);
+    onSelectContent?.(item);
+  };
   const [activeType, setActiveType] = useState<'all' | 'movie' | 'tv' | 'anime'>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>(['All']);
   const [selectedCountry, setSelectedCountry] = useState<string>('All');
@@ -304,6 +313,8 @@ export const FilterScreen: React.FC<FilterScreenProps> = ({
           <span>Showing {filteredData.length} items</span>
         </div>
 
+        <NativeBanner />
+
         {/* Results Grid */}
         {loading ? (
           <SkeletonGrid count={9} cols="grid-cols-3 sm:grid-cols-4 md:grid-cols-6" />
@@ -315,7 +326,7 @@ export const FilterScreen: React.FC<FilterScreenProps> = ({
                 item={item}
                 width={105}
                 height={155}
-                onPress={onSelectContent}
+                onPress={handleContentClick}
               />
             ))}
           </div>

@@ -120,7 +120,7 @@ export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = ({
 
               {/* Title & Metadata below poster */}
               <div className="mt-1.5 px-0.5 text-left">
-                <h3 className="line-clamp-2 text-xs sm:text-sm font-semibold text-white group-hover:text-[#A78BFA] transition-colors leading-tight">
+                <h3 className="truncate block text-xs sm:text-sm font-semibold text-white group-hover:text-[#A78BFA] transition-colors leading-tight" title={displayTitle}>
                   {displayTitle}
                 </h3>
               </div>

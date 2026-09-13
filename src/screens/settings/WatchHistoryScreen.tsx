@@ -5,6 +5,7 @@ import { HistoryItem as HistoryItemComponent } from '../../components/history/Hi
 import { subscribeToWatchHistory } from '../../services/contentService';
 import { doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface WatchHistoryScreenProps {
   onBack: () => void;
@@ -85,7 +86,7 @@ export const WatchHistoryScreen: React.FC<WatchHistoryScreenProps> = ({
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-[#0A0A0A] p-4 text-left select-none scrollbar-none pb-20">
       {/* HEADER */}
-      <div className="flex items-center justify-between py-2 border-b border-[#1C1C1E] pb-3">
+      <div className="flex items-center justify-between py-2 border-b border-[#1C1C1E] pb-3 mb-2">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -108,6 +109,8 @@ export const WatchHistoryScreen: React.FC<WatchHistoryScreenProps> = ({
           </button>
         )}
       </div>
+
+      <NativeBanner />
 
       {/* LIST GROUPED BY DATE */}
       {historyItems.length > 0 ? (

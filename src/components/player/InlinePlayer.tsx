@@ -6,6 +6,8 @@ import { GestureHandler } from './GestureHandler';
 import { SpeedDrawer } from './SpeedDrawer';
 import { QualityDrawer } from './QualityDrawer';
 import { AudioLangDrawer } from './AudioLangDrawer';
+import { adManager } from '../../services/adService';
+import { useAuth } from '../../context/AuthContext';
 
 interface InlinePlayerProps {
   videoUrl?: string;
@@ -61,6 +63,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onGlobalSeek,
   skipMarkers,
 }) => {
+  const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -705,6 +708,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     <div 
       ref={playerContainerRef}
       className="relative w-full h-full bg-black group overflow-hidden flex items-center justify-center select-none"
+      onClickCapture={() => {
+        adManager.handlePlayerAction(!!user?.isPremium);
+      }}
       onMouseMove={handleControlInteraction}
       onTouchMove={handleControlInteraction}
     >

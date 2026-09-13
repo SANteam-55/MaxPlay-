@@ -52,12 +52,13 @@ import {
 } from '../../services/contentService';
 import { CommentCard } from '../../components/common/CommentCard';
 import { SoloLevelingSelectorModal } from '../../components/content/SoloLevelingSelectorModal';
+import { NativeBanner } from '../../components/ads/NativeBanner';
+import { adManager } from '../../services/adService';
 
 interface ContentDetailScreenProps {
   content: ContentItem | null;
   onBack: () => void;
   onSelectContent?: (item: ContentItem) => void;
-  onStartDownload?: (content: ContentItem) => void;
 }
 
 // 30 High-Quality Curated Recommendation Items (10 rows of 3 columns)
@@ -1648,12 +1649,18 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           <div className="absolute top-0 right-0 w-48 h-48 bg-purple-500/10 rounded-full blur-2xl pointer-events-none" />
 
           {/* Title Header & Info Trigger */}
-          <div className="flex items-start justify-between gap-3 mb-2.5 relative z-10">
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-white tracking-tight leading-snug">
+          <div className="flex items-center justify-between gap-3 mb-2.5 relative z-10 min-w-0">
+              <h1 
+                className="text-xl sm:text-2xl md:text-3xl font-black text-white tracking-tight leading-snug truncate flex-1 min-w-0"
+                title={content.title}
+              >
                   {content.title}
               </h1>
               <button 
-                onClick={() => setShowDetails(true)}
+                onClick={() => {
+                  adManager.handleActionDockClick(!!user?.isPremium);
+                  setShowDetails(true);
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/15 text-[#c084fc] font-bold text-xs transition-all cursor-pointer shrink-0 border border-purple-500/20 shadow-sm shadow-purple-950/30 active:scale-95"
               >
                   <span className="text-[11px]">Info</span>
@@ -1764,11 +1771,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         </div>
 
         {/* 4 FLOATING TACTILE ACTION DOCK (Neumorphic Frosted Glass) */}
-        <div className="grid grid-cols-4 gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
           {/* 1. Add to list (Emerald Green Accent) */}
           <button 
             id="action-btn-my-list"
-            onClick={handleMyListToggle}
+            onClick={() => {
+              adManager.handleActionDockClick(!!user?.isPremium);
+              handleMyListToggle();
+            }}
             className={`flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl border transition-all duration-200 cursor-pointer active:scale-95 ${
               isMyList 
                 ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-lg shadow-emerald-950/40 ring-1 ring-emerald-500/30' 
@@ -1780,27 +1790,33 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             ) : (
               <Plus className="w-4 h-4 text-emerald-400 stroke-[2.4]" />
             )}
-            <span className="font-bold text-[10px] tracking-tight truncate max-w-[90%]">
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight truncate max-w-[90%]">
               {isMyList ? 'In My List' : 'My List'}
             </span>
           </button>
 
           {/* 2. Share Button (Cyan Blue Accent) */}
           <button 
-            onClick={handleShare}
+            onClick={() => {
+              adManager.handleActionDockClick(!!user?.isPremium);
+              handleShare();
+            }}
             className="flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-cyan-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-cyan-300 shadow-md shadow-cyan-950/20"
           >
             <Share2 className="w-4 h-4 stroke-[2.4] text-[#06b6d4]" />
-            <span className="font-bold text-[10px] tracking-tight">Share</span>
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Share</span>
           </button>
 
           {/* 3. Comment Button (Rose Pink Accent + Badge) */}
           <button 
-            onClick={handleCommentButtonPress}
+            onClick={() => {
+              adManager.handleActionDockClick(!!user?.isPremium);
+              handleCommentButtonPress();
+            }}
             className="relative flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-rose-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-rose-300 shadow-md shadow-rose-950/20"
           >
             <MessageSquare className="w-4 h-4 stroke-[2.4] text-[#f43f5e]" />
-            <span className="font-bold text-[10px] tracking-tight">Comments</span>
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Comments</span>
             {comments.length > 0 && (
               <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-extrabold text-[9px] shadow-sm border border-rose-400/40">
                 {comments.length}
@@ -1810,11 +1826,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
           {/* 4. Details / Info Button (Violet Purple Accent) */}
           <button 
-            onClick={() => setShowDetails(true)}
+            onClick={() => {
+              adManager.handleActionDockClick(!!user?.isPremium);
+              setShowDetails(true);
+            }}
             className="flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-purple-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-purple-300 shadow-md shadow-purple-950/20"
           >
             <Info className="w-4 h-4 stroke-[2.4] text-[#a855f7]" />
-            <span className="font-bold text-[10px] tracking-tight">Details</span>
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Details</span>
           </button>
         </div>
 
@@ -1843,6 +1862,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           </div>
         </div>
 
+        {/* NATIVE BANNER AD */}
+        <NativeBanner />
+
         {/* PLAYBACK & EPISODES CARD CONTAINER */}
         <div className="bg-gradient-to-b from-[#131318] to-[#0c0c10] border border-white/10 rounded-2xl p-4 sm:p-5 shadow-2xl">
             {/* Box Header */}
@@ -1864,7 +1886,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   {/* Dub / Language Trigger Button (Solo Leveling HUD) */}
                   <button
                     type="button"
-                    onClick={() => setIsLanguageModalOpen(true)}
+                    onClick={() => { adManager.handleSelectorClick(!!user?.isPremium); setIsLanguageModalOpen(true); }}
                     className="relative inline-flex items-center gap-2 bg-[#121626] hover:bg-[#182038] active:scale-95 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(6,182,212,0.12)] transition-all cursor-pointer group"
                     title="Change Audio Track"
                   >
@@ -1896,7 +1918,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     <>
                       <button
                         type="button"
-                        onClick={() => setIsSeasonModalOpen(true)}
+                        onClick={() => { adManager.handleSelectorClick(!!user?.isPremium); setIsSeasonModalOpen(true); }}
                         className="relative inline-flex items-center gap-2 bg-[#181329] hover:bg-[#231a3d] active:scale-95 border border-purple-500/30 hover:border-purple-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(168,85,247,0.12)] transition-all cursor-pointer group"
                         title="Change Season"
                       >
@@ -2041,7 +2063,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                           return (
                             <div
                               key={idx}
-                              onClick={() => handleSelectEpisode(idx)}
+                              onClick={() => { adManager.handleEpisodeClick(!!user?.isPremium); handleSelectEpisode(idx); }}
                               className={`p-2.5 sm:p-3 rounded-xl border transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 ${
                                 isCurrent 
                                   ? 'bg-gradient-to-r from-purple-950/60 to-[#161622] border-purple-400/60 shadow-lg shadow-purple-950/40 ring-1 ring-purple-500/40' 
@@ -2119,7 +2141,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                             return (
                                 <button
                                     key={idx}
-                                    onClick={() => handleSelectEpisode(idx)}
+                                    onClick={() => { adManager.handleEpisodeClick(!!user?.isPremium); handleSelectEpisode(idx); }}
                                     className={`relative w-11 h-11 sm:w-12 sm:h-12 flex flex-col items-center justify-center rounded-xl text-xs sm:text-sm font-black transition cursor-pointer border ${
                                       isCurrent 
                                         ? 'bg-[#8B5CF6] border-[#8B5CF6] text-white shadow-lg shadow-purple-500/40 ring-1 ring-purple-400' 
@@ -2148,7 +2170,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         <div ref={commentsSectionRef} className="mb-4">
           <div className="flex items-center p-1 bg-[#121216] border border-white/10 rounded-xl max-w-sm">
               <button 
-                  onClick={() => setActiveTab('forYou')}
+                  onClick={() => { adManager.handleSectionToggleClick(!!user?.isPremium); setActiveTab('forYou'); }}
                   className={`flex-1 py-1.5 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer text-center ${
                     activeTab === 'forYou' 
                       ? 'bg-[#8B5CF6] text-white shadow-md shadow-purple-950/50' 
@@ -2159,7 +2181,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               </button>
               
               <button 
-                  onClick={() => setActiveTab('comments')}
+                  onClick={() => { adManager.handleSectionToggleClick(!!user?.isPremium); setActiveTab('comments'); }}
                   className={`flex-1 py-1.5 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer text-center ${
                     activeTab === 'comments' 
                       ? 'bg-[#8B5CF6] text-white shadow-md shadow-purple-950/50' 
@@ -2226,9 +2248,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
                              {/* Title & Metadata below poster */}
                              <div className="mt-1.5 px-0.5 text-left">
-                               <h3 className="line-clamp-2 text-xs sm:text-sm font-semibold text-white group-hover:text-[#A78BFA] transition-colors leading-tight">
+                               <h3 className="truncate text-xs sm:text-sm font-semibold text-white group-hover:text-[#A78BFA] transition-colors leading-tight" title={displayTitle}>
                                  {displayTitle}
-                                </h3>
+                               </h3>
                              </div>
                           </div>
                         );
@@ -2395,6 +2417,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   </p>
                 </div>
               )}
+
+              {/* NATIVE BANNER AD */}
+              <NativeBanner />
             </div>
           </div>
         </div>

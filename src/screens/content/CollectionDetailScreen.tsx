@@ -111,7 +111,7 @@ export const CollectionDetailScreen: React.FC<CollectionDetailScreenProps> = ({
               {/* Details */}
               <div className="flex-1 flex flex-col justify-center overflow-hidden">
                 <div className="flex justify-between items-start gap-2 mb-1">
-                  <h3 className="text-[15px] font-bold text-white line-clamp-2 leading-tight">
+                  <h3 className="text-[15px] font-bold text-white truncate leading-tight flex-1 min-w-0" title={item.title}>
                     {item.title}
                   </h3>
                   <div className="flex items-center gap-1 shrink-0 mt-0.5">

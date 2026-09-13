@@ -4,6 +4,7 @@ import { downloadManager, DownloadTask, DownloadedFile } from '../../services/Do
 import { DownloadItem } from '../../components/downloads/DownloadItem';
 import { DownloadedItem } from '../../components/downloads/DownloadedItem';
 import { ContentCard } from '../../components/common/ContentCard';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 import { useContent } from '../../hooks/useContent';
 
@@ -115,6 +116,10 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           </div>
         </div>
       )}
+
+      <div className="mt-4">
+        <NativeBanner />
+      </div>
 
       {/* SECTION 3: DOWNLOADED (COMPLETED) */}
       <div className="mt-6 flex flex-col gap-3">

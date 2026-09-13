@@ -1,6 +1,7 @@
 import express from "express";
 import { exec } from "child_process";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Modality } from "@google/genai";
 import dotenv from "dotenv";
@@ -1384,6 +1385,21 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         text: req.body?.text || "",
         voice: req.body?.voice || "Kore"
       });
+    }
+  });
+
+  app.get("/native-banner.html", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    const pubFile = path.join(process.cwd(), "public", "native-banner.html");
+    const distFile = path.join(process.cwd(), "dist", "native-banner.html");
+    if (fs.existsSync(pubFile)) {
+      res.sendFile(pubFile);
+    } else if (fs.existsSync(distFile)) {
+      res.sendFile(distFile);
+    } else {
+      res.status(404).send("Not found");
     }
   });
 

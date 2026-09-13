@@ -5,6 +5,7 @@ import { useContent } from '../../hooks/useContent';
 import { LoadingSkeleton } from '../../components/common/LoadingSkeleton';
 import { subscribeToMyList, toggleMyListItem } from '../../services/contentService';
 import { ContentItem } from '../../types';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface MyListScreenProps {
   onBack: () => void;
@@ -37,7 +38,7 @@ export const MyListScreen: React.FC<MyListScreenProps> = ({
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-[#0A0A0A] p-4 text-left select-none scrollbar-none pb-20">
       {/* HEADER */}
-      <div className="flex items-center justify-between py-2 border-b border-[#1C1C1E] pb-3">
+      <div className="flex items-center justify-between py-2 border-b border-[#1C1C1E] pb-3 mb-4">
         <div className="flex items-center gap-3">
           <button
             onClick={onBack}
@@ -48,6 +49,8 @@ export const MyListScreen: React.FC<MyListScreenProps> = ({
           <h2 className="text-lg font-bold text-white">My List</h2>
         </div>
       </div>
+
+      <NativeBanner />
 
       {/* LIST */}
       {loading ? (

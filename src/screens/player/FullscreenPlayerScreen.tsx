@@ -31,6 +31,7 @@ import { QualityDrawer } from '../../components/player/QualityDrawer';
 import { LanguageDrawer } from '../../components/player/LanguageDrawer';
 import { MOCK_PLAYER_EPISODE, PlayerEpisodeData } from '../../data/mockPlayer';
 import { STORAGE_KEYS } from '../../utils/constants';
+import { adManager } from '../../services/adService';
 
 interface FullscreenPlayerScreenProps {
   episodeData?: PlayerEpisodeData;
@@ -99,13 +100,19 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
     }, 1000);
   };
 
+  const triggerPlayerAd = () => {
+    adManager.handlePlayerAction(!!user?.isPremium);
+  };
+
   const handleLock = () => {
+    triggerPlayerAd();
     setIsLocked(true);
     setShowControls(false);
     triggerShowUnlock();
   };
 
   const handleUnlock = () => {
+    triggerPlayerAd();
     setIsLocked(false);
     setShowUnlockBtn(false);
     if (unlockTimerRef.current) clearTimeout(unlockTimerRef.current);
@@ -301,12 +308,14 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
 
   // Handle Play/Pause Toggle
   const handlePlayPause = () => {
+    adManager.handlePlayerAction(!!user?.isPremium);
     setIsPlaying(!isPlaying);
     resetHideTimer();
   };
 
   // Rewind / Forward 10s
   const handleRewind10 = () => {
+    adManager.handlePlayerAction(!!user?.isPremium);
     const newTime = Math.max(0, currentTime - 10);
     const result = chunkEngineRef.current.seekTo(newTime);
     setCurrentTime(newTime);
@@ -315,6 +324,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
   };
 
   const handleForward10 = () => {
+    adManager.handlePlayerAction(!!user?.isPremium);
     const newTime = Math.min(totalDuration, currentTime + 10);
     const result = chunkEngineRef.current.seekTo(newTime);
     setCurrentTime(newTime);
@@ -362,6 +372,9 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
   return (
     <div 
       className="fixed inset-0 z-50 flex h-screen w-screen items-center justify-center bg-black overflow-hidden select-none"
+      onClickCapture={() => {
+        triggerPlayerAd();
+      }}
       onMouseMove={() => resetHideTimer()}
       onTouchMove={() => resetHideTimer()}
     >
@@ -485,6 +498,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      triggerPlayerAd();
                       onBack(currentTime);
                     }}
                     className="p-1 text-white hover:text-white/80 transition cursor-pointer active:scale-95"
@@ -502,6 +516,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
+                    triggerPlayerAd();
                     resetHideTimer();
                     alert('MaxPlay Player Help: Double tap sides to seek 10s. Drag vertically on screen for volume/brightness.');
                   }}
@@ -514,6 +529,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
+                    triggerPlayerAd();
                     setActiveDrawer('language');
                   }}
                   className="flex flex-col items-center text-white/90 hover:text-white transition cursor-pointer active:scale-95"
@@ -597,6 +613,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                   duration={totalDuration}
                   buffered={isPreloadingNext ? 85 : 45}
                   onSeek={(t) => {
+                    triggerPlayerAd();
                     handleSeek(t);
                     resetHideTimer();
                   }}
@@ -638,6 +655,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        triggerPlayerAd();
                         setActiveDrawer('speed');
                       }}
                       className="flex items-center justify-center h-[22px] px-2 ml-1 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none font-bold text-[10px] tracking-wider"
@@ -655,6 +673,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      triggerPlayerAd();
                       resetHideTimer();
                       const modes: ('contain' | 'cover' | 'fill')[] = ['contain', 'cover', 'fill'];
                       const nextMode = modes[(modes.indexOf(aspectRatioMode) + 1) % modes.length];
@@ -671,6 +690,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      triggerPlayerAd();
                       setActiveDrawer('language');
                     }}
                     className="flex items-center gap-1 text-xs font-medium text-white hover:text-white/80 transition cursor-pointer active:scale-95"
@@ -684,6 +704,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      triggerPlayerAd();
                       setActiveDrawer('quality');
                     }}
                     className="flex items-center justify-center h-[24px] px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-xs font-bold text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95"

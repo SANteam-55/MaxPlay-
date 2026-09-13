@@ -20,6 +20,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { LegalDocScreen, LegalDocType } from './LegalDocScreen';
 import { MaxPlayLogo } from '../../components/common/MaxPlayLogo';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface SettingsScreenProps {
   onBack: () => void;
@@ -153,7 +154,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-[#0A0A0A] p-4 text-left select-none scrollbar-none pb-20">
       {/* HEADER */}
-      <div className="flex items-center gap-3 py-2 border-b border-[#1C1C1E] pb-3">
+      <div className="flex items-center gap-3 py-2 border-b border-[#1C1C1E] pb-3 mb-2">
         <button
           type="button"
           onClick={onBack}
@@ -163,6 +164,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
         </button>
         <h2 className="text-lg font-bold text-white">Settings</h2>
       </div>
+
+      <NativeBanner />
 
       {/* SECTION 1: Your app and preferences */}
       <div className="mt-4 flex flex-col gap-2">

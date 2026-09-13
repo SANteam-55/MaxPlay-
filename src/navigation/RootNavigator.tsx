@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SplashScreen } from '../screens/auth/SplashScreen';
 import { OnboardingScreen } from '../screens/auth/OnboardingScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
@@ -44,7 +44,12 @@ export const RootNavigator: React.FC = () => {
     return 'home';
   });
 
-  const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({});
+  const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({
+    home: false,
+    search: false,
+    anime: false,
+    me: false,
+  });
   const [exitToastVisible, setExitToastVisible] = useState(false);
   const lastBackPressTime = useRef<number>(0);
 
@@ -69,7 +74,7 @@ export const RootNavigator: React.FC = () => {
   }, []);
 
   // Handle Detail Open changes and push history state
-  const handleDetailOpenChange = (tab: string, isOpen: boolean) => {
+  const handleDetailOpenChange = useCallback((tab: string, isOpen: boolean) => {
     setDetailOpenByTab(prev => {
       if (prev[tab] === isOpen) return prev;
       return { ...prev, [tab]: isOpen };
@@ -80,7 +85,12 @@ export const RootNavigator: React.FC = () => {
         window.history.pushState({ tab, isDetailOpen: true }, '', `/#${tab}-detail`);
       }
     } catch (_) {}
-  };
+  }, []);
+
+  const handleHomeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('home', isOpen), [handleDetailOpenChange]);
+  const handleSearchDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('search', isOpen), [handleDetailOpenChange]);
+  const handleAnimeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('anime', isOpen), [handleDetailOpenChange]);
+  const handleMeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('me', isOpen), [handleDetailOpenChange]);
 
   // Hardware/Phone Triangle Back Button Interceptor
   useEffect(() => {
@@ -204,7 +214,7 @@ export const RootNavigator: React.FC = () => {
             }}
             onOpenSearch={() => setActiveTab('search')}
             onOpenNotifications={() => setActiveTab('me')}
-            onDetailOpenChange={(isOpen) => handleDetailOpenChange('home', isOpen)}
+            onDetailOpenChange={handleHomeDetailChange}
           />
         </div>
 
@@ -213,7 +223,7 @@ export const RootNavigator: React.FC = () => {
             onSelectContent={(content) => {
               console.log('Selected Content:', content);
             }}
-            onDetailOpenChange={(isOpen) => handleDetailOpenChange('search', isOpen)}
+            onDetailOpenChange={handleSearchDetailChange}
           />
         </div>
 
@@ -223,7 +233,7 @@ export const RootNavigator: React.FC = () => {
             onSelectContent={(content) => {
               console.log('Selected Anime Content:', content);
             }}
-            onDetailOpenChange={(isOpen) => handleDetailOpenChange('anime', isOpen)}
+            onDetailOpenChange={handleAnimeDetailChange}
           />
         </div>
 
@@ -233,7 +243,7 @@ export const RootNavigator: React.FC = () => {
             onPlayContent={(contentId) => {
               console.log('Play content from Me tab:', contentId);
             }}
-            onDetailOpenChange={(isOpen) => handleDetailOpenChange('me', isOpen)}
+            onDetailOpenChange={handleMeDetailChange}
           />
         </div>
       </div>

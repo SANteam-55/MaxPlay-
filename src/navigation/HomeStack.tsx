@@ -32,10 +32,17 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   const pop = () => setStack(prev => prev.length > 1 ? prev.slice(0, -1) : prev);
 
   const current = stack[stack.length - 1];
+  const isDetailOpen = current.name !== 'home';
+  const prevIsOpenRef = React.useRef<boolean>(false);
+  const onDetailOpenChangeRef = React.useRef(onDetailOpenChange);
+  onDetailOpenChangeRef.current = onDetailOpenChange;
 
   React.useEffect(() => {
-    onDetailOpenChange?.(current.name !== 'home');
-  }, [current.name, onDetailOpenChange]);
+    if (prevIsOpenRef.current !== isDetailOpen) {
+      prevIsOpenRef.current = isDetailOpen;
+      onDetailOpenChangeRef.current?.(isDetailOpen);
+    }
+  }, [isDetailOpen]);
 
   React.useEffect(() => {
     const handlePopStack = () => {

@@ -15,8 +15,12 @@ import {
   MessageCircle,
   X,
   Info,
+  Sparkles,
 } from 'lucide-react';
 import { MenuItem } from '../../components/common/MenuItem';
+import { NativeBanner } from '../../components/ads/NativeBanner';
+import { SocialBar } from '../../components/ads/SocialBar';
+import { adManager } from '../../services/adService';
 
 import { WatchHistoryGrid } from '../../components/profile/WatchHistoryGrid';
 
@@ -114,6 +118,7 @@ export const MeScreen: React.FC<MeScreenProps> = ({
 
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] p-4 pb-32 md:pb-8 text-left select-none scrollbar-none">
+      <SocialBar />
       {/* Profile Row Button */}
       <button
         type="button"
@@ -168,6 +173,11 @@ export const MeScreen: React.FC<MeScreenProps> = ({
 
       {/* WATCH HISTORY GRID */}
       <WatchHistoryGrid onOpenHistory={onOpenHistory} onPlayContent={onPlayContent} />
+
+      {/* NATIVE BANNER AD */}
+      <div className="mt-5">
+        <NativeBanner />
+      </div>
 
       {/* SECTION 1: LIBRARY & MEDIA */}
       <div className="mt-5 flex flex-col">

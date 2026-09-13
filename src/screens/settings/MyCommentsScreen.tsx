@@ -29,6 +29,7 @@ import {
 } from '../../services/contentService';
 import { ContentItem, CommentItem, CommentReplyItem } from '../../types';
 import { formatRelativeTime } from '../../utils/helpers';
+import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface MyCommentsScreenProps {
   onBack: () => void;
@@ -241,6 +242,8 @@ export const MyCommentsScreen: React.FC<MyCommentsScreenProps> = ({
           </span>
         </button>
       </div>
+
+      <NativeBanner />
 
       {/* CONTENT LISTING */}
       <div className="mt-4 flex flex-col gap-4">

@@ -4,6 +4,9 @@ import { ContentCard } from '../../components/common/ContentCard';
 import { SkeletonGrid } from '../../components/common/LoadingSkeleton';
 import { useContent } from '../../hooks/useContent';
 import { ContentItem } from '../../types';
+import { NativeBanner } from '../../components/ads/NativeBanner';
+import { adManager } from '../../services/adService';
+import { useAuth } from '../../hooks/useAuth';
 
 interface AnimeScreenProps {
   onSelectContent?: (item: ContentItem) => void;
@@ -14,9 +17,15 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
   onSelectContent,
   onOpenSearch,
 }) => {
+  const { user } = useAuth();
   const { contentList, loading } = useContent();
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
   const [activeSort, setActiveSort] = useState<'rating' | 'newest' | 'trending'>('rating');
+
+  const handleContentClick = (item: ContentItem) => {
+    adManager.handleContentCardClick(!!user?.isPremium);
+    onSelectContent?.(item);
+  };
 
   // Filter items that are anime
   const animeItems = contentList.filter((item) => {
@@ -145,6 +154,10 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
         </div>
       </div>
 
+      <div className="px-4">
+        <NativeBanner />
+      </div>
+
       {/* Grid Content Area */}
       <div className="flex-1 px-4 pt-3">
         {loading ? (
@@ -157,7 +170,7 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
                 item={item}
                 width={105}
                 height={155}
-                onPress={onSelectContent}
+                onPress={handleContentClick}
               />
             ))}
           </div>

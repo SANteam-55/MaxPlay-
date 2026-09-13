@@ -9,6 +9,9 @@ import { SkeletonHeroBanner, SkeletonCategoryPills, SkeletonContentRow } from '.
 import { CATEGORY_TABS } from '../../utils/constants';
 import { useContent } from '../../hooks/useContent';
 import { ContentItem } from '../../types';
+import { NativeBanner } from '../../components/ads/NativeBanner';
+import { adManager } from '../../services/adService';
+import { useAuth } from '../../hooks/useAuth';
 import { subscribeToSearchSettings } from '../../services/contentService';
 import { ThreeColumnRow } from '../../components/home/ThreeColumnRow';
 import { NetworkGridRow } from '../../components/home/NetworkGridRow';
@@ -32,8 +35,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenNotifications,
   onSeeAllCategory,
 }) => {
+  const { user } = useAuth();
   const { heroBanner, trending, cinema, forYou, categories, screensCategories, homeRowsByScreen, contentList, loading } = useContent();
   const [activeTab, setActiveTab] = useState('Trending');
+  
+  const handleContentClick = (item: ContentItem) => {
+    adManager.handleContentCardClick(!!user?.isPremium);
+    onSelectContent?.(item);
+  };
   const [isScrolled, setIsScrolled] = useState(false);
   
   // Dynamic color palette matching current hero banner image (default neutral cinema tone to prevent flash)
@@ -284,7 +293,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               return (
                 <button
                   key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => {
+                    adManager.handleHomeCategoryClick(tab, !!user?.isPremium);
+                    setActiveTab(tab);
+                  }}
                   className={`relative flex items-center gap-1 pb-1 text-[16px] whitespace-nowrap transition cursor-pointer ${
                     isActive ? 'text-white font-bold' : 'text-[#d4d4d8] font-medium hover:text-white'
                   }`}
@@ -310,7 +322,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         ) : filteredHeroBanner.length > 0 ? (
           <HeroBannerCarousel 
             banners={filteredHeroBanner}
-            onSelectContent={onSelectContent}
+            onSelectContent={handleContentClick}
             onPaletteChange={setBannerPalette}
           />
         ) : (
@@ -421,7 +433,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     {index + 1}
                   </span>
                   <div className="z-10 ml-8">
-                    <ContentCard item={item} onPress={onSelectContent} />
+                    <ContentCard item={item} onPress={handleContentClick} />
                   </div>
                 </div>
               ))}
@@ -429,6 +441,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </div>
         );
       })()}
+
+      <div className="mt-5 mb-2 px-4">
+        <NativeBanner />
+      </div>
 
       {/* Upcoming Releases Row (Filtered by Active Tab) */}
       {(() => {
@@ -449,7 +465,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
               {upcoming.map((item: any, index: number) => (
                 <div key={`${item.id}-${index}`} className="flex flex-col gap-1">
-                  <ContentCard item={item} onPress={onSelectContent} />
+                  <ContentCard item={item} onPress={handleContentClick} />
                   {item.releaseDate && (
                     <div className="text-center mt-1">
                       <span className="text-[10px] font-bold text-[#A1A1AA] uppercase tracking-wider bg-[#1C1C1E] px-2 py-0.5 rounded-full border border-white/5">
@@ -718,7 +734,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 title={row.title}
                 icon={icon}
                 items={rowContent}
-                onSelectContent={(item) => onSelectContent?.(item)}
+                onSelectContent={(item) => handleContentClick(item)}
                 onSeeAll={onSeeAllCategory ? () => onSeeAllCategory(targetCategory || 'All') : undefined}
               />
             );
@@ -750,7 +766,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     return (
                       <div 
                         key={`${item.id}-${index}`} 
-                        onClick={() => onSelectContent(item)} 
+                        onClick={() => handleContentClick(item)} 
                         className="relative shrink-0 w-[230px] sm:w-[240px] h-[115px] rounded-[18px] overflow-hidden cursor-pointer hover:scale-[1.02] active:scale-95 transition-transform shadow-xl border border-white/10 group bg-[#121212] isolate"
                       >
                         {/* Blurred Poster Background */}
@@ -796,7 +812,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     const displayBg = item.customImage || item.backdropUrl || item.posterUrl;
                     const displayTitle = item.customTitle || item.title;
                     return (
-                      <div key={`${item.id}-${index}`} onClick={() => onSelectContent(item)} className="relative shrink-0 w-[240px] h-[135px] rounded-2xl overflow-hidden cursor-pointer hover:scale-[1.02] active:scale-95 transition-transform border border-white/5 shadow-lg">
+                      <div key={`${item.id}-${index}`} onClick={() => handleContentClick(item)} className="relative shrink-0 w-[240px] h-[135px] rounded-2xl overflow-hidden cursor-pointer hover:scale-[1.02] active:scale-95 transition-transform border border-white/5 shadow-lg">
                         <img src={displayBg} alt={displayTitle} className="absolute inset-0 w-full h-full object-cover" />
                       </div>
                     );
@@ -806,7 +822,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     return (
                       <div 
                         key={`${item.id}-${index}`} 
-                        onClick={() => onSelectContent(item)} 
+                        onClick={() => handleContentClick(item)} 
                         className="group relative shrink-0 w-[90px] sm:w-[100px] cursor-pointer hover:scale-[1.02] active:scale-95 transition-transform"
                       >
                         <div className="relative w-full aspect-[3/4] rounded-lg overflow-hidden bg-[#1A1A1A]">
@@ -817,14 +833,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                           />
                         </div>
                         <div className="mt-2 text-left">
-                          <h3 className="line-clamp-2 text-[13px] font-medium text-white group-hover:text-[#8B5CF6] transition-colors">
+                          <h3 className="truncate block text-[13px] font-medium text-white group-hover:text-[#8B5CF6] transition-colors" title={displayTitle}>
                             {displayTitle}
                           </h3>
                         </div>
                       </div>
                     );
                   } else {
-                    return <ContentCard key={`${item.id}-${index}`} item={item} onPress={onSelectContent} />;
+                    return <ContentCard key={`${item.id}-${index}`} item={item} onPress={handleContentClick} />;
                   }
                 })}
               </div>

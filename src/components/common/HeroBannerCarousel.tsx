@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Play, Tv, Swords, Zap, Clapperboard } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ContentItem } from '../../types';
+import { triggerCardPopunder } from '../../utils/adsHelper';
+import { useAuth } from '../../hooks/useAuth';
 import { 
   extractAmbientPalette, 
   getCachedPalette, 
@@ -22,6 +24,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
   onSelectContent,
   onPaletteChange,
 }) => {
+  const { user } = useAuth();
   const [page, setPage] = useState(0);
   const [direction, setDirection] = useState<1 | -1>(1);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
@@ -255,6 +258,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
             <div 
               onClick={(e) => {
                 e.stopPropagation();
+                triggerCardPopunder(!!user?.isPremium);
                 onSelectContent?.(currentItem);
               }}
               className="flex items-center shrink-0 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-2 pr-3 cursor-pointer w-[250px] md:w-[320px] md:p-3 md:pr-4 shadow-[0_8px_32px_rgba(0,0,0,0.5)] relative mt-4 transition-transform hover:scale-[1.02] active:scale-95"
