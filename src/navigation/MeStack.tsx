@@ -38,8 +38,18 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
   const current = stack[stack.length - 1];
 
   React.useEffect(() => {
-    onDetailOpenChange?.(current.name === 'detail');
+    onDetailOpenChange?.(current.name !== 'me');
   }, [current.name, onDetailOpenChange]);
+
+  React.useEffect(() => {
+    const handlePopStack = () => {
+      pop();
+    };
+    window.addEventListener('MAXPLAY_POP_STACK_ME', handlePopStack);
+    return () => {
+      window.removeEventListener('MAXPLAY_POP_STACK_ME', handlePopStack);
+    };
+  }, []);
 
   const handlePlayContent = (contentId: string) => {
     const content = contentList.find(c => c.id === contentId);
@@ -71,35 +81,35 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onSelectContent={(item) => push({ name: 'detail', item })}
             />
           )}
-          {current.name === 'edit-profile' && <EditProfileScreen onBack={pop} />}
+          {current.name === 'edit-profile' && <EditProfileScreen onBack={() => window.history.back()} />}
           {current.name === 'settings' && (
             <SettingsScreen
-              onBack={pop}
+              onBack={() => window.history.back()}
               onLogout={onLogout}
               onOpenFeedback={() => push({ name: 'feedback' })}
             />
           )}
-          {current.name === 'feedback' && <FeedbackScreen onBack={pop} />}
+          {current.name === 'feedback' && <FeedbackScreen onBack={() => window.history.back()} />}
           {current.name === 'history' && (
             <WatchHistoryScreen
-              onBack={pop}
+              onBack={() => window.history.back()}
               onPlayContent={handlePlayContent}
             />
           )}
           {current.name === 'my-list' && (
             <MyListScreen
-              onBack={pop}
+              onBack={() => window.history.back()}
               onPlayContent={handlePlayContent}
             />
           )}
-          {current.name === 'messages' && <MessagesScreen onBack={pop} onPlayContent={handlePlayContent} />}
+          {current.name === 'messages' && <MessagesScreen onBack={() => window.history.back()} onPlayContent={handlePlayContent} />}
           {current.name === 'my-comments' && (
             <MyCommentsScreen 
-              onBack={pop}
+              onBack={() => window.history.back()}
               onPlayContent={handlePlayContent}
             />
           )}

@@ -23,8 +23,18 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
   const current = stack[stack.length - 1];
 
   React.useEffect(() => {
-    onDetailOpenChange?.(current.name === 'detail');
+    onDetailOpenChange?.(current.name !== 'search');
   }, [current.name, onDetailOpenChange]);
+
+  React.useEffect(() => {
+    const handlePopStack = () => {
+      pop();
+    };
+    window.addEventListener('MAXPLAY_POP_STACK_SEARCH', handlePopStack);
+    return () => {
+      window.removeEventListener('MAXPLAY_POP_STACK_SEARCH', handlePopStack);
+    };
+  }, []);
 
   const handleSelect = (item: ContentItem) => {
     push({ name: 'detail', item });
@@ -46,13 +56,13 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'filter' && (
             <FilterScreen
-              onBack={pop}
+              onBack={() => window.history.back()}
               onOpenSearch={() => { /* fallback */ }}
               onSelectContent={handleSelect}
             />

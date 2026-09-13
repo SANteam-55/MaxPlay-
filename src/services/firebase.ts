@@ -46,12 +46,18 @@ import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDoc, setLo
 // Safe non-sensitive public default configuration to prevent Git leakage alerts on GitHub
 // Overridden securely using environment variables at build-time in production (Vercel/Cloud Run)
 const metaEnv = (import.meta as any).env || {};
+const rawDbId = metaEnv.VITE_FIREBASE_DATABASE_ID;
+const isRtdbUrl = rawDbId && (rawDbId.startsWith('http://') || rawDbId.startsWith('https://') || rawDbId.includes('firebaseio.com'));
+const resolvedDatabaseId = (!rawDbId || isRtdbUrl) 
+  ? "ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d" 
+  : rawDbId;
+
 const firebaseConfig = {
   apiKey: metaEnv.VITE_FIREBASE_API_KEY || "AIzaSyB9ru5QTU3Wt8xr8aPPx38NuDhoV87KdQ0",
   authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || "gen-lang-client-0291911037.firebaseapp.com",
   projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0291911037",
   appId: metaEnv.VITE_FIREBASE_APP_ID || "1:596965139357:web:5a1d0502c7745f44f58574",
-  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || "ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d",
+  firestoreDatabaseId: resolvedDatabaseId,
   storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0291911037.firebasestorage.app",
   messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || "596965139357",
   oAuthClientId: "596965139357-0ml5nqmtv353av35ggn0bitufukk2mom.apps.googleusercontent.com"

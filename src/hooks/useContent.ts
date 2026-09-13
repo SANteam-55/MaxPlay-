@@ -101,7 +101,7 @@ export function useContent() {
     const unsubscribeContent = subscribeToContent((items) => {
       if (!isMounted) return;
       contentReceived = true;
-      if (items && Array.isArray(items) && items.length > 0) {
+      if (items && Array.isArray(items)) {
         setContentList(items);
         saveToCache('maxplay_content_cache', items);
         setLoading(false);

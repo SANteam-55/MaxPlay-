@@ -85,11 +85,10 @@ export const RootNavigator: React.FC = () => {
   // Hardware/Phone Triangle Back Button Interceptor
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      // 1. If a detail modal is open on active tab, close it
+      // 1. If a detail modal or sub-screen is open on active tab, pop it
       if (isCurrentDetailOpen) {
-        setDetailOpenByTab(prev => ({ ...prev, [activeTab]: false }));
-        // Put the history state back so the history stack is still populated for subsequent back clicks
-        window.history.pushState({ tab: activeTab, isDetailOpen: false }, '', `/#${activeTab}`);
+        const eventName = `MAXPLAY_POP_STACK_${activeTab.toUpperCase()}`;
+        window.dispatchEvent(new CustomEvent(eventName));
         return;
       }
 

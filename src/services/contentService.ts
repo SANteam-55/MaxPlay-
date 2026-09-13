@@ -249,47 +249,8 @@ export const SAMPLE_CONTENT_ITEMS: ContentItem[] = [
 
 // Seed Initial Firestore Content if database is empty
 export const seedInitialContentIfEmpty = async () => {
-  try {
-    const snap = await getDocs(collection(db, CONTENT_COLLECTION));
-    if (snap.empty) {
-      console.log('Seeding initial content to Firestore...');
-      for (const item of SAMPLE_CONTENT_ITEMS) {
-        await setDoc(doc(db, CONTENT_COLLECTION, item.id), item);
-
-        // Add dummy episode for each content
-        const episodeRef = doc(db, `${CONTENT_COLLECTION}/${item.id}/episodes`, 'ep-1');
-        await setDoc(episodeRef, {
-          id: 'ep-1',
-          episodeNumber: 1,
-          title: 'Episode 1: The Beginning of the Awakening',
-          duration: 596,
-          thumbnailUrl: item.posterUrl,
-          videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
-          chunks: [],
-          qualities: {
-            "480p": { chunks: [] },
-            "720p": { chunks: [] },
-            "1080p": { chunks: [] }
-          },
-          subtitles: [
-            { language: 'English', url: 'https://example.com/subs_en.vtt', downloaded: false },
-            { language: 'Hindi', url: 'https://example.com/subs_hi.vtt', downloaded: false }
-          ],
-          audioTracks: [
-            { language: 'Hindi (Dub)', url: 'https://example.com/audio_hi.mp3', isDefault: true },
-            { language: 'Japanese (Original)', url: 'https://example.com/audio_jp.mp3', isDefault: false }
-          ]
-        });
-      }
-      console.log('Firestore initial seed completed!');
-    }
-  } catch (err: any) {
-    if (err?.code === 'permission-denied' || err?.code === 'unavailable') {
-      // Benign non-admin or offline preview state
-    } else {
-      console.warn('Initial content seed note:', err?.message || err);
-    }
-  }
+  // Disabled per user request to only show real content from Firebase Firestore and prevent auto-seeding of mock items.
+  console.log('Automatic seeding disabled. Using real Firestore data only.');
 };
 
 // Listen to all content in real-time
@@ -297,8 +258,6 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
   const q = query(collection(db, CONTENT_COLLECTION));
   return onSnapshot(q, (snapshot) => {
     if (snapshot.empty) {
-      // Auto seed initial content if database is fresh and empty
-      seedInitialContentIfEmpty();
       callback([]);
       return;
     }

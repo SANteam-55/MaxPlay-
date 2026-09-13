@@ -718,7 +718,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   // Subscribe to all content to enrich recommendations
   useEffect(() => {
     const unsub = subscribeToContent((items) => {
-      if (items && items.length > 0) {
+      if (items && Array.isArray(items)) {
         setCatalogItems(items);
       }
     });

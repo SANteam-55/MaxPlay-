@@ -34,8 +34,18 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   const current = stack[stack.length - 1];
 
   React.useEffect(() => {
-    onDetailOpenChange?.(current.name === 'detail');
+    onDetailOpenChange?.(current.name !== 'home');
   }, [current.name, onDetailOpenChange]);
+
+  React.useEffect(() => {
+    const handlePopStack = () => {
+      pop();
+    };
+    window.addEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
+    return () => {
+      window.removeEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
+    };
+  }, []);
 
   const handleSelect = (item: any) => {
     if (item.isCollection) {
@@ -71,28 +81,28 @@ export const HomeStack: React.FC<HomeStackProps> = ({
           {current.name === 'network_detail' && (
             <NetworkDetailScreen
               network={current.network}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'collection_detail' && (
             <CollectionDetailScreen
               collection={current.item}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'filter' && (
             <FilterScreen
               initialFilter={current.query}
-              onBack={pop}
+              onBack={() => window.history.back()}
               onOpenSearch={onOpenSearch}
               onSelectContent={handleSelect}
             />

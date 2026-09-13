@@ -26,8 +26,18 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
   const current = stack[stack.length - 1];
 
   React.useEffect(() => {
-    onDetailOpenChange?.(current.name === 'detail');
+    onDetailOpenChange?.(current.name !== 'anime');
   }, [current.name, onDetailOpenChange]);
+
+  React.useEffect(() => {
+    const handlePopStack = () => {
+      pop();
+    };
+    window.addEventListener('MAXPLAY_POP_STACK_ANIME', handlePopStack);
+    return () => {
+      window.removeEventListener('MAXPLAY_POP_STACK_ANIME', handlePopStack);
+    };
+  }, []);
 
   const handleSelect = (item: ContentItem) => {
     push({ name: 'detail', item });
@@ -51,7 +61,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
         <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
           <ContentDetailScreen
             content={current.item}
-            onBack={pop}
+            onBack={() => window.history.back()}
             onSelectContent={handleSelect}
           />
         </div>
