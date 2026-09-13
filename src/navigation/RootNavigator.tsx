@@ -17,7 +17,7 @@ import { SuspendedAccountModal } from '../components/common/SuspendedAccountModa
 import { motion, AnimatePresence } from 'motion/react';
 
 export const RootNavigator: React.FC = () => {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
   const { maintenanceMode, appName } = useGeneralSettings();
 
   // PWA State Lock - Check if user is resuming an existing session or standalone mode
@@ -138,10 +138,11 @@ export const RootNavigator: React.FC = () => {
     return <MaintenanceScreen appName={appName} />;
   }
 
-  // Handle splash completion
-  if (showSplash) {
+  // Handle splash completion and authentication verification barrier
+  if (showSplash || (isAuthLoading && !isAuthenticated)) {
     return (
       <SplashScreen
+        isVerifyingAuth={isAuthLoading}
         onFinish={() => {
           setShowSplash(false);
           sessionStorage.setItem('MAXPLAY_SESSION_ACTIVE', 'true');

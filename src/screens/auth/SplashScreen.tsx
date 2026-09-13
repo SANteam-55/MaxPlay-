@@ -1,17 +1,36 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MaxPlayLogo } from '../../components/common/MaxPlayLogo';
 import { APP_NAME, APP_TAGLINE } from '../../utils/constants';
 
 interface SplashScreenProps {
   onFinish: () => void;
+  isVerifyingAuth?: boolean;
 }
 
-export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
+export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish, isVerifyingAuth = false }) => {
+  const [minTimeElapsed, setMinTimeElapsed] = useState(false);
+
+  // Ensure logo animation displays gracefully for at least 1.4 seconds
   useEffect(() => {
     const timer = setTimeout(() => {
-      onFinish();
-    }, 2000);
+      setMinTimeElapsed(true);
+    }, 1400);
     return () => clearTimeout(timer);
+  }, []);
+
+  // Exit splash only when minimum display time passed AND auth is not verifying
+  useEffect(() => {
+    if (minTimeElapsed && !isVerifyingAuth) {
+      onFinish();
+    }
+  }, [minTimeElapsed, isVerifyingAuth, onFinish]);
+
+  // Safety fallback in case network auth hangs (max 6.5s)
+  useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      onFinish();
+    }, 6500);
+    return () => clearTimeout(safetyTimer);
   }, [onFinish]);
 
   return (

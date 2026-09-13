@@ -95,6 +95,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // System Messages and Inbox Notifications
+    match /systemMessages/{msgId} {
+      allow read, write: if true;
+    }
+
     // Collection group query for comments
     match /{path=**}/comments/{commentId} {
       allow read: if true;

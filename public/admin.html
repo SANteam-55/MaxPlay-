@@ -3391,6 +3391,7 @@
   <!-- FEEDBACK DETAIL & RESOLUTION MODAL -->
   <div id="feedback-detail-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
     <div style="background:var(--bg-secondary); border:1px solid rgba(255,255,255,0.12); border-radius:18px; width:100%; max-width:840px; max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 25px 60px rgba(0,0,0,0.8);">
+      <input type="hidden" id="fb-modal-ticket-id-val" value="">
       
       <!-- Modal Header -->
       <div style="padding:18px 24px; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center; background:var(--bg-tertiary);">
@@ -3529,10 +3530,10 @@
             </label>
 
             <div style="display:flex; gap:8px;">
-              <button type="button" onclick="deleteCurrentFeedbackTicket()" class="btn-secondary" style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#EF4444; height:36px; font-size:12px;">
+              <button type="button" id="fb-modal-btn-delete" onclick="window.deleteCurrentFeedbackTicket()" class="btn-secondary" style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#EF4444; height:36px; font-size:12px; cursor:pointer;">
                 <i class="fa-solid fa-trash"></i> Delete Ticket
               </button>
-              <button type="button" onclick="saveFeedbackTicketResolution()" class="btn-primary" style="height:36px; font-size:12px; padding:0 18px;">
+              <button type="button" id="fb-modal-btn-save" onclick="window.saveFeedbackTicketResolution()" class="btn-primary" style="height:36px; font-size:12px; padding:0 18px; cursor:pointer;">
                 <i class="fa-solid fa-check"></i> Save & Send Confirmation
               </button>
             </div>
@@ -12140,142 +12141,392 @@ docs.forEach(docItem => {
        }
     }; 
     window.feedbackData = []; window.currentFeedbackFilter = 'all'; 
+    
     window.loadFeedback = async function() { 
       const tbody = document.getElementById('feedback-table-body'); 
-      if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:var(--text-tertiary);">Loading...</td></tr>'; 
+      if (tbody && (!window.feedbackData || window.feedbackData.length === 0)) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:var(--text-tertiary);"><i class="fa-solid fa-circle-notch fa-spin"></i> Loading feedback tickets...</td></tr>'; 
+      }
       try { 
-        const { collection, getDocs, query, orderBy } = await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js');
-        const db = window.db || (await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js')).getFirestore();
-        const q = query(collection(db, 'feedbacks'), orderBy('createdAt', 'desc')); 
-        const snapshot = await getDocs(q); 
+        const firestoreDb = db || window.db;
+        if (!firestoreDb) return;
+        const snapshot = await getDocs(collection(firestoreDb, 'feedbacks')); 
         const data = []; 
-        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() })); 
-        window.feedbackData = data; window.filterFeedbackTable(); window.updateFeedbackStats(); 
-      } catch(e) { console.error("Error", e); } 
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data() || {};
+          data.push({ ...d, id: docSnap.id, _docId: docSnap.id }); 
+        }); 
+        // Client-side sort by createdAt descending (newest first)
+        data.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        window.feedbackData = data; 
+        window.filterFeedbackTable(); 
+        window.updateFeedbackStats(); 
+      } catch(e) { 
+        console.error("Error loading feedback:", e); 
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Error loading tickets: ' + (e.message || 'Check connection') + '</td></tr>';
+      } 
     }; 
+
     window.updateFeedbackStats = function() { 
-      const pendingCount = window.feedbackData.filter(f => f.status === 'pending').length; 
-      const t1 = document.getElementById('fb-stat-total'); if(t1) t1.innerText = window.feedbackData.length; 
+      const data = window.feedbackData || [];
+      const pendingCount = data.filter(f => f.status === 'pending').length; 
+      const reviewCount = data.filter(f => f.status === 'under_review').length; 
+      const resolvedCount = data.filter(f => f.status === 'resolved').length; 
+      
+      const t1 = document.getElementById('fb-stat-total'); if(t1) t1.innerText = data.length; 
       const t2 = document.getElementById('fb-stat-pending'); if(t2) t2.innerText = pendingCount; 
-      const t3 = document.getElementById('fb-stat-review'); if(t3) t3.innerText = window.feedbackData.filter(f => f.status === 'under_review').length; 
-      const t4 = document.getElementById('fb-stat-resolved'); if(t4) t4.innerText = window.feedbackData.filter(f => f.status === 'resolved').length; 
+      const t3 = document.getElementById('fb-stat-review'); if(t3) t3.innerText = reviewCount; 
+      const t4 = document.getElementById('fb-stat-resolved'); if(t4) t4.innerText = resolvedCount; 
       const b1 = document.getElementById('feedback-badge-count'); if(b1) b1.innerText = pendingCount + ' Pending'; 
       const b2 = document.getElementById('feedback-nav-badge'); if(b2) { b2.innerText = pendingCount; b2.style.display = pendingCount > 0 ? 'inline-block' : 'none'; } 
     }; 
+
     window.setFeedbackStatusFilter = function(status) { 
       window.currentFeedbackFilter = status; 
-      document.querySelectorAll('[id^="feedback-filter-"]').forEach(btn => { btn.classList.remove('active'); btn.style.background = 'transparent'; btn.style.color = '#FFF'; btn.style.border = '1px solid rgba(255,255,255,0.1)'; }); 
+      document.querySelectorAll('[id^="feedback-filter-"]').forEach(btn => { 
+        btn.classList.remove('active'); 
+        btn.style.background = 'transparent'; 
+        btn.style.color = '#FFF'; 
+        btn.style.border = '1px solid rgba(255,255,255,0.1)'; 
+      }); 
       const activeBtn = document.getElementById('feedback-filter-' + status); 
-      if(activeBtn) { activeBtn.classList.add('active'); activeBtn.style.background = 'linear-gradient(135deg, #06B6D4, #8B5CF6)'; activeBtn.style.border = 'none'; } 
+      if(activeBtn) { 
+        activeBtn.classList.add('active'); 
+        activeBtn.style.background = 'linear-gradient(135deg, #06B6D4, #8B5CF6)'; 
+        activeBtn.style.border = 'none'; 
+      } 
       window.filterFeedbackTable(); 
     }; 
+
     window.filterFeedbackTable = function() { 
       const term = (document.getElementById('feedback-search-input')?.value || '').toLowerCase(); 
       const cat = document.getElementById('feedback-category-filter')?.value || 'ALL'; 
       const tbody = document.getElementById('feedback-table-body'); if(!tbody) return; 
-      const filtered = window.feedbackData.filter(f => { 
+      const filtered = (window.feedbackData || []).filter(f => { 
         const mS = !term || (f.userName||'').toLowerCase().includes(term) || (f.userEmail||'').toLowerCase().includes(term) || (f.userId||'').toLowerCase().includes(term) || (f.customTopic||'').toLowerCase().includes(term) || (f.details||'').toLowerCase().includes(term); 
         const mC = cat === 'ALL' || f.category === cat; 
         const mSt = window.currentFeedbackFilter === 'all' || f.status === window.currentFeedbackFilter; 
         return mS && mC && mSt; 
       }); 
-      if(filtered.length === 0) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:var(--text-tertiary);">No results</td></tr>'; return; } 
+      if(filtered.length === 0) { 
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:var(--text-tertiary);">No feedback tickets found matching filter</td></tr>'; 
+        return; 
+      } 
       tbody.innerHTML = filtered.map(f => { 
         let sc='#A1A1AA', sb='rgba(255,255,255,0.1)', sl='Unknown'; 
         if(f.status==='pending'){sc='#FBBF24';sb='rgba(245,158,11,0.15)';sl='Pending';} 
         if(f.status==='under_review'){sc='#22D3EE';sb='rgba(6,182,212,0.15)';sl='In Review';} 
         if(f.status==='resolved'){sc='#34D399';sb='rgba(16,185,129,0.15)';sl='Resolved';} 
         if(f.status==='dismissed'){sc='#71717A';sb='rgba(255,255,255,0.05)';sl='Dismissed';} 
-        return '<tr><td style="padding:14px;"><b>' + (f.userName||'U') + '</b><br><span style="font-size:10px;color:gray;">'+new Date(f.createdAt).toLocaleString()+'</span></td><td style="padding:14px;">' + (f.userId ? f.userId.substring(0,8) : 'N/A') + '</td><td style="padding:14px;">' + (f.userEmail||'N/A') + '</td><td style="padding:14px;">' + (f.categoryLabel||f.category) + (f.customTopic ? '<br><span style="font-size:10px;color:#FBBF24;">' + f.customTopic + '</span>' : '') + '</td><td style="padding:14px;"><span style="color:'+sc+';background:'+sb+';padding:2px 6px;border-radius:4px;">'+sl+'</span></td><td style="padding:14px;">' + (f.screenshots?.length>0 ? f.screenshots.length + ' imgs' : 'Text') + '</td><td style="padding:14px;"><button type="button" class="btn-primary" onclick="window.openFeedbackDetailModal(\'' + f.id + '\')">Review</button></td></tr>'; 
+        const dateStr = f.createdAt ? new Date(f.createdAt).toLocaleString() : 'N/A';
+        return '<tr>' +
+          '<td style="padding:14px;"><b>' + (f.userName||'User') + '</b>' + (f.isVip ? ' <span style="font-size:10px; color:#FBBF24;">👑 VIP</span>' : '') + '<br><span style="font-size:10px;color:gray;">'+dateStr+'</span></td>' +
+          '<td style="padding:14px; font-family:monospace; font-size:11px;">' + (f.userId ? f.userId.substring(0,8) : 'N/A') + '</td>' +
+          '<td style="padding:14px; font-size:12px;">' + (f.userEmail||'N/A') + '</td>' +
+          '<td style="padding:14px;"><span style="font-weight:700;">' + (f.categoryLabel||f.category||'General') + '</span>' + (f.customTopic ? '<br><span style="font-size:10px;color:#FBBF24;">' + f.customTopic + '</span>' : '') + '</td>' +
+          '<td style="padding:14px;"><span style="color:'+sc+';background:'+sb+';padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;">'+sl+'</span>' + (f.adminReply ? '<br><span style="font-size:9px;color:#A78BFA;"><i class="fa-solid fa-reply"></i> Replied</span>' : '') + '</td>' +
+          '<td style="padding:14px; font-size:11px;">' + (f.screenshots?.length>0 ? '<span style="color:var(--accent-purple);font-weight:700;"><i class="fa-regular fa-images"></i> ' + f.screenshots.length + ' file(s)</span>' : '<span style="color:var(--text-tertiary);">Text only</span>') + '</td>' +
+          '<td style="padding:14px;"><button type="button" class="btn-primary" style="height:30px; font-size:11px; padding:0 12px; cursor:pointer;" onclick="window.openFeedbackDetailModal(\'' + f.id + '\')"><i class="fa-solid fa-clipboard-check"></i> Review</button></td>' +
+        '</tr>'; 
       }).join(''); 
     }; 
+
     window.currentFeedbackTicket = null; 
+
     window.openFeedbackDetailModal = function(id) { 
-      const tk = window.feedbackData.find(x => x.id === id); if(!tk) return; 
+      const tk = (window.feedbackData || []).find(x => x.id === id); 
+      if(!tk) {
+        console.warn('Feedback ticket not found for id:', id);
+        return; 
+      }
       window.currentFeedbackTicket = tk; 
-      document.getElementById('fb-modal-ticket-id').innerText = '#' + id.substring(0,8).toUpperCase(); 
-      document.getElementById('fb-modal-date').innerText = new Date(tk.createdAt).toLocaleString(); 
-      document.getElementById('fb-modal-user-name').innerText = tk.userName||'U'; 
-      document.getElementById('fb-modal-user-email').innerText = tk.userEmail||'N/A'; 
-      document.getElementById('fb-modal-user-uid').innerText = tk.userId||'N/A'; 
-      document.getElementById('fb-modal-category-badge').innerText = tk.categoryLabel||tk.category; 
-      document.getElementById('fb-modal-telemetry-meta').innerText = tk.deviceInfo||'Unknown'; 
-      document.getElementById('fb-modal-custom-topic-box').style.display = tk.customTopic ? 'block' : 'none';
-      if(tk.customTopic) document.getElementById('fb-modal-custom-topic-text').innerText = tk.customTopic;
-      document.getElementById('fb-modal-details-text').innerText = tk.details||''; 
-      document.getElementById('fb-modal-status-select').value = tk.status||'pending'; 
-      document.getElementById('fb-modal-reply-body').value = tk.adminReply||''; 
+      
+      const idValInput = document.getElementById('fb-modal-ticket-id-val');
+      if (idValInput) idValInput.value = id;
+
+      const tId = document.getElementById('fb-modal-ticket-id');
+      if (tId) tId.innerText = '#' + id.substring(0,8).toUpperCase(); 
+
+      const tDate = document.getElementById('fb-modal-date');
+      if (tDate) tDate.innerText = tk.createdAt ? new Date(tk.createdAt).toLocaleString() : 'Recent'; 
+
+      const tUser = document.getElementById('fb-modal-user-name');
+      if (tUser) tUser.innerText = tk.userName || 'User'; 
+
+      const vipBadge = document.getElementById('fb-modal-vip-badge');
+      if (vipBadge) vipBadge.style.display = tk.isVip ? 'inline-block' : 'none';
+
+      const tEmail = document.getElementById('fb-modal-user-email');
+      if (tEmail) tEmail.innerText = tk.userEmail || 'N/A'; 
+
+      const tUid = document.getElementById('fb-modal-user-uid');
+      if (tUid) tUid.innerText = tk.userId || 'N/A'; 
+
+      const tCat = document.getElementById('fb-modal-category-badge');
+      if (tCat) tCat.innerText = tk.categoryLabel || tk.category || 'General'; 
+
+      const tTel = document.getElementById('fb-modal-telemetry-meta');
+      if (tTel) tTel.innerText = tk.deviceInfo || 'Unknown device'; 
+
+      const customTopicBox = document.getElementById('fb-modal-custom-topic-box');
+      if (customTopicBox) {
+        customTopicBox.style.display = tk.customTopic ? 'block' : 'none';
+        const customTopicText = document.getElementById('fb-modal-custom-topic-text');
+        if (customTopicText && tk.customTopic) customTopicText.innerText = tk.customTopic;
+      }
+
+      const tDetails = document.getElementById('fb-modal-details-text');
+      if (tDetails) tDetails.innerText = tk.details || 'No additional details provided.'; 
+
+      const statusSelect = document.getElementById('fb-modal-status-select');
+      if (statusSelect) statusSelect.value = tk.status || 'pending'; 
+
+      const replyBody = document.getElementById('fb-modal-reply-body');
+      if (replyBody) replyBody.value = tk.adminReply || ''; 
+
       const sg = document.getElementById('fb-modal-screenshots-grid'); 
-      if(tk.screenshots?.length > 0) { 
-        document.getElementById('fb-modal-screenshots-section').style.display='block'; 
-        sg.innerHTML = tk.screenshots.map(s => '<img src="' + s + '" style="width:100%;aspect-ratio:16/9;object-fit:cover;cursor:pointer;" onclick="window.openFeedbackScreenshotLightbox(\'' + s + '\')">').join(''); 
+      const ssSection = document.getElementById('fb-modal-screenshots-section');
+      if (tk.screenshots && tk.screenshots.length > 0) { 
+        if (ssSection) ssSection.style.display = 'block'; 
+        const countSpan = document.getElementById('fb-modal-screenshots-count');
+        if (countSpan) countSpan.innerText = tk.screenshots.length + ' file' + (tk.screenshots.length > 1 ? 's' : '');
+        if (sg) {
+          sg.innerHTML = tk.screenshots.map(s => '<img src="' + s + '" style="width:100%;aspect-ratio:16/9;object-fit:cover;cursor:pointer;border-radius:8px;border:1px solid rgba(255,255,255,0.1);" onclick="window.openFeedbackScreenshotLightbox(\'' + s + '\')">').join(''); 
+        }
       } else { 
-        document.getElementById('fb-modal-screenshots-section').style.display='none'; 
+        if (ssSection) ssSection.style.display = 'none'; 
       } 
-      document.getElementById('feedback-detail-modal').style.display = 'flex'; 
+      const modal = document.getElementById('feedback-detail-modal');
+      if (modal) modal.style.display = 'flex'; 
     }; 
-    window.closeFeedbackDetailModal = function() { document.getElementById('feedback-detail-modal').style.display = 'none'; }; 
-    window.openFeedbackScreenshotLightbox = function(s) { document.getElementById('lightbox-img-element').src = s; document.getElementById('lightbox-open-newtab').href = s; document.getElementById('feedback-screenshot-lightbox').style.display = 'flex'; }; 
-    window.closeFeedbackScreenshotLightbox = function() { document.getElementById('feedback-screenshot-lightbox').style.display = 'none'; }; 
+
+    window.closeFeedbackDetailModal = function() { 
+      const modal = document.getElementById('feedback-detail-modal');
+      if (modal) modal.style.display = 'none'; 
+    }; 
+
+    window.openFeedbackScreenshotLightbox = function(s) { 
+      const img = document.getElementById('lightbox-img-element');
+      if (img) img.src = s; 
+      const link = document.getElementById('lightbox-open-newtab');
+      if (link) link.href = s; 
+      const box = document.getElementById('feedback-screenshot-lightbox');
+      if (box) box.style.display = 'flex'; 
+    }; 
+
+    window.closeFeedbackScreenshotLightbox = function() { 
+      const box = document.getElementById('feedback-screenshot-lightbox');
+      if (box) box.style.display = 'none'; 
+    }; 
+
     window.applyFeedbackTemplate = function(k) { 
       const r = document.getElementById('fb-modal-reply-body'); 
       const s = document.getElementById('fb-modal-status-select'); 
-      if(k==='resolved'){ r.value='Fixed! Thanks!'; s.value='resolved'; } 
-      else if(k==='investigating'){ r.value='Investigating now.'; s.value='under_review'; } 
-      else if(k==='feature_logged'){ r.value='Feature request logged.'; s.value='resolved'; }
-      else if(k==='more_info'){ r.value='Need more info.'; s.value='under_review'; } 
+      if (!r || !s) return;
+      if (k === 'resolved') { 
+        r.value = 'Thank you for bringing this to our attention! We have investigated and resolved this issue. Please refresh or update your app to enjoy smooth playback.'; 
+        s.value = 'resolved'; 
+      } else if (k === 'investigating') { 
+        r.value = 'Thank you for reporting this issue. Our engineering team is currently investigating the glitch. We will update you as soon as a fix is deployed.'; 
+        s.value = 'under_review'; 
+      } else if (k === 'feature_logged') { 
+        r.value = 'Thank you for the fantastic suggestion! We have logged your request into our feature roadmap for upcoming releases.'; 
+        s.value = 'resolved'; 
+      } else if (k === 'more_info') { 
+        r.value = 'Could you please provide a few more details regarding your device, browser, or the specific title/link that was playing when this occurred? Thank you!'; 
+        s.value = 'under_review'; 
+      } 
     }; 
+
     window.saveFeedbackTicketResolution = async function() { 
-      if(!window.currentFeedbackTicket) return; 
-      const id = window.currentFeedbackTicket.id; 
-      const s = document.getElementById('fb-modal-status-select').value; 
-      const r = document.getElementById('fb-modal-reply-body').value.trim(); 
-      const snd = document.getElementById('fb-modal-send-inbox-notification').checked; 
+      const saveBtn = document.getElementById('fb-modal-btn-save');
+      const origBtnHtml = saveBtn ? saveBtn.innerHTML : '<i class="fa-solid fa-check"></i> Save & Send Confirmation';
+      
+      const ticketId = document.getElementById('fb-modal-ticket-id-val')?.value || window.currentFeedbackTicket?.id;
+      if (!ticketId) {
+        if (window.showToast) window.showToast('Error: No feedback ticket selected.');
+        return;
+      }
+      
+      const s = document.getElementById('fb-modal-status-select')?.value || 'resolved'; 
+      const r = (document.getElementById('fb-modal-reply-body')?.value || '').trim(); 
+      const snd = document.getElementById('fb-modal-send-inbox-notification')?.checked ?? true; 
+      
       try { 
-        const { updateDoc, doc, addDoc, collection } = await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js');
-        const db = window.db || (await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js')).getFirestore();
-        const d = { status: s, updatedAt: new Date().toISOString() }; 
-        if(r) { d.adminReply = r; d.adminReplyDate = new Date().toISOString(); d.adminReplySubject = "Response to your feedback: " + (window.currentFeedbackTicket.categoryLabel || 'Support Ticket'); } 
-        await updateDoc(doc(db, 'feedbacks', id), d); 
-        if(snd && r && window.currentFeedbackTicket.userId) { 
-          await addDoc(collection(db, 'systemMessages'), { userId: window.currentFeedbackTicket.userId, title: "Support Ticket Update", message: r, type: 'support_reply', priority: 'normal', createdAt: new Date().toISOString(), isUnread: true }); 
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...';
+        }
+
+        const firestoreDb = db || window.db;
+        if (!firestoreDb) {
+          throw new Error('Database connection not initialized.');
+        }
+
+        const d = { 
+          status: s, 
+          updatedAt: new Date().toISOString() 
+        }; 
+        if (r) { 
+          d.adminReply = r; 
+          d.adminReplyDate = new Date().toISOString(); 
+          d.adminReplySubject = "Response to your feedback: " + (window.currentFeedbackTicket?.categoryLabel || 'Support Ticket'); 
         } 
-        if(window.showToast) window.showToast('Updated'); 
+        
+        // Use setDoc with merge: true for rock-solid non-destructive updating
+        await setDoc(doc(firestoreDb, 'feedbacks', ticketId), d, { merge: true }); 
+        
+        // Update local object immediately
+        if (window.currentFeedbackTicket) {
+          window.currentFeedbackTicket.status = s;
+          if (r) {
+            window.currentFeedbackTicket.adminReply = r;
+            window.currentFeedbackTicket.adminReplyDate = d.adminReplyDate;
+            window.currentFeedbackTicket.adminReplySubject = d.adminReplySubject;
+          }
+        }
+        const found = (window.feedbackData || []).find(x => x.id === ticketId);
+        if (found) {
+          Object.assign(found, d);
+        }
+
+        // Deliver notification to user inbox if requested and reply body exists
+        const recipientUid = window.currentFeedbackTicket?.userId;
+        if (snd && r && recipientUid && recipientUid !== 'N/A' && !recipientUid.startsWith('anonymous_')) { 
+          try {
+            // Write to 'messages' (for client MessagesScreen inbox)
+            await addDoc(collection(firestoreDb, 'messages'), {
+              targetUserId: recipientUid,
+              title: "Support Ticket Response: " + (window.currentFeedbackTicket?.categoryLabel || 'Feedback Update'),
+              message: r,
+              body: r,
+              type: 'notice',
+              tag: 'Support Update',
+              date: new Date().toLocaleDateString(),
+              createdAt: new Date().toISOString(),
+              actionType: 'none',
+              isUnread: true
+            });
+          } catch(msgErr) {
+            console.warn('Could not post to messages collection:', msgErr);
+          }
+
+          try {
+            // Also write to 'systemMessages'
+            await addDoc(collection(firestoreDb, 'systemMessages'), { 
+              userId: recipientUid, 
+              title: "Support Ticket Update", 
+              message: r, 
+              type: 'support_reply', 
+              priority: 'normal', 
+              createdAt: new Date().toISOString(), 
+              isUnread: true 
+            }); 
+          } catch(sysErr) {
+            console.warn('Could not post to systemMessages:', sysErr);
+          }
+        } 
+
+        if (window.showToast) {
+          window.showToast('Ticket marked as ' + s.toUpperCase() + (r ? ' & response sent!' : '!'));
+        }
+        
         window.closeFeedbackDetailModal(); 
+        window.filterFeedbackTable();
+        window.updateFeedbackStats();
+        // Background sync
         window.loadFeedback(); 
-      } catch(e) { console.error(e); } 
+      } catch(e) { 
+        console.error('Save feedback resolution error:', e); 
+        if (window.showToast) {
+          window.showToast('Error saving ticket: ' + (e.message || 'Check console'));
+        } else {
+          alert('Error saving ticket: ' + (e.message || 'Unknown error'));
+        }
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = origBtnHtml;
+        }
+      }
     }; 
+
     window.deleteCurrentFeedbackTicket = async function() { 
-      if(!window.currentFeedbackTicket) return; 
+      const ticketId = document.getElementById('fb-modal-ticket-id-val')?.value || window.currentFeedbackTicket?.id;
+      if (!ticketId) return; 
       const confirmed = await window.showCustomConfirm('Delete Feedback Ticket', 'Delete this feedback ticket permanently?');
-      if(!confirmed) return; 
+      if (!confirmed) return; 
       try { 
-        const { deleteDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js');
-        const db = window.db || (await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js')).getFirestore();
-        await deleteDoc(doc(db, 'feedbacks', window.currentFeedbackTicket.id)); 
-        window.closeFeedbackDetailModal(); window.loadFeedback(); 
-      } catch(e) {} 
+        const firestoreDb = db || window.db;
+        if (!firestoreDb) return;
+        await deleteDoc(doc(firestoreDb, 'feedbacks', ticketId)); 
+        window.closeFeedbackDetailModal(); 
+        if (window.showToast) window.showToast('Feedback ticket deleted');
+        window.loadFeedback(); 
+      } catch(e) {
+        console.error('Delete feedback ticket error:', e);
+        if (window.showToast) window.showToast('Error deleting ticket: ' + (e.message || 'Error'));
+      } 
     }; 
+
     window.openDirectMessageModal = function(u,n,e) { 
-      document.getElementById('dm-target-uid').value = u||''; 
-      document.getElementById('dm-recipient-info').value = n ? n + ' (' + (e||'') + ')' : ''; 
-      document.getElementById('dm-msg-title').value = 'Support Update'; 
-      document.getElementById('dm-msg-body').value = ''; 
-      document.getElementById('direct-message-user-modal').style.display = 'flex'; 
+      const targetInput = document.getElementById('dm-target-uid');
+      if (targetInput) targetInput.value = u || ''; 
+      const recipInput = document.getElementById('dm-recipient-info');
+      if (recipInput) recipInput.value = n ? n + ' (' + (e||'') + ')' : ''; 
+      const titleInput = document.getElementById('dm-msg-title');
+      if (titleInput) titleInput.value = 'Support Update'; 
+      const bodyInput = document.getElementById('dm-msg-body');
+      if (bodyInput) bodyInput.value = ''; 
+      const modal = document.getElementById('direct-message-user-modal');
+      if (modal) modal.style.display = 'flex'; 
     }; 
-    window.closeDirectMessageModal = function() { document.getElementById('direct-message-user-modal').style.display = 'none'; }; 
+
+    window.closeDirectMessageModal = function() { 
+      const modal = document.getElementById('direct-message-user-modal');
+      if (modal) modal.style.display = 'none'; 
+    }; 
+
     window.sendDirectMessageToUser = async function() { 
-      const u = document.getElementById('dm-target-uid').value.trim(); 
-      const t = document.getElementById('dm-msg-title').value.trim(); 
-      const b = document.getElementById('dm-msg-body').value.trim(); 
-      if(!u || !b) return; 
+      const u = document.getElementById('dm-target-uid')?.value.trim(); 
+      const t = document.getElementById('dm-msg-title')?.value.trim(); 
+      const b = document.getElementById('dm-msg-body')?.value.trim(); 
+      if(!u || !b) {
+        if (window.showToast) window.showToast('Please enter both recipient and message body.');
+        return; 
+      }
       try { 
-        const { addDoc, collection } = await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js');
-        const db = window.db || (await import('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js')).getFirestore();
-        await addDoc(collection(db, 'systemMessages'), { userId: u, title: t||'Admin Message', message: b, type: 'support_reply', priority: 'normal', createdAt: new Date().toISOString(), isUnread: true }); 
+        const firestoreDb = db || window.db;
+        if (!firestoreDb) return;
+        await addDoc(collection(firestoreDb, 'messages'), {
+          targetUserId: u,
+          title: t || 'Admin Message',
+          message: b,
+          body: b,
+          type: 'notice',
+          tag: 'Direct Message',
+          date: new Date().toLocaleDateString(),
+          createdAt: new Date().toISOString(),
+          actionType: 'none',
+          isUnread: true
+        });
+        try {
+          await addDoc(collection(firestoreDb, 'systemMessages'), { 
+            userId: u, 
+            title: t || 'Admin Message', 
+            message: b, 
+            type: 'support_reply', 
+            priority: 'normal', 
+            createdAt: new Date().toISOString(), 
+            isUnread: true 
+          }); 
+        } catch(e2){}
         window.closeDirectMessageModal(); 
-        if(window.showToast) window.showToast('Sent!'); 
-      } catch(e) {} 
+        if(window.showToast) window.showToast('Message delivered to user inbox!'); 
+      } catch(e) {
+        console.error('Send direct message error:', e);
+        if (window.showToast) window.showToast('Error sending message: ' + (e.message || 'Error'));
+      } 
     }; 
   
     window.copyModalUid = function() {
@@ -12292,6 +12543,23 @@ docs.forEach(docItem => {
         }
       }
     };
+
+    // Ensure save button click is directly captured
+    const bindFeedbackModalButtons = () => {
+      const saveBtn = document.getElementById('fb-modal-btn-save');
+      if (saveBtn && !saveBtn._hasBoundClick) {
+        saveBtn._hasBoundClick = true;
+        saveBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          window.saveFeedbackTicketResolution();
+        });
+      }
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bindFeedbackModalButtons);
+    } else {
+      bindFeedbackModalButtons();
+    }
 
     // ==========================================
     // MAXPLAY AI CO-PILOT AUTONOMOUS ENGINE
