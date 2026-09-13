@@ -8,6 +8,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   GoogleAuthProvider,
+  sendPasswordResetEmail,
   updateProfile as updateFirebaseAuthProfile,
   User as FirebaseUser 
 } from 'firebase/auth';
@@ -15,6 +16,7 @@ import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { UserProfile } from '../types';
 import { STORAGE_KEYS } from '../utils/constants';
+import { checkLoginRateLimit, recordFailedAttempt, resetLoginAttempts } from '../utils/rateLimiter';
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -25,6 +27,7 @@ interface AuthContextType {
   loginWithGoogle: () => Promise<boolean>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<UserProfile>) => Promise<boolean>;
+  resetPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -247,64 +250,118 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [user?.uid]);
 
   const login = async (email: string, pass: string): Promise<boolean> => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Check Rate Limit / Brute-Force lockout
+    const rateLimit = checkLoginRateLimit(cleanEmail);
+    if (rateLimit.isLocked) {
+      throw new Error(
+        `Account temporarily locked due to multiple failed login attempts. Please wait ${rateLimit.remainingSeconds}s before trying again or use "Forgot Password".`
+      );
+    }
+
     setIsLoading(true);
     try {
-      const res = await signInWithEmailAndPassword(auth, email, pass);
+      const res = await signInWithEmailAndPassword(auth, cleanEmail, pass);
+      // Reset rate limit attempts counter on success
+      resetLoginAttempts(cleanEmail);
+
       const profile = await syncFirestoreUserProfile(res.user);
       setUser(profile);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profile));
       setIsLoading(false);
       return true;
-    } catch (err) {
-      // Fallback local login if offline or unconfigured auth provider
-      const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
-      const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
-      const userDisplayName = email && email.includes('@') ? email.split('@')[0] : (email || 'MaxPlay User');
-      const newUser: UserProfile = {
-        uid: fallbackUid,
-        email: email || `${userDisplayName.toLowerCase()}@maxplay.app`,
-        displayName: userDisplayName,
-        photoURL: '',
-        gender: 'Male',
-        age: 20,
-        idNumber: generatedIdNumber,
-        isPremium: false,
-        points: 50,
-        bio: 'MaxPlay Streamer',
-        status: 'active',
-        isBlocked: false,
-        role: 'user',
-        createdAt: new Date().toISOString()
-      };
-      setUser(newUser);
-      localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(newUser));
+    } catch (err: any) {
+      setIsLoading(false);
 
-      // Persist fallback account into Firestore users collection as well
-      try {
-        await setDoc(doc(db, 'users', fallbackUid), {
-          id: fallbackUid,
+      // Allow guest accounts to succeed smoothly without blocking
+      if (cleanEmail.startsWith('guest_')) {
+        const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+        const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
+        const userDisplayName = cleanEmail.split('@')[0] || 'Guest User';
+        const newUser: UserProfile = {
           uid: fallbackUid,
-          email: newUser.email,
-          displayName: newUser.displayName,
-          name: newUser.displayName,
+          email: cleanEmail,
+          displayName: userDisplayName,
           photoURL: '',
-          avatar: '',
-          gender: newUser.gender,
-          age: newUser.age,
-          bio: newUser.bio,
-          isPremium: newUser.isPremium,
-          points: newUser.points,
-          role: 'user',
+          gender: 'Male',
+          age: 20,
+          idNumber: generatedIdNumber,
+          isPremium: false,
+          points: 50,
+          bio: 'MaxPlay Guest',
           status: 'active',
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (e) {
-        console.warn('Firestore fallback sync failed:', e);
+          isBlocked: false,
+          role: 'user',
+          createdAt: new Date().toISOString()
+        };
+        setUser(newUser);
+        localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(newUser));
+        return true;
       }
 
+      // Record failed attempt for rate limiting & bot attack protection
+      const attemptInfo = recordFailedAttempt(cleanEmail);
+
+      if (err?.code === 'auth/too-many-requests') {
+        throw new Error('Access to this account has been temporarily disabled due to many failed login attempts. Please reset your password or try again later.');
+      }
+
+      if (attemptInfo.isLocked) {
+        throw new Error(
+          `Security Alert: Account locked for ${attemptInfo.remainingSeconds} seconds due to 5 consecutive failed attempts. Please use "Forgot Password" to recover your account.`
+        );
+      }
+
+      if (attemptInfo.attempts >= 3) {
+        throw new Error(
+          `Incorrect password. Security Warning: ${attemptInfo.remainingAttempts} attempt(s) remaining before temporary lockout.`
+        );
+      }
+
+      if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
+        throw new Error('Incorrect password. Please try again or click "Forgot Password?".');
+      }
+
+      if (err?.code === 'auth/user-not-found') {
+        throw new Error('No account found with this email. Please check the email or sign up.');
+      }
+
+      if (err?.code === 'auth/invalid-email') {
+        throw new Error('Please enter a valid email address.');
+      }
+
+      if (err?.code === 'auth/user-disabled') {
+        throw new Error('This account has been disabled. Please contact customer support.');
+      }
+
+      throw new Error(err?.message || 'Login failed. Please check your credentials.');
+    }
+  };
+
+  const resetPassword = async (email: string): Promise<void> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('Please enter a valid email address.');
+    }
+
+    setIsLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
       setIsLoading(false);
-      return true;
+    } catch (err: any) {
+      setIsLoading(false);
+      console.warn('sendPasswordResetEmail failed:', err);
+      if (err?.code === 'auth/user-not-found') {
+        throw new Error('No account found with this email address.');
+      }
+      if (err?.code === 'auth/invalid-email') {
+        throw new Error('Invalid email address format.');
+      }
+      if (err?.code === 'auth/too-many-requests') {
+        throw new Error('Too many requests. Please wait a few moments before requesting another link.');
+      }
+      throw new Error(err?.message || 'Failed to send password reset email.');
     }
   };
 
@@ -494,61 +551,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsLoading(false);
       return true;
     } catch (err: any) {
-      console.warn('Firebase Google Sign-In failed, checking if canceled or falling back:', err);
+      console.warn('Firebase Google Sign-In failed:', err);
+      setIsLoading(false);
       
-      // If it was a deliberate cancel by user, just stop loading and don't force auto-login fallback
       if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        setIsLoading(false);
         return false;
       }
 
-      // Dynamic fallback for iframe previews / test accounts when popups are completely blocked or unsupported
-      const uniqueNum = Math.floor(1000 + Math.random() * 9000);
-      const fallbackUid = 'usr_g_' + Date.now().toString(36) + '_' + uniqueNum;
-      const generatedIdNumber = Math.floor(10000000 + Math.random() * 90000000).toString();
-      const profileData: UserProfile = {
-        uid: fallbackUid,
-        email: `google_user_${uniqueNum}@gmail.com`,
-        displayName: `Google User #${uniqueNum}`,
-        photoURL: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-        gender: 'Male',
-        age: 22,
-        idNumber: generatedIdNumber,
-        isPremium: false,
-        points: 50,
-        bio: 'MaxPlay Google Streamer',
-        status: 'active',
-        isBlocked: false,
-        role: 'user',
-        createdAt: new Date().toISOString()
-      };
-      setUser(profileData);
-      localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profileData));
+      if (window.self !== window.top) {
+        throw new Error('Google Login inside preview iframe is blocked. Please use "Open in New Tab" ↗️ to login with Google, or sign in with Email/Guest.');
+      }
       
-      try {
-        await setDoc(doc(db, 'users', fallbackUid), {
-          id: fallbackUid,
-          uid: fallbackUid,
-          email: profileData.email,
-          displayName: profileData.displayName,
-          name: profileData.displayName,
-          photoURL: profileData.photoURL,
-          avatar: profileData.photoURL,
-          gender: profileData.gender,
-          age: profileData.age,
-          idNumber: generatedIdNumber,
-          bio: profileData.bio,
-          isPremium: false,
-          points: 50,
-          role: 'user',
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (_) {}
-
-      setIsLoading(false);
-      return true;
+      throw new Error(err?.message || 'Google Sign-In failed. Please try again.');
     }
   };
 
@@ -614,6 +628,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         loginWithGoogle,
         logout,
         updateProfile,
+        resetPassword,
       }}
     >
       {children}

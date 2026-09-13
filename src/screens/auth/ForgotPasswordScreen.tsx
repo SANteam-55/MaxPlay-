@@ -1,33 +1,47 @@
 import React, { useState } from 'react';
-import { Mail, ArrowLeft, CheckCircle } from 'lucide-react';
+import { Mail, ArrowLeft, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { LogoPlaceholder } from '../../components/common/LogoPlaceholder';
 import { GradientButton } from '../../components/common/GradientButton';
+import { useAuth } from '../../hooks/useAuth';
 
 interface ForgotPasswordScreenProps {
   onBack: () => void;
 }
 
 export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBack }) => {
+  const { resetPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) return;
+    setError('');
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Please enter your email address');
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      await resetPassword(cleanEmail);
       setSent(true);
-    }, 800);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to send password reset email. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="flex h-full w-full flex-col justify-between bg-[#0A0A0A] p-6 text-left">
+    <div className="flex h-full w-full flex-col justify-between overflow-y-auto bg-[#0A0A0A] p-6 text-left">
       <div>
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-xs text-[#A1A1AA] hover:text-white pt-2 cursor-pointer"
+          className="flex items-center gap-1.5 text-xs text-[#A1A1AA] hover:text-white pt-2 cursor-pointer transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
           <span>Back to Login</span>
@@ -41,18 +55,40 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
           Reset Password
         </h1>
         <p className="mt-1 text-center text-sm text-[#A1A1AA]">
-          Enter your email address to receive a password reset link
+          Enter your registered email address to receive a secure password reset link
         </p>
+
+        {error && (
+          <div className="mt-4 flex items-start gap-2.5 rounded-xl bg-red-500/10 p-3 text-xs text-red-400 border border-red-500/20">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
 
         {sent ? (
           <div className="mt-8 flex flex-col items-center rounded-2xl bg-[#121212] p-6 text-center border border-[#1C1C1E]">
-            <CheckCircle className="h-12 w-12 text-[#10B981]" />
-            <h3 className="mt-3 text-base font-semibold text-white">Email Sent!</h3>
-            <p className="mt-1 text-xs text-[#A1A1AA]">
-              Check your email for reset link instructions to recover your MaxPlay account.
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#10B981]/10 text-[#10B981]">
+              <CheckCircle className="h-8 w-8" />
+            </div>
+            <h3 className="mt-3 text-base font-semibold text-white">Reset Link Sent!</h3>
+            <p className="mt-2 text-xs text-[#A1A1AA] leading-relaxed">
+              We have sent password reset instructions to <span className="text-white font-medium">{email}</span>. Please check your Inbox and Spam folder.
             </p>
-            <div className="mt-6 w-full">
+
+            <div className="mt-6 flex flex-col gap-2.5 w-full">
               <GradientButton title="Back to Sign In" onPress={onBack} fullWidth />
+              
+              <button
+                type="button"
+                onClick={() => {
+                  setSent(false);
+                  setError('');
+                }}
+                className="flex items-center justify-center gap-1.5 py-2.5 text-xs text-[#A1A1AA] hover:text-white transition-colors cursor-pointer"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Try another email or resend</span>
+              </button>
             </div>
           </div>
         ) : (
@@ -62,8 +98,11 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email address"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error) setError('');
+                }}
+                placeholder="Registered email address"
                 required
                 className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
               />
@@ -71,7 +110,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
 
             <div className="mt-2">
               <GradientButton
-                title={loading ? 'Sending link...' : 'Reset Password'}
+                title={loading ? 'Sending link...' : 'Send Reset Link'}
                 size="lg"
                 fullWidth
                 disabled={loading}
