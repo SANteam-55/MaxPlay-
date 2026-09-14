@@ -1688,25 +1688,149 @@
               <!-- SERIES/EPISODES BUILDER -->
               <div id="series-episodes-container" style="display:none;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
-                  <h3 style="font-size:16px; font-weight:700;">Seasons & Episode Manager</h3>
-                  <div style="display:flex; gap:8px;">
-                    <button type="button" class="btn-amber" onclick="autoGenerateEpisodesPrompt()">
+                  <div>
+                    <h3 style="font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; margin:0;">
+                      <i class="fa-solid fa-layer-group" style="color:var(--accent-purple);"></i>
+                      <span>Seasons & Episode Manager</span>
+                    </h3>
+                    <p style="font-size:11px; color:var(--text-tertiary); margin:4px 0 0 0;">
+                      Active season box controls which season's episodes are edited below. Create, rename, or switch seasons freely.
+                    </p>
+                  </div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn-amber" onclick="autoGenerateEpisodesPrompt()" title="Batch generate episodes for active season">
                       <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Generate Episodes
                     </button>
-                    <button type="button" class="btn-secondary" onclick="createNewSeason()">
-                      <i class="fa-solid fa-plus"></i> Add New Season
+                    <button type="button" class="btn-secondary" onclick="sortSeasonsOrder()" title="Sort all seasons in numerical order (Season 1, 2, 3...)">
+                      <i class="fa-solid fa-arrow-down-1-9"></i> Sort Seasons
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="createNewSeason()" title="Add next sequential season">
+                      <i class="fa-solid fa-plus"></i> Quick Next Season
                     </button>
                   </div>
                 </div>
 
-                <div style="display:flex; gap:12px; margin-bottom:16px; align-items:center; background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
-                  <label class="form-label" style="margin:0; white-space:nowrap;">Active Season:</label>
-                  <select id="season-selector" class="input-control" style="width:200px;" onchange="switchSeason(parseInt(this.value))">
-                    <!-- Season Options -->
-                  </select>
-                  <button type="button" class="btn-danger" style="height:36px; padding:0 12px; font-size:11px;" onclick="deleteActiveSeason()">
-                    <i class="fa-solid fa-trash"></i> Delete Season
-                  </button>
+                <!-- ACTIVE SEASON CONTROL & ADVANCED SEASON CREATOR BOX -->
+                <div style="background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:14px; padding:16px; margin-bottom:18px; display:flex; flex-direction:column; gap:14px; box-shadow:0 4px 20px rgba(0,0,0,0.25);">
+                  
+                  <!-- Top Row: Active Season Selector + Inline Editor + Badge + Delete -->
+                  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:14px;">
+                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex:1;">
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent-green); box-shadow:0 0 8px var(--accent-green);"></span>
+                        <label class="form-label" style="margin:0; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; color:var(--accent-purple); white-space:nowrap;">
+                          Active Season:
+                        </label>
+                      </div>
+                      
+                      <!-- Selector dropdown -->
+                      <select id="season-selector" class="input-control" style="min-width:180px; max-width:240px; font-weight:700; border-color:var(--border-hover);" onchange="switchSeason(parseInt(this.value))">
+                        <!-- Season Options -->
+                      </select>
+
+                      <!-- Editable Season Title -->
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="font-size:11px; color:var(--text-tertiary); white-space:nowrap;">Title:</span>
+                        <input type="text" id="active-season-title-input" class="input-control" style="width:140px; height:36px; font-size:12px; font-weight:700;" placeholder="Season Title" oninput="updateActiveSeasonTitle(this.value)" title="Rename active season title">
+                      </div>
+
+                      <!-- Editable Season Number -->
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="font-size:11px; color:var(--text-tertiary); white-space:nowrap;">No:</span>
+                        <input type="number" id="active-season-number-input" class="input-control" style="width:70px; height:36px; font-size:12px; font-weight:700;" min="0" max="999" placeholder="1" oninput="updateActiveSeasonNumber(this.value)" title="Change season number">
+                      </div>
+
+                      <span id="active-season-ep-badge" style="font-size:11px; font-weight:700; padding:4px 8px; border-radius:6px; background:rgba(139,92,246,0.15); border:1px solid rgba(139,92,246,0.3); color:#C4B5FD; white-space:nowrap;">
+                        0 Episodes
+                      </span>
+                    </div>
+
+                    <!-- Delete Season -->
+                    <button type="button" class="btn-danger" style="height:36px; padding:0 12px; font-size:11px; white-space:nowrap;" onclick="deleteActiveSeason()" title="Delete currently active season">
+                      <i class="fa-solid fa-trash"></i> Delete Season
+                    </button>
+                  </div>
+
+                  <!-- Middle Row: Interactive Season Pills (Click to switch) -->
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                      <span style="font-size:11px; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.5px;">
+                        <i class="fa-solid fa-bolt" style="color:var(--accent-amber); margin-right:4px;"></i> Quick Season Switcher:
+                      </span>
+                      <span style="font-size:10px; color:var(--text-tertiary);">Click any season to load its episodes</span>
+                    </div>
+                    <div id="season-pills-bar" style="display:flex; gap:8px; overflow-x:auto; padding:4px 2px; scrollbar-width:thin;">
+                      <!-- Pills rendered dynamically -->
+                    </div>
+                  </div>
+
+                  <!-- Bottom Row: ADVANCED CREATE / SWITCH SEASON (Dropdown + Custom text input) -->
+                  <div style="background:rgba(0,0,0,0.3); border:1px dashed rgba(255,255,255,0.12); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                      <span style="font-size:12px; font-weight:800; color:var(--accent-cyan); display:flex; align-items:center; gap:6px;">
+                        <i class="fa-solid fa-circle-plus"></i> Add / Switch Season (Preset Dropdown or Custom Text)
+                      </span>
+                      <span style="font-size:11px; color:var(--text-tertiary);">
+                        e.g. If Season 3 was uploaded first, select <b>Season 1</b> from dropdown or type it to create & manage its episodes!
+                      </span>
+                    </div>
+
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                      <!-- Preset Dropdown -->
+                      <div style="flex:1; min-width:170px;">
+                        <label class="form-label" style="font-size:10px; color:var(--text-tertiary); margin-bottom:3px;">
+                          1. Select From Dropdown:
+                        </label>
+                        <select id="new-season-preset" class="input-control" style="height:38px; font-size:12px; font-weight:700;" onchange="onSeasonPresetChange(this.value)">
+                          <option value="">-- Choose Season (1-25 / Specials) --</option>
+                          <option value="1">Season 1</option>
+                          <option value="2">Season 2</option>
+                          <option value="3">Season 3</option>
+                          <option value="4">Season 4</option>
+                          <option value="5">Season 5</option>
+                          <option value="6">Season 6</option>
+                          <option value="7">Season 7</option>
+                          <option value="8">Season 8</option>
+                          <option value="9">Season 9</option>
+                          <option value="10">Season 10</option>
+                          <option value="11">Season 11</option>
+                          <option value="12">Season 12</option>
+                          <option value="13">Season 13</option>
+                          <option value="14">Season 14</option>
+                          <option value="15">Season 15</option>
+                          <option value="16">Season 16</option>
+                          <option value="17">Season 17</option>
+                          <option value="18">Season 18</option>
+                          <option value="19">Season 19</option>
+                          <option value="20">Season 20</option>
+                          <option value="21">Season 21</option>
+                          <option value="22">Season 22</option>
+                          <option value="23">Season 23</option>
+                          <option value="24">Season 24</option>
+                          <option value="25">Season 25</option>
+                          <option value="Specials">Specials</option>
+                          <option value="OVA">OVA</option>
+                          <option value="Movies">Movies / Specials</option>
+                        </select>
+                      </div>
+
+                      <!-- Custom Name/Number Input -->
+                      <div style="flex:1.4; min-width:200px;">
+                        <label class="form-label" style="font-size:10px; color:var(--text-tertiary); margin-bottom:3px;">
+                          2. Or Type Custom Season Name / Number:
+                        </label>
+                        <input type="text" id="new-season-custom-input" class="input-control" style="height:38px; font-size:12px;" placeholder="e.g. Season 1, Final Season, OVA 1, Cour 2...">
+                      </div>
+
+                      <!-- Action Button -->
+                      <div style="padding-top:16px;">
+                        <button type="button" class="btn-primary" style="height:38px; padding:0 16px; font-size:12px; font-weight:800; background:linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border:none; box-shadow:0 4px 14px rgba(6,182,212,0.3); display:flex; align-items:center; gap:6px; white-space:nowrap;" onclick="handleAddOrSwitchSeasonFromUI()">
+                          <i class="fa-solid fa-plus"></i> Add / Switch Season
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
                 </div>
 
                 <div id="season-episodes-list" style="display:flex; flex-direction:column; gap:14px; margin-bottom:20px;">
@@ -5363,25 +5487,210 @@
 
     // SERIES / SEASONS / EPISODES MANAGER
     window.renderSeasonsUI = function() {
-      const selector = document.getElementById('season-selector');
-      if (!selector) return;
-
-      if (!window.seasonsData || window.seasonsData.length === 0) {
+      if (!window.seasonsData || !Array.isArray(window.seasonsData) || window.seasonsData.length === 0) {
         window.seasonsData = [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: [] }];
       }
 
-      let selHtml = '';
-      window.seasonsData.forEach((s, idx) => {
-        selHtml += `<option value="${idx}" ${idx === window.currentSeasonIdx ? 'selected' : ''}>${s.seasonTitle || ('Season ' + (idx + 1))}</option>`;
-      });
-      selector.innerHTML = selHtml;
+      if (typeof window.currentSeasonIdx !== 'number' || window.currentSeasonIdx < 0 || window.currentSeasonIdx >= window.seasonsData.length) {
+        window.currentSeasonIdx = 0;
+      }
+
+      const activeSeason = window.seasonsData[window.currentSeasonIdx] || { seasonNumber: 1, seasonTitle: "Season 1", episodes: [] };
+
+      // 1. Update Selector dropdown
+      const selector = document.getElementById('season-selector');
+      if (selector) {
+        let selHtml = '';
+        window.seasonsData.forEach((s, idx) => {
+          const epCount = (s.episodes || []).length;
+          const title = s.seasonTitle || ('Season ' + (s.seasonNumber || (idx + 1)));
+          selHtml += `<option value="${idx}" ${idx === window.currentSeasonIdx ? 'selected' : ''}>${title} (${epCount} eps)</option>`;
+        });
+        selector.innerHTML = selHtml;
+      }
+
+      // 2. Update Active Season Inline Editor Inputs & Badge
+      const titleInput = document.getElementById('active-season-title-input');
+      if (titleInput) {
+        titleInput.value = activeSeason.seasonTitle || ('Season ' + (activeSeason.seasonNumber || (window.currentSeasonIdx + 1)));
+      }
+      const numInput = document.getElementById('active-season-number-input');
+      if (numInput) {
+        numInput.value = (activeSeason.seasonNumber !== undefined && activeSeason.seasonNumber !== null) ? activeSeason.seasonNumber : (window.currentSeasonIdx + 1);
+      }
+      const epBadge = document.getElementById('active-season-ep-badge');
+      if (epBadge) {
+        const count = (activeSeason.episodes || []).length;
+        epBadge.innerText = `${count} Episode${count === 1 ? '' : 's'}`;
+      }
+
+      // 3. Render Interactive Season Pills (Click to switch)
+      const pillsBar = document.getElementById('season-pills-bar');
+      if (pillsBar) {
+        let pillsHtml = '';
+        window.seasonsData.forEach((s, idx) => {
+          const isActive = idx === window.currentSeasonIdx;
+          const epCount = (s.episodes || []).length;
+          const title = s.seasonTitle || ('Season ' + (s.seasonNumber || (idx + 1)));
+          const bgStyle = isActive 
+            ? 'background:linear-gradient(135deg, rgba(139,92,246,0.4), rgba(6,182,212,0.3)); border:1px solid var(--accent-purple); color:#FFF; box-shadow:0 0 12px rgba(139,92,246,0.35); font-weight:800;'
+            : 'background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); color:var(--text-secondary); font-weight:600;';
+          pillsHtml += `
+            <button type="button" onclick="switchSeason(${idx})" style="${bgStyle} padding:6px 14px; border-radius:8px; font-size:12px; display:inline-flex; align-items:center; gap:8px; cursor:pointer; white-space:nowrap; transition:all 0.2s ease;">
+              <span class="season-pill-title">${title}</span>
+              <span class="season-pill-cnt" style="font-size:10px; opacity:0.85; padding:1px 6px; border-radius:10px; background:rgba(0,0,0,0.3);">${epCount} eps</span>
+              ${isActive ? '<i class="fa-solid fa-check" style="font-size:10px; color:var(--accent-green);"></i>' : ''}
+            </button>
+          `;
+        });
+        pillsBar.innerHTML = pillsHtml;
+      }
 
       renderEpisodesList();
     };
 
+    window.onSeasonPresetChange = function(val) {
+      if (!val) return;
+      const customInput = document.getElementById('new-season-custom-input');
+      if (customInput) {
+        if (!isNaN(parseInt(val, 10))) {
+          customInput.value = 'Season ' + parseInt(val, 10);
+        } else {
+          customInput.value = val;
+        }
+      }
+    };
+
+    window.handleAddOrSwitchSeasonFromUI = function() {
+      syncEpisodesFromDOM();
+      const presetEl = document.getElementById('new-season-preset');
+      const customEl = document.getElementById('new-season-custom-input');
+      
+      let rawVal = (customEl?.value || '').trim();
+      if (!rawVal && presetEl?.value) {
+        const pVal = presetEl.value;
+        rawVal = !isNaN(parseInt(pVal, 10)) ? ('Season ' + parseInt(pVal, 10)) : pVal;
+      }
+
+      if (!rawVal) {
+        showToast('Please select a season preset or type a season name/number');
+        return;
+      }
+
+      // Parse season number and title
+      let parsedNum = null;
+      const numMatch = rawVal.match(/(?:season|s)?\s*(\d+)/i);
+      if (numMatch) {
+        parsedNum = parseInt(numMatch[1], 10);
+      }
+
+      let finalTitle = rawVal;
+      if (/^\d+$/.test(rawVal)) {
+        finalTitle = 'Season ' + rawVal;
+        parsedNum = parseInt(rawVal, 10);
+      }
+
+      if (parsedNum === null) {
+        parsedNum = window.seasonsData.length + 1;
+      }
+
+      // Check if this season already exists
+      const existingIdx = window.seasonsData.findIndex(s => {
+        if (parsedNum !== null && s.seasonNumber === parsedNum) return true;
+        if (s.seasonTitle && s.seasonTitle.trim().toLowerCase() === finalTitle.trim().toLowerCase()) return true;
+        return false;
+      });
+
+      if (existingIdx !== -1) {
+        window.currentSeasonIdx = existingIdx;
+        renderSeasonsUI();
+        showToast(`Switched to existing ${window.seasonsData[existingIdx].seasonTitle || ('Season ' + (existingIdx + 1))}`);
+        if (customEl) customEl.value = '';
+        if (presetEl) presetEl.value = '';
+        return;
+      }
+
+      // Create new season
+      const newSeason = {
+        seasonNumber: parsedNum,
+        seasonTitle: finalTitle,
+        episodes: []
+      };
+
+      window.seasonsData.push(newSeason);
+      window.currentSeasonIdx = window.seasonsData.length - 1;
+
+      // Auto-sort if adding lower season when higher exists (e.g. adding Season 1 when Season 3 exists)
+      const hasHigherSeasons = window.seasonsData.some(s => (Number(s.seasonNumber) || 0) > (parsedNum || 0));
+      if (hasHigherSeasons) {
+        window.sortSeasonsOrder(false);
+      } else {
+        renderSeasonsUI();
+      }
+
+      if (customEl) customEl.value = '';
+      if (presetEl) presetEl.value = '';
+      showToast(`Created & Activated ${finalTitle}! You can now add its episodes below.`);
+    };
+
+    window.sortSeasonsOrder = function(showNotification = true) {
+      syncEpisodesFromDOM();
+      if (!window.seasonsData || window.seasonsData.length <= 1) {
+        if (showNotification) showToast('Seasons already organized.');
+        return;
+      }
+      const currentActiveObj = window.seasonsData[window.currentSeasonIdx];
+      window.seasonsData.sort((a, b) => {
+        const numA = (typeof a.seasonNumber === 'number') ? a.seasonNumber : parseInt(a.seasonNumber, 10) || 999;
+        const numB = (typeof b.seasonNumber === 'number') ? b.seasonNumber : parseInt(b.seasonNumber, 10) || 999;
+        return numA - numB;
+      });
+      if (currentActiveObj) {
+        const newIdx = window.seasonsData.indexOf(currentActiveObj);
+        if (newIdx !== -1) window.currentSeasonIdx = newIdx;
+      }
+      renderSeasonsUI();
+      if (showNotification) showToast('Seasons organized sequentially (Season 1, 2, 3...)');
+    };
+
+    window.updateActiveSeasonTitle = function(val) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason) return;
+      activeSeason.seasonTitle = (val || '').trim() || ('Season ' + (activeSeason.seasonNumber || (window.currentSeasonIdx + 1)));
+      const selector = document.getElementById('season-selector');
+      if (selector && selector.options[window.currentSeasonIdx]) {
+        const epCount = (activeSeason.episodes || []).length;
+        selector.options[window.currentSeasonIdx].text = `${activeSeason.seasonTitle} (${epCount} eps)`;
+      }
+      const pillsBar = document.getElementById('season-pills-bar');
+      if (pillsBar && pillsBar.children[window.currentSeasonIdx]) {
+        const pillSpan = pillsBar.children[window.currentSeasonIdx].querySelector('.season-pill-title');
+        if (pillSpan) pillSpan.innerText = activeSeason.seasonTitle;
+      }
+    };
+
+    window.updateActiveSeasonNumber = function(val) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason) return;
+      const num = parseInt(val, 10);
+      if (!isNaN(num) && num >= 0) {
+        activeSeason.seasonNumber = num;
+        const selector = document.getElementById('season-selector');
+        if (selector && selector.options[window.currentSeasonIdx]) {
+          const epCount = (activeSeason.episodes || []).length;
+          selector.options[window.currentSeasonIdx].text = `${activeSeason.seasonTitle || ('Season ' + num)} (${epCount} eps)`;
+        }
+      }
+    };
+
     window.createNewSeason = function() {
       syncEpisodesFromDOM();
-      const newNum = window.seasonsData.length + 1;
+      let maxNum = 0;
+      (window.seasonsData || []).forEach(s => {
+        const n = parseInt(s.seasonNumber, 10);
+        if (!isNaN(n) && n > maxNum) maxNum = n;
+      });
+      const newNum = maxNum + 1;
       window.seasonsData.push({ seasonNumber: newNum, seasonTitle: 'Season ' + newNum, episodes: [] });
       window.currentSeasonIdx = window.seasonsData.length - 1;
       renderSeasonsUI();
@@ -5390,8 +5699,8 @@
 
     window.switchSeason = function(idx) {
       syncEpisodesFromDOM();
-      window.currentSeasonIdx = parseInt(idx);
-      renderEpisodesList();
+      window.currentSeasonIdx = parseInt(idx, 10) || 0;
+      renderSeasonsUI();
     };
 
     window.deleteActiveSeason = async function() {
@@ -5399,10 +5708,12 @@
         showToast('At least one season must remain.');
         return;
       }
+      const s = window.seasonsData[window.currentSeasonIdx];
+      const sName = s?.seasonTitle || ('Season ' + (window.currentSeasonIdx + 1));
       window.seasonsData.splice(window.currentSeasonIdx, 1);
       window.currentSeasonIdx = Math.max(0, window.currentSeasonIdx - 1);
       renderSeasonsUI();
-      showToast('Season deleted');
+      showToast(`Deleted ${sName}`);
     };
 
     // SYNC EPISODES FROM CURRENT DOM INPUTS
@@ -5515,6 +5826,22 @@
 
       const activeSeason = window.seasonsData[window.currentSeasonIdx] || { episodes: [] };
       const episodes = activeSeason.episodes || [];
+
+      // Synchronize active season episode count in UI elements
+      const epBadge = document.getElementById('active-season-ep-badge');
+      if (epBadge) {
+        epBadge.innerText = `${episodes.length} Episode${episodes.length === 1 ? '' : 's'}`;
+      }
+      const selector = document.getElementById('season-selector');
+      if (selector && selector.options[window.currentSeasonIdx]) {
+        const title = activeSeason.seasonTitle || ('Season ' + (activeSeason.seasonNumber || (window.currentSeasonIdx + 1)));
+        selector.options[window.currentSeasonIdx].text = `${title} (${episodes.length} eps)`;
+      }
+      const pillsBar = document.getElementById('season-pills-bar');
+      if (pillsBar && pillsBar.children[window.currentSeasonIdx]) {
+        const cntSpan = pillsBar.children[window.currentSeasonIdx].querySelector('.season-pill-cnt');
+        if (cntSpan) cntSpan.innerText = `${episodes.length} eps`;
+      }
 
       if (episodes.length === 0) {
         listContainer.innerHTML = `<div style="background:var(--bg-tertiary); padding:28px; border-radius:12px; text-align:center; color:var(--text-tertiary); border:1px solid var(--border-color);">No episodes in this season yet. Click "+ Add Episode Box" or "⚡ Auto-Generate Episodes".</div>`;

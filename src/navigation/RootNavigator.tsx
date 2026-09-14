@@ -206,7 +206,7 @@ export const RootNavigator: React.FC = () => {
       <SuspendedAccountModal />
 
       {/* Persistent Active Tab Screens */}
-      <div className={`absolute inset-0 ${isCurrentDetailOpen ? 'pb-0 md:pb-0 md:pl-0' : 'pb-[62px] md:pb-0 md:pl-[80px]'}`}>
+      <div className={`absolute inset-0 ${isCurrentDetailOpen ? 'pb-0 md:pb-0 md:pl-0' : 'pb-[calc(58px+max(env(safe-area-inset-bottom,0px),8px))] md:pb-0 md:pl-[80px]'}`}>
         <div className={`h-full w-full ${activeTab === 'home' ? 'block' : 'hidden'}`}>
           <HomeStack
             onSelectContent={(content) => {
@@ -265,7 +265,7 @@ export const RootNavigator: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[9999] px-5 py-2.5 bg-[#1C1C1E]/95 backdrop-blur-md border border-white/15 text-white text-xs font-semibold rounded-full shadow-2xl flex items-center gap-2 pointer-events-none"
+            className="fixed bottom-[calc(72px+max(env(safe-area-inset-bottom,0px),8px))] left-1/2 -translate-x-1/2 z-[9999] px-5 py-2.5 bg-[#1C1C1E]/95 backdrop-blur-md border border-white/15 text-white text-xs font-semibold rounded-full shadow-2xl flex items-center gap-2 pointer-events-none"
           >
             <span>📱</span>
             <span>Press back again to exit MaxPlay</span>

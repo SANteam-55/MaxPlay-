@@ -7,7 +7,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <div className="h-screen w-screen bg-[#0A0A0A] text-white font-sans overflow-hidden">
+        <div className="h-full h-[100dvh] w-full bg-[#0A0A0A] text-white font-sans overflow-hidden">
           <RootNavigator />
         </div>
       </ThemeProvider>
