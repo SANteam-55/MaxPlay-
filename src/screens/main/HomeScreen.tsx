@@ -9,7 +9,6 @@ import { SkeletonHeroBanner, SkeletonCategoryPills, SkeletonContentRow } from '.
 import { CATEGORY_TABS } from '../../utils/constants';
 import { useContent } from '../../hooks/useContent';
 import { ContentItem } from '../../types';
-import { NativeBanner } from '../../components/ads/NativeBanner';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../hooks/useAuth';
 import { subscribeToSearchSettings } from '../../services/contentService';
@@ -441,10 +440,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </div>
         );
       })()}
-
-      <div className="mt-5 mb-2 px-4">
-        <NativeBanner />
-      </div>
 
       {/* Upcoming Releases Row (Filtered by Active Tab) */}
       {(() => {

@@ -32,11 +32,7 @@ interface InlinePlayerProps {
   timeOffset?: number;
   globalDuration?: number;
   onGlobalSeek?: (targetTime: number) => void;
-  skipMarkers?: {
-    intro?: { start: number; end: number };
-    outro?: { start: number; end: number };
-    credits?: { start: number; end: number };
-  };
+  skipMarkers?: any;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -89,15 +85,29 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [activeMenu, setActiveMenu] = useState<'language' | 'quality' | 'speed' | null>(null);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProgressEmitRef = useRef<number>(0);
+  const recoverDecodingErrorDateRef = useRef<number>(0);
 
   // Normalize skipMarkers from any structure or format (numbers, strings, mm:ss)
   const normalizedSkipMarkers = useMemo(() => {
-    if (!skipMarkers || typeof skipMarkers !== 'object') return undefined;
+    let parsedMarkers = skipMarkers;
+    
+    if (typeof parsedMarkers === 'string') {
+      try {
+        parsedMarkers = JSON.parse(parsedMarkers);
+      } catch (e) {
+        console.warn('Failed to parse skipMarkers string:', e);
+        return undefined;
+      }
+    }
+
+    if (!parsedMarkers || typeof parsedMarkers !== 'object') return undefined;
+
     const parseSec = (val: any) => {
       if (typeof val === 'number') return isNaN(val) ? 0 : val;
       if (typeof val === 'string') {
         if (val.includes(':')) {
-          const parts = val.split(':').map(Number);
+          const parts = val.split(':').map(p => Number(p.trim()));
+          if (parts.some(isNaN)) return 0;
           if (parts.length === 2) return (parts[0] * 60) + parts[1];
           if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
         }
@@ -107,17 +117,33 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return 0;
     };
 
-    const introStart = parseSec(skipMarkers.intro?.start ?? (skipMarkers as any).introStart ?? (skipMarkers as any).intro_start);
-    const introEnd = parseSec(skipMarkers.intro?.end ?? (skipMarkers as any).introEnd ?? (skipMarkers as any).intro_end);
-    const outroStart = parseSec(skipMarkers.outro?.start ?? (skipMarkers as any).outroStart ?? (skipMarkers as any).outro_start);
-    const outroEnd = parseSec(skipMarkers.outro?.end ?? (skipMarkers as any).outroEnd ?? (skipMarkers as any).outro_end);
-    const creditsStart = parseSec(skipMarkers.credits?.start ?? (skipMarkers as any).creditsStart ?? (skipMarkers as any).credits_start);
-    const creditsEnd = parseSec(skipMarkers.credits?.end ?? (skipMarkers as any).creditsEnd ?? (skipMarkers as any).credits_end);
-
     const res: { intro?: { start: number; end: number }; outro?: { start: number; end: number }; credits?: { start: number; end: number } } = {};
-    if (introEnd > introStart && introEnd > 0) res.intro = { start: introStart, end: introEnd };
-    if (outroEnd > outroStart && outroEnd > 0) res.outro = { start: outroStart, end: outroEnd };
-    if (creditsEnd > creditsStart && creditsEnd > 0) res.credits = { start: creditsStart, end: creditsEnd };
+
+    if (Array.isArray(parsedMarkers)) {
+      parsedMarkers.forEach((m: any) => {
+        if (!m || !m.type) return;
+        const s = parseSec(m.start ?? m.startTime);
+        const e = parseSec(m.end ?? m.endTime);
+        if (e > s && e > 0) {
+          const t = m.type.toLowerCase();
+          if (t.includes('intro')) res.intro = { start: s, end: e };
+          if (t.includes('outro')) res.outro = { start: s, end: e };
+          if (t.includes('credit')) res.credits = { start: s, end: e };
+        }
+      });
+    } else {
+      const introStart = parseSec(parsedMarkers.intro?.start ?? (parsedMarkers as any).introStart ?? (parsedMarkers as any).intro_start);
+      const introEnd = parseSec(parsedMarkers.intro?.end ?? (parsedMarkers as any).introEnd ?? (parsedMarkers as any).intro_end);
+      const outroStart = parseSec(parsedMarkers.outro?.start ?? (parsedMarkers as any).outroStart ?? (parsedMarkers as any).outro_start);
+      const outroEnd = parseSec(parsedMarkers.outro?.end ?? (parsedMarkers as any).outroEnd ?? (parsedMarkers as any).outro_end);
+      const creditsStart = parseSec(parsedMarkers.credits?.start ?? (parsedMarkers as any).creditsStart ?? (parsedMarkers as any).credits_start);
+      const creditsEnd = parseSec(parsedMarkers.credits?.end ?? (parsedMarkers as any).creditsEnd ?? (parsedMarkers as any).credits_end);
+
+      if (introEnd > introStart && introEnd > 0) res.intro = { start: introStart, end: introEnd };
+      if (outroEnd > outroStart && outroEnd > 0) res.outro = { start: outroStart, end: outroEnd };
+      if (creditsEnd > creditsStart && creditsEnd > 0) res.credits = { start: creditsStart, end: creditsEnd };
+    }
+
     return Object.keys(res).length > 0 ? res : undefined;
   }, [skipMarkers]);
 
@@ -127,6 +153,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const currentGlobal = timeOffset + currentTime;
     const { intro, outro, credits } = normalizedSkipMarkers;
     
+    console.log('[SkipDebug] Current Global Time:', currentGlobal, 'Markers:', normalizedSkipMarkers);
+
     if (intro && currentGlobal >= intro.start && currentGlobal < intro.end) {
       return { type: 'intro', label: 'Skip Intro', end: intro.end };
     }
@@ -449,7 +477,15 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               console.warn("fatal media error encountered, try to recover");
-              hls.recoverMediaError();
+              const now = performance.now();
+              if (now - recoverDecodingErrorDateRef.current > 3000) {
+                recoverDecodingErrorDateRef.current = now;
+                hls.recoverMediaError();
+              } else {
+                console.warn("media error recurring, swapping audio codec to prevent decode crash");
+                hls.swapAudioCodec();
+                hls.recoverMediaError();
+              }
               break;
             default:
               setIsLoading(false);
@@ -685,7 +721,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   };
 
   const isSkipButtonVisible = Boolean(
-    !isIframe &&
     hasStarted &&
     activeSkipMarker &&
     !isLocked &&

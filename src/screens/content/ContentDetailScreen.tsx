@@ -851,6 +851,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   // 2. MOVIE MODE DATA RESOLUTION
   let moviePartsList: any[] = [];
   let movieTotalParts = 1;
+  let activeMoviePart: any = null;
 
   if (isMovie) {
     if (content.videoLinks && Array.isArray(content.videoLinks) && content.videoLinks.length > 0) {
@@ -861,7 +862,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       movieTotalParts = 1;
     }
 
-    const activeMoviePart = moviePartsList[selectedPartIndex] || moviePartsList[0];
+    activeMoviePart = moviePartsList[selectedPartIndex] || moviePartsList[0];
     playerTitle = selectedPartIndex > 0 ? `${content.title} (Part ${selectedPartIndex + 1})` : content.title;
 
     if (activeMoviePart) {
@@ -1593,10 +1594,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         
         {(() => {
           const currentPlayerSkipMarkers = isMovie 
-            ? content.skipMarkers 
+            ? (activeMoviePart?.skipMarkers || (activeMoviePart as any)?.skip_markers || content.skipMarkers || (content as any).skip_markers || {
+                introStart: (content as any).introStart || (content as any).intro_start,
+                introEnd: (content as any).introEnd || (content as any).intro_end,
+                outroStart: (content as any).outroStart || (content as any).outro_start,
+                outroEnd: (content as any).outroEnd || (content as any).outro_end,
+                creditsStart: (content as any).creditsStart || (content as any).credits_start,
+                creditsEnd: (content as any).creditsEnd || (content as any).credits_end,
+              })
             : ((content.seasonsData && content.seasonsData[selectedSeasonIndex]?.episodes?.[selectedEpisodeIndex]?.skipMarkers) 
-               || (content.episodesList && content.episodesList[selectedEpisodeIndex]?.skipMarkers));
+               || (content.seasonsData && (content.seasonsData[selectedSeasonIndex]?.episodes?.[selectedEpisodeIndex] as any)?.skip_markers)
+               || (content.episodesList && content.episodesList[selectedEpisodeIndex]?.skipMarkers)
+               || (content.episodesList && (content.episodesList[selectedEpisodeIndex] as any)?.skip_markers));
                
+          console.log('[SkipDebug] Passed to Player:', currentPlayerSkipMarkers, 'activeMoviePart:', activeMoviePart, 'content skip markers:', content.skipMarkers);
+
           return (
             <InlinePlayer
               key={`${content.id}-${currentPartKey}`}
@@ -1925,7 +1937,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         <div className="w-4 h-4 rounded-md bg-purple-500/20 flex items-center justify-center text-purple-400 group-hover:bg-purple-500/30 transition-colors">
                           <Layers className="w-3.5 h-3.5 text-[#a855f7]" />
                         </div>
-                        <span className="font-mono text-purple-300 font-extrabold tracking-wide">
+                        <span className="font-mono text-purple-300 font-extrabold tracking-wide truncate max-w-[120px] sm:max-w-[200px]">
                           {content.seasonsData?.[selectedSeasonIndex]?.seasonTitle || content.seasonsData?.[selectedSeasonIndex]?.title || `Season ${selectedSeasonIndex + 1}`}
                         </span>
                         <ChevronDown className="w-3.5 h-3.5 text-purple-400/60 group-hover:text-purple-300 transition-transform group-hover:translate-y-0.5" />
