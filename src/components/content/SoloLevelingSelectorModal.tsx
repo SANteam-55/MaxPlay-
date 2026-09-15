@@ -157,6 +157,19 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                   </h3>
                 </div>
               </div>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose();
+                }}
+                className="w-5 h-5 rounded-md bg-white/5 hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition border border-white/10 cursor-pointer"
+                title="Close"
+              >
+                <X className="w-3 h-3" />
+              </button>
             </div>
 
             {/* Scrollable System Options List */}

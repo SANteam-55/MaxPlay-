@@ -501,6 +501,18 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [selectedEpisodeIndex, setSelectedEpisodeIndex] = useState(() => (initialSavedData?.episodeIndex !== undefined && !isMovie) ? initialSavedData.episodeIndex : 0);
   const [selectedPartIndex, setSelectedPartIndex] = useState(() => (initialSavedData?.partIndex !== undefined) ? initialSavedData.partIndex : 0);
   
+  // Independent per-season episode memory map so switching seasons never bleeds or wipes state
+  const [seasonEpisodeMap, setSeasonEpisodeMap] = useState<Record<number, number>>(() => {
+    const map: Record<number, number> = {};
+    if (initialSavedData?.seasonEpisodeMap && typeof initialSavedData.seasonEpisodeMap === 'object') {
+      Object.assign(map, initialSavedData.seasonEpisodeMap);
+    }
+    if (initialSavedData?.seasonIndex !== undefined && initialSavedData?.episodeIndex !== undefined) {
+      map[initialSavedData.seasonIndex] = initialSavedData.episodeIndex;
+    }
+    return map;
+  });
+
   const [isMyList, setIsMyList] = useState(false);
   
   const [comments, setComments] = useState<any[]>([]);
@@ -553,6 +565,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     activeQuality,
     playbackPosition,
     partProgressMap,
+    seasonEpisodeMap,
     isMovie
   });
 
@@ -568,6 +581,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       activeQuality,
       playbackPosition,
       partProgressMap,
+      seasonEpisodeMap,
       isMovie
     };
   }, [
@@ -581,6 +595,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     activeQuality,
     playbackPosition,
     partProgressMap,
+    seasonEpisodeMap,
     isMovie
   ]);
 
@@ -644,6 +659,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       totalEpisodes: curState.content.seasonsData?.[curState.selectedSeasonIndex]?.episodes?.length || curState.content.episodesList?.length || 1,
       partKey: curState.currentPartKey,
       partProgressMap: updatedPartMap,
+      seasonEpisodeMap: {
+        ...(curState.seasonEpisodeMap || {}),
+        [curState.selectedSeasonIndex]: curState.selectedEpisodeIndex
+      },
       lastWatchedAt: new Date().toISOString()
     };
 
@@ -676,6 +695,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         if (cloud) {
           if (cloud.partProgressMap && typeof cloud.partProgressMap === 'object') {
             setPartProgressMap(prev => ({ ...prev, ...cloud.partProgressMap }));
+          }
+          if (cloud.seasonEpisodeMap && typeof cloud.seasonEpisodeMap === 'object') {
+            setSeasonEpisodeMap(prev => ({ ...prev, ...cloud.seasonEpisodeMap }));
           }
           if (cloud.lastWatchedAt) {
             if (cloud.seasonIndex !== undefined && !isMovie) setSelectedSeasonIndex(cloud.seasonIndex);
@@ -1216,6 +1238,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     if (season?.episodes && season.episodes.length > selectedEpisodeIndex + 1) {
       const nextEpIdx = selectedEpisodeIndex + 1;
       setSelectedEpisodeIndex(nextEpIdx);
+      setSeasonEpisodeMap(prev => ({ ...prev, [selectedSeasonIndex]: nextEpIdx }));
       setSelectedPartIndex(0);
       const nextKey = `s${selectedSeasonIndex}_e${nextEpIdx}_p0`;
       const saved = partProgressMap[nextKey];
@@ -1227,6 +1250,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       const nextSeasonIdx = selectedSeasonIndex + 1;
       setSelectedSeasonIndex(nextSeasonIdx);
       setSelectedEpisodeIndex(0);
+      setSeasonEpisodeMap(prev => ({ ...prev, [nextSeasonIdx]: 0 }));
       setSelectedPartIndex(0);
       const nextKey = `s${nextSeasonIdx}_e0_p0`;
       const saved = partProgressMap[nextKey];
@@ -1554,6 +1578,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const handleSelectEpisode = useCallback((idx: number) => {
     saveProgressNow(playbackPosition, false, true);
     setSelectedEpisodeIndex(idx);
+    setSeasonEpisodeMap(prev => ({ ...prev, [selectedSeasonIndex]: idx }));
 
     let targetPart = 0;
     let targetKey = `s${selectedSeasonIndex}_e${idx}_p0`;
@@ -1898,7 +1923,11 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   {/* Dub / Language Trigger Button (Solo Leveling HUD) */}
                   <button
                     type="button"
-                    onClick={() => { adManager.handleSelectorClick(!!user?.isPremium); setIsLanguageModalOpen(true); }}
+                    onClick={() => {
+                      adManager.handleSelectorClick(!!user?.isPremium);
+                      setIsSeasonModalOpen(false);
+                      setIsLanguageModalOpen(prev => !prev);
+                    }}
                     className="relative inline-flex items-center gap-2 bg-[#121626] hover:bg-[#182038] active:scale-95 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(6,182,212,0.12)] transition-all cursor-pointer group"
                     title="Change Audio Track"
                   >
@@ -1930,7 +1959,11 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     <>
                       <button
                         type="button"
-                        onClick={() => { adManager.handleSelectorClick(!!user?.isPremium); setIsSeasonModalOpen(true); }}
+                        onClick={() => {
+                          adManager.handleSelectorClick(!!user?.isPremium);
+                          setIsLanguageModalOpen(false);
+                          setIsSeasonModalOpen(prev => !prev);
+                        }}
                         className="relative inline-flex items-center gap-2 bg-[#181329] hover:bg-[#231a3d] active:scale-95 border border-purple-500/30 hover:border-purple-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(168,85,247,0.12)] transition-all cursor-pointer group"
                         title="Change Season"
                       >
@@ -1954,13 +1987,51 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         onSelectSeason={(sIdx) => {
                           saveProgressNow(playbackPosition, false, true);
                           setSelectedSeasonIndex(sIdx);
-                          setSelectedEpisodeIndex(0);
-                          setSelectedPartIndex(0);
-                          const key = `s${sIdx}_e0_p0`;
-                          const saved = partProgressMap[key];
-                          setPlaybackPosition(saved?.time || 0);
-                          if (saved?.language) setActiveLanguage(saved.language);
-                          if (saved?.quality) setActiveQuality(saved.quality);
+                          
+                          // Determine the target episode for this selected season
+                          let targetEpIdx = 0;
+                          const targetSeasonEpisodes = content.seasonsData?.[sIdx]?.episodes || [];
+                          const maxValidEp = Math.max(0, targetSeasonEpisodes.length - 1);
+                          
+                          if (seasonEpisodeMap[sIdx] !== undefined) {
+                            targetEpIdx = Math.min(seasonEpisodeMap[sIdx], maxValidEp);
+                          } else {
+                            // Find highest watched episode in this season from partProgressMap
+                            let latestEpWatched = 0;
+                            let latestEpTime = 0;
+                            for (let epI = 0; epI < targetSeasonEpisodes.length; epI++) {
+                              for (let pI = 0; pI < 10; pI++) {
+                                const pData = partProgressMap[`s${sIdx}_e${epI}_p${pI}`];
+                                if (pData && (pData.time > 0 || (pData.updatedAt || 0) > latestEpTime)) {
+                                  latestEpWatched = epI;
+                                  latestEpTime = pData.updatedAt || pData.time;
+                                }
+                              }
+                            }
+                            targetEpIdx = latestEpWatched;
+                          }
+                          
+                          setSelectedEpisodeIndex(targetEpIdx);
+                          setSeasonEpisodeMap(prev => ({ ...prev, [sIdx]: targetEpIdx }));
+
+                          // Target part resolution for this episode
+                          let targetPart = 0;
+                          let targetKey = `s${sIdx}_e${targetEpIdx}_p0`;
+                          let targetSaved = partProgressMap[targetKey];
+                          for (let p = 1; p < 10; p++) {
+                            const pKey = `s${sIdx}_e${targetEpIdx}_p${p}`;
+                            const pSaved = partProgressMap[pKey];
+                            if (pSaved && (pSaved.time > 0 || (pSaved.updatedAt || 0) > (targetSaved?.updatedAt || 0))) {
+                              targetPart = p;
+                              targetKey = pKey;
+                              targetSaved = pSaved;
+                            }
+                          }
+
+                          setSelectedPartIndex(targetPart);
+                          setPlaybackPosition(targetSaved?.time || 0);
+                          if (targetSaved?.language) setActiveLanguage(targetSaved.language);
+                          if (targetSaved?.quality) setActiveQuality(targetSaved.quality);
                         }}
                       />
                     </>
@@ -2146,15 +2217,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         })}
                       </div>
                     ) : (
-                      /* 2. GRID VIEW MODE (Compact number tiles) */
-                      <div className="flex flex-wrap gap-2">
+                      /* 2. GRID VIEW MODE (Horizontal Scrollable Shelf) */
+                      <div className="flex items-center gap-2 overflow-x-auto py-1.5 px-0.5 scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent">
                         {(activeSeasonEpisodes.length > 0 ? activeSeasonEpisodes : [{ id: '1', title: 'Episode 1' }]).map((ep, idx) => {
                             const isCurrent = selectedEpisodeIndex === idx;
                             return (
                                 <button
                                     key={idx}
                                     onClick={() => { adManager.handleEpisodeClick(!!user?.isPremium); handleSelectEpisode(idx); }}
-                                    className={`relative w-11 h-11 sm:w-12 sm:h-12 flex flex-col items-center justify-center rounded-xl text-xs sm:text-sm font-black transition cursor-pointer border ${
+                                    className={`relative shrink-0 w-11 h-11 sm:w-12 sm:h-12 flex flex-col items-center justify-center rounded-xl text-xs sm:text-sm font-black transition cursor-pointer border ${
                                       isCurrent 
                                         ? 'bg-[#8B5CF6] border-[#8B5CF6] text-white shadow-lg shadow-purple-500/40 ring-1 ring-purple-400' 
                                         : 'bg-[#18181d] text-white/75 border-white/10 hover:bg-white/5 hover:text-white'

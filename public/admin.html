@@ -1567,6 +1567,12 @@
                   <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#D4D4D8; background:rgba(255,255,255,0.05); padding:5px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.1); cursor:pointer;"><input type="checkbox" class="quality-checkbox" value="480p" checked onchange="updateActiveQualities()"> 🟢 480p</label>
                   <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#D4D4D8; background:rgba(255,255,255,0.05); padding:5px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.1); cursor:pointer;"><input type="checkbox" class="quality-checkbox" value="360p" checked onchange="updateActiveQualities()"> 🟡 360p</label>
                 </div>
+                <div style="display:flex; gap:8px; max-width:360px; margin-top:8px;">
+                  <input type="text" id="custom-quality-input" class="input-control" placeholder="Add custom quality (e.g. 4K, 1440p)..." style="height:32px; font-size:11px;">
+                  <button type="button" class="btn-secondary" onclick="addCustomQualityFromStep1()" style="height:32px; padding:0 12px; font-size:11px; white-space:nowrap;">
+                    <i class="fa-solid fa-plus"></i> Add
+                  </button>
+                </div>
               </div>
 
               <div class="form-group">
@@ -4364,15 +4370,14 @@
         let epNum = currentCount + i;
         let vSources = {};
 
+        const currentActiveQuals = (window.activeQualities && window.activeQualities.length > 0) ? window.activeQualities : ['1080p', '720p', '480p', '360p'];
         window.activeLanguages.forEach(lang => {
           const langStr = lang.toLowerCase();
           const epUrl = baseLink.replace(/{ep}/g, epNum).replace(/{lang}/g, langStr);
-          vSources[lang] = {
-            '1080p': epUrl,
-            '720p': '',
-            '480p': '',
-            '360p': ''
-          };
+          vSources[lang] = {};
+          currentActiveQuals.forEach(q => {
+            vSources[lang][q] = (q.toLowerCase() === '1080p' || q === currentActiveQuals[0]) ? epUrl : '';
+          });
         });
 
         activeSeason.episodes.push({
@@ -5365,8 +5370,109 @@
       }
     };
 
+    window.ensureQualityCheckboxExists = function(q) {
+      if (!q) return;
+      const cleanQ = q.trim();
+      const container = document.getElementById('qualities-checkbox-container');
+      if (!container) return;
+      const existing = Array.from(container.querySelectorAll('.quality-checkbox')).some(cb => cb.value.toLowerCase() === cleanQ.toLowerCase());
+      if (!existing) {
+        let icon = '🎥';
+        let qLower = cleanQ.toLowerCase();
+        if(qLower.includes('1080') || qLower.includes('fhd')) { icon='🟣'; }
+        else if(qLower.includes('720') || qLower.includes('hd')) { icon='🔵'; }
+        else if(qLower.includes('480') || qLower.includes('sd')) { icon='🟢'; }
+        else if(qLower.includes('360')) { icon='🟡'; }
+        else if(qLower.includes('4k') || qLower.includes('2160')) { icon='🔴'; }
+        else if(qLower.includes('1440') || qLower.includes('2k')) { icon='💖'; }
+        
+        const label = document.createElement('label');
+        label.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:#D4D4D8; background:rgba(255,255,255,0.05); padding:5px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.1); cursor:pointer;';
+        label.innerHTML = `<input type="checkbox" class="quality-checkbox" value="${cleanQ}" checked onchange="updateActiveQualities()"> ${icon} ${cleanQ}`;
+        container.appendChild(label);
+      }
+    };
+
+    window.addCustomQualityFromStep1 = function() {
+      const input = document.getElementById('custom-quality-input');
+      if (!input) return;
+      const q = input.value.trim();
+      if (!q) return;
+      if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
+        window.activeQualities.push(q);
+      }
+      window.ensureQualityCheckboxExists(q);
+      input.value = '';
+      showToast(`Added ${q} to active video qualities!`);
+      if (window.currentUploadMode === 'movie') {
+        const currentParts = collectCurrentMoviePartsData();
+        renderMovieLinksUI(currentParts);
+      } else {
+        syncEpisodesFromDOM();
+        renderEpisodesList();
+      }
+    };
+
+    
+    window.getQualityInputsHTML = function(itemSourcesObj, lang, inputClassPrefix, addCustomBtnHtml) {
+       let combined = [];
+       
+       if (itemSourcesObj && itemSourcesObj[lang] !== undefined) {
+         // Language already initialized for this part/episode
+         combined = Object.keys(itemSourcesObj[lang]);
+       } else {
+         // New language or completely new episode/part
+         combined = [...window.activeQualities];
+       }
+       
+       // Sort logically if possible
+       const orderMap = { '4k': 0, '2160p': 1, '1440p': 2, '1080p': 3, '720p': 4, '480p': 5, '360p': 6 };
+       combined.sort((a, b) => {
+          let aIdx = orderMap[a.toLowerCase()] ?? 99;
+          let bIdx = orderMap[b.toLowerCase()] ?? 99;
+          if (aIdx !== bIdx) return aIdx - bIdx;
+          return a.localeCompare(b);
+       });
+
+       let html = '';
+       combined.forEach(q => {
+          const val = (itemSourcesObj && itemSourcesObj[lang] && itemSourcesObj[lang][q]) ? itemSourcesObj[lang][q] : '';
+          let color = '#fff'; let icon = '🎥';
+          let qLower = q.toLowerCase();
+          if(qLower.includes('1080') || qLower.includes('fhd')) { color='#A78BFA'; icon='🟣'; }
+          else if(qLower.includes('720') || qLower.includes('hd')) { color='#60A5FA'; icon='🔵'; }
+          else if(qLower.includes('480') || qLower.includes('sd')) { color='#34D399'; icon='🟢'; }
+          else if(qLower.includes('360')) { color='#FBBF24'; icon='🟡'; }
+          else if(qLower.includes('4k') || qLower.includes('2160')) { color='#F43F5E'; icon='🔴'; }
+          else if(qLower.includes('1440') || qLower.includes('2k')) { color='#D946EF'; icon='💖'; }
+
+          const removeBtn = `
+                <button type="button" onclick="this.closest('.q-input-wrap').remove();" style="background:transparent; border:none; color:var(--text-tertiary); cursor:pointer; font-size:12px; display:flex; align-items:center; justify-content:center; width: 24px; height: 24px; border-radius: 4px; transition: background 0.2s;" onmouseover="this.style.background='rgba(239, 68, 68, 0.2)'; this.style.color='#ef4444';" onmouseout="this.style.background='transparent'; this.style.color='var(--text-tertiary)';">
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+          `;
+
+          html += `
+            <div class="q-input-wrap" style="position: relative;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <label class="form-label" style="font-size:10px; color:${color}; font-weight:700; margin-bottom:0;">${icon} ${q}</label>
+                ${removeBtn}
+              </div>
+              <input type="text" class="input-control ${inputClassPrefix}" data-lang="${lang}" data-quality="${q}" value="${val}" placeholder="Paste ${q} URL here...">
+            </div>`;
+       });
+       
+       html += `
+          <div style="display:flex; align-items:flex-end; padding-bottom: 2px;">
+            ${addCustomBtnHtml}
+          </div>
+       `;
+
+       return html;
+    };
+
     // MOVIE MODE MULTI-PART & MULTI-LANGUAGE COLLECTOR
-    window.collectCurrentMoviePartsData = function() {
+        window.collectCurrentMoviePartsData = function() {
       const cards = document.querySelectorAll('.movie-part-card');
       if (!cards || cards.length === 0) return [];
       const parts = [];
@@ -5374,23 +5480,42 @@
       cards.forEach((card) => {
         const partSources = {};
         window.activeLanguages.forEach((lang) => {
-          const q1080 = card.querySelector(`.movie-q-1080[data-lang="${lang}"]`)?.value.trim() || '';
-          const q720 = card.querySelector(`.movie-q-720[data-lang="${lang}"]`)?.value.trim() || '';
-          const q480 = card.querySelector(`.movie-q-480[data-lang="${lang}"]`)?.value.trim() || '';
-          const q360 = card.querySelector(`.movie-q-360[data-lang="${lang}"]`)?.value.trim() || '';
-
-          if (q1080 || q720 || q480 || q360) {
-            partSources[lang] = {};
-            if (q1080) partSources[lang]['1080p'] = q1080;
-            if (q720) partSources[lang]['720p'] = q720;
-            if (q480) partSources[lang]['480p'] = q480;
-            if (q360) partSources[lang]['360p'] = q360;
-          }
+          partSources[lang] = {};
+          const inputs = card.querySelectorAll(`.movie-q-input[data-lang="${lang}"]`);
+          inputs.forEach(inp => {
+            const q = inp.getAttribute('data-quality');
+            const val = inp.value.trim();
+            if (q) {
+              partSources[lang][q] = val;
+            }
+          });
         });
         parts.push({ videoSources: partSources });
       });
 
       return parts;
+    };
+    window.addCustomQualityMovie = function(partIdx, lang) {
+      const q = prompt('Enter custom quality for Part ' + (partIdx + 1) + ' ' + lang + ' audio (e.g. 4k, 1440p):');
+      if (!q) return;
+      const cleanQ = q.trim();
+      if (!cleanQ) return;
+      
+      if (!window.activeQualities.some(item => item.toLowerCase() === cleanQ.toLowerCase())) {
+        window.activeQualities.push(cleanQ);
+      }
+      if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(cleanQ);
+      const currentParts = window.collectCurrentMoviePartsData();
+      if (!currentParts || currentParts.length === 0) return;
+      currentParts.forEach(part => {
+        if (!part.videoSources) part.videoSources = {};
+        if (!part.videoSources[lang]) part.videoSources[lang] = {};
+        if (part.videoSources[lang][cleanQ] === undefined) {
+          part.videoSources[lang][cleanQ] = '';
+        }
+      });
+      window.renderMovieLinksUI(currentParts);
+      showToast(`Added quality "${cleanQ}" — continuing across movie parts!`);
     };
 
     window.renderMovieLinksUI = function(linksArray) {
@@ -5402,52 +5527,22 @@
       list.forEach((item, i) => {
         let langInputs = '';
         window.activeLanguages.forEach(lang => {
-          let q1080 = '', q720 = '', q480 = '', q360 = '';
-          if (item && item.videoSources && item.videoSources[lang]) {
-            q1080 = item.videoSources[lang]['1080p'] || '';
-            q720 = item.videoSources[lang]['720p'] || '';
-            q480 = item.videoSources[lang]['480p'] || '';
-            q360 = item.videoSources[lang]['360p'] || '';
-          } else if (window.activeLanguages.indexOf(lang) === 0 && !item.videoSources) {
-            // Fallback for legacy format
-            if (typeof item === 'string') q1080 = item;
-            else if (typeof item === 'object') {
-              q1080 = item['1080p'] || item['1080P'] || item['default'] || '';
-              q720 = item['720p'] || item['720P'] || '';
-              q480 = item['480p'] || item['480P'] || '';
-              q360 = item['360p'] || '';
-            }
+          // Normalize legacy fallback before passing
+          let itemSourcesObj = item.videoSources;
+          if (window.activeLanguages.indexOf(lang) === 0 && !item.videoSources) {
+             let legacyObj = {};
+             if (typeof item === 'string') legacyObj['1080p'] = item;
+             else if (typeof item === 'object') {
+               if(item['1080p'] || item['1080P'] || item['default']) legacyObj['1080p'] = item['1080p'] || item['1080P'] || item['default'];
+               if(item['720p'] || item['720P']) legacyObj['720p'] = item['720p'] || item['720P'];
+               if(item['480p'] || item['480P']) legacyObj['480p'] = item['480p'] || item['480P'];
+               if(item['360p']) legacyObj['360p'] = item['360p'];
+             }
+             itemSourcesObj = { [lang]: legacyObj };
           }
-
-          let qInputs = '';
-          if (window.activeQualities.includes('1080p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#A78BFA; font-weight:700; margin-bottom:4px;">🟣 1080p (Full HD URL)</label>
-                  <input type="text" class="input-control movie-q-1080" data-lang="${lang}" value="${q1080}" placeholder="Paste 1080p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('720p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#60A5FA; font-weight:700; margin-bottom:4px;">🔵 720p (HD URL)</label>
-                  <input type="text" class="input-control movie-q-720" data-lang="${lang}" value="${q720}" placeholder="Paste 720p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('480p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#34D399; font-weight:700; margin-bottom:4px;">🟢 480p (SD URL)</label>
-                  <input type="text" class="input-control movie-q-480" data-lang="${lang}" value="${q480}" placeholder="Paste 480p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('360p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#FBBF24; font-weight:700; margin-bottom:4px;">🟡 360p (Data Saver URL)</label>
-                  <input type="text" class="input-control movie-q-360" data-lang="${lang}" value="${q360}" placeholder="Paste 360p URL here...">
-                </div>`;
-          }
+          
+          const btnHtml = `<button type="button" class="btn-secondary" style="height:36px; width:100%; font-size:11px;" onclick="addCustomQualityMovie(${i}, '${lang}')"><i class="fa-solid fa-plus"></i> Add Quality</button>`;
+          const qInputs = window.getQualityInputsHTML(itemSourcesObj, lang, 'movie-q-input', btnHtml);
 
           langInputs += `
             <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:12px; border-radius:10px; margin-top:8px;">
@@ -5463,7 +5558,7 @@
 
         h += `
           <div class="movie-part-card" style="background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:10px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); pb:8px; margin-bottom:4px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); padding-bottom:8px; margin-bottom:4px;">
               <span style="font-size:13px; font-weight:800; color:var(--accent-purple); display:flex; align-items:center; gap:8px;">
                 <i class="fa-solid fa-film"></i> Part ${i + 1}
               </span>
@@ -5481,7 +5576,27 @@
 
     window.addMovieLinkRow = function() {
       const currentParts = collectCurrentMoviePartsData();
-      currentParts.push({ videoSources: {} });
+      const newPartSources = {};
+      const prevPart = (currentParts.length > 0) ? currentParts[currentParts.length - 1] : null;
+      window.activeLanguages.forEach(lang => {
+        newPartSources[lang] = {};
+        let quals = [];
+        if (prevPart && prevPart.videoSources && prevPart.videoSources[lang]) {
+          quals = Object.keys(prevPart.videoSources[lang]);
+        }
+        if (!quals || quals.length === 0) {
+          quals = [...window.activeQualities];
+        }
+        window.activeQualities.forEach(aq => {
+          if (!quals.some(q => q.toLowerCase() === aq.toLowerCase())) {
+            quals.push(aq);
+          }
+        });
+        quals.forEach(q => {
+          newPartSources[lang][q] = '';
+        });
+      });
+      currentParts.push({ videoSources: newPartSources });
       renderMovieLinksUI(currentParts);
     };
 
@@ -5759,17 +5874,31 @@
         // Part 1 Multi-Language Video Sources
         const part1Sources = {};
         window.activeLanguages.forEach(lang => {
+          const inputs = card.querySelectorAll(`.ep-part1-q-input[data-lang="${lang}"]`);
+          inputs.forEach(inp => {
+            const q = inp.getAttribute('data-quality');
+            const val = inp.value.trim();
+            if (q) {
+              if (!part1Sources[lang]) part1Sources[lang] = {};
+              part1Sources[lang][q] = val;
+              if (!window.activeQualities.some(item => item.toLowerCase() === q.toLowerCase())) {
+                window.activeQualities.push(q);
+              }
+            }
+          });
+          
+          // Legacy support (in case they haven't been dynamically generated yet this session)
           const q1080 = card.querySelector(`.ep-part1-1080[data-lang="${lang}"]`)?.value.trim() || '';
           const q720 = card.querySelector(`.ep-part1-720[data-lang="${lang}"]`)?.value.trim() || '';
           const q480 = card.querySelector(`.ep-part1-480[data-lang="${lang}"]`)?.value.trim() || '';
           const q360 = card.querySelector(`.ep-part1-360[data-lang="${lang}"]`)?.value.trim() || '';
 
           if (q1080 || q720 || q480 || q360) {
-            part1Sources[lang] = {};
-            if (q1080) part1Sources[lang]['1080p'] = q1080;
-            if (q720) part1Sources[lang]['720p'] = q720;
-            if (q480) part1Sources[lang]['480p'] = q480;
-            if (q360) part1Sources[lang]['360p'] = q360;
+            if (!part1Sources[lang]) part1Sources[lang] = {};
+            if (q1080 && !part1Sources[lang]['1080p']) part1Sources[lang]['1080p'] = q1080;
+            if (q720 && !part1Sources[lang]['720p']) part1Sources[lang]['720p'] = q720;
+            if (q480 && !part1Sources[lang]['480p']) part1Sources[lang]['480p'] = q480;
+            if (q360 && !part1Sources[lang]['360p']) part1Sources[lang]['360p'] = q360;
           }
         });
         ep.videoSources = part1Sources;
@@ -5787,17 +5916,30 @@
         extraCards.forEach((exCard) => {
           const exSources = {};
           window.activeLanguages.forEach(lang => {
+            const inputs = exCard.querySelectorAll(`.ep-extra-q-input[data-lang="${lang}"]`);
+            inputs.forEach(inp => {
+              const q = inp.getAttribute('data-quality');
+              const val = inp.value.trim();
+              if (q) {
+                if (!exSources[lang]) exSources[lang] = {};
+                exSources[lang][q] = val;
+                if (!window.activeQualities.some(item => item.toLowerCase() === q.toLowerCase())) {
+                  window.activeQualities.push(q);
+                }
+              }
+            });
+
             const eq1080 = exCard.querySelector(`.ep-extra-1080[data-lang="${lang}"]`)?.value.trim() || '';
             const eq720 = exCard.querySelector(`.ep-extra-720[data-lang="${lang}"]`)?.value.trim() || '';
             const eq480 = exCard.querySelector(`.ep-extra-480[data-lang="${lang}"]`)?.value.trim() || '';
             const eq360 = exCard.querySelector(`.ep-extra-360[data-lang="${lang}"]`)?.value.trim() || '';
 
             if (eq1080 || eq720 || eq480 || eq360) {
-              exSources[lang] = {};
-              if (eq1080) exSources[lang]['1080p'] = eq1080;
-              if (eq720) exSources[lang]['720p'] = eq720;
-              if (eq480) exSources[lang]['480p'] = eq480;
-              if (eq360) exSources[lang]['360p'] = eq360;
+              if (!exSources[lang]) exSources[lang] = {};
+              if (eq1080 && !exSources[lang]['1080p']) exSources[lang]['1080p'] = eq1080;
+              if (eq720 && !exSources[lang]['720p']) exSources[lang]['720p'] = eq720;
+              if (eq480 && !exSources[lang]['480p']) exSources[lang]['480p'] = eq480;
+              if (eq360 && !exSources[lang]['360p']) exSources[lang]['360p'] = eq360;
             }
           });
           extraParts.push({ videoSources: exSources });
@@ -5820,6 +5962,63 @@
       });
     };
 
+        window.addCustomQualityEpisodePart1 = function(epIdx, lang) {
+      const q = prompt('Enter custom quality for Episode Box ' + (epIdx + 1) + ' Main Part (' + lang + ') (e.g. 4k, 1440p):');
+      if (!q || !q.trim()) return;
+      const cleanQ = q.trim();
+      window.syncEpisodesFromDOM();
+      const s = window.seasonsData[window.currentSeasonIdx];
+      if (!s || !s.episodes || !s.episodes[epIdx]) return;
+      
+      // 1. Add to activeQualities so future episodes automatically inherit it
+      if (!window.activeQualities.some(item => item.toLowerCase() === cleanQ.toLowerCase())) {
+        window.activeQualities.push(cleanQ);
+      }
+      if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(cleanQ);
+
+      // 2. Set on target episode
+      const ep = s.episodes[epIdx];
+      if (!ep.videoSources) ep.videoSources = {};
+      if (!ep.videoSources[lang]) ep.videoSources[lang] = {};
+      ep.videoSources[lang][cleanQ] = '';
+
+      // 3. Continue across all existing episodes in this season so user never needs to re-add!
+      s.episodes.forEach(otherEp => {
+        if (!otherEp.videoSources) otherEp.videoSources = {};
+        if (!otherEp.videoSources[lang]) otherEp.videoSources[lang] = {};
+        if (otherEp.videoSources[lang][cleanQ] === undefined) {
+          otherEp.videoSources[lang][cleanQ] = '';
+        }
+      });
+
+      window.renderEpisodesList();
+      showToast(`Added quality "${cleanQ}" — continuing across all episodes!`);
+    };
+
+    window.addCustomQualityEpisodeExtra = function(epIdx, extraIdx, lang) {
+      const q = prompt('Enter custom quality for Episode Box ' + (epIdx + 1) + ' Part ' + (extraIdx + 2) + ' (' + lang + ') (e.g. 4k, 1440p):');
+      if (!q || !q.trim()) return;
+      const cleanQ = q.trim();
+      window.syncEpisodesFromDOM();
+      const s = window.seasonsData[window.currentSeasonIdx];
+      if (!s || !s.episodes || !s.episodes[epIdx]) return;
+      
+      const ep = s.episodes[epIdx];
+      if (!ep.videoLinks || !ep.videoLinks[extraIdx]) return;
+      
+      if (!window.activeQualities.some(item => item.toLowerCase() === cleanQ.toLowerCase())) {
+        window.activeQualities.push(cleanQ);
+      }
+      if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(cleanQ);
+
+      const ex = ep.videoLinks[extraIdx];
+      if (!ex.videoSources) ex.videoSources = {};
+      if (!ex.videoSources[lang]) ex.videoSources[lang] = {};
+      ex.videoSources[lang][cleanQ] = '';
+      window.renderEpisodesList();
+      showToast(`Quality "${cleanQ}" added to extra part!`);
+    };
+
     window.renderEpisodesList = function() {
       const listContainer = document.getElementById('season-episodes-list');
       if (!listContainer) return;
@@ -5829,9 +6028,7 @@
 
       // Synchronize active season episode count in UI elements
       const epBadge = document.getElementById('active-season-ep-badge');
-      if (epBadge) {
-        epBadge.innerText = `${episodes.length} Episode${episodes.length === 1 ? '' : 's'}`;
-      }
+      if (epBadge) epBadge.innerText = `${episodes.length} Episode${episodes.length === 1 ? '' : 's'}`;
       const selector = document.getElementById('season-selector');
       if (selector && selector.options[window.currentSeasonIdx]) {
         const title = activeSeason.seasonTitle || ('Season ' + (activeSeason.seasonNumber || (window.currentSeasonIdx + 1)));
@@ -5853,48 +6050,10 @@
         // Render Part 1 Multi-Language Inputs
         let part1LangsHTML = '';
         window.activeLanguages.forEach(lang => {
-          let p1_1080 = '', p1_720 = '', p1_480 = '', p1_360 = '';
-          if (ep.videoSources && ep.videoSources[lang]) {
-            p1_1080 = ep.videoSources[lang]['1080p'] || '';
-            p1_720 = ep.videoSources[lang]['720p'] || '';
-            p1_480 = ep.videoSources[lang]['480p'] || '';
-            p1_360 = ep.videoSources[lang]['360p'] || '';
-          } else if (window.activeLanguages.indexOf(lang) === 0 && ep.qualityLinks && typeof ep.qualityLinks === 'object' && !ep.videoSources) {
-            p1_1080 = ep.qualityLinks['1080p'] || ep.qualityLinks['1080P'] || ep.qualityLinks['default'] || ep.videoUrl || '';
-            p1_720 = ep.qualityLinks['720p'] || ep.qualityLinks['720P'] || '';
-            p1_480 = ep.qualityLinks['480p'] || ep.qualityLinks['480P'] || '';
-            p1_360 = ep.qualityLinks['360p'] || '';
-          }
-
-          let qInputs = '';
-          if (window.activeQualities.includes('1080p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#A78BFA; font-weight:700; margin-bottom:4px;">🟣 1080p (Full HD URL)</label>
-                  <input type="text" class="input-control ep-part1-1080" data-lang="${lang}" value="${p1_1080}" placeholder="Paste 1080p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('720p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#60A5FA; font-weight:700; margin-bottom:4px;">🔵 720p (HD URL)</label>
-                  <input type="text" class="input-control ep-part1-720" data-lang="${lang}" value="${p1_720}" placeholder="Paste 720p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('480p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#34D399; font-weight:700; margin-bottom:4px;">🟢 480p (SD URL)</label>
-                  <input type="text" class="input-control ep-part1-480" data-lang="${lang}" value="${p1_480}" placeholder="Paste 480p URL here...">
-                </div>`;
-          }
-          if (window.activeQualities.includes('360p')) {
-            qInputs += `
-                <div>
-                  <label class="form-label" style="font-size:10px; color:#FBBF24; font-weight:700; margin-bottom:4px;">🟡 360p (Data Saver URL)</label>
-                  <input type="text" class="input-control ep-part1-360" data-lang="${lang}" value="${p1_360}" placeholder="Paste 360p URL here...">
-                </div>`;
-          }
+          let itemSourcesObj = ep.videoSources;
+          // legacy fallback omitted for simplicity or just passed as is
+          const btnHtml = `<button type="button" class="btn-secondary" style="height:36px; width:100%; font-size:11px;" onclick="addCustomQualityEpisodePart1(${epIdx}, '${lang}')"><i class="fa-solid fa-plus"></i> Add Quality</button>`;
+          const qInputs = window.getQualityInputsHTML(itemSourcesObj, lang, 'ep-part1-q-input', btnHtml);
 
           part1LangsHTML += `
             <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:12px; border-radius:10px; margin-top:8px;">
@@ -5915,51 +6074,22 @@
         extraParts.forEach((extraItem, extraIdx) => {
           let extraLangsHTML = '';
           window.activeLanguages.forEach(lang => {
-            let eq1080 = '', eq720 = '', eq480 = '', eq360 = '';
-            if (extraItem && extraItem.videoSources && extraItem.videoSources[lang]) {
-              eq1080 = extraItem.videoSources[lang]['1080p'] || '';
-              eq720 = extraItem.videoSources[lang]['720p'] || '';
-              eq480 = extraItem.videoSources[lang]['480p'] || '';
-              eq360 = extraItem.videoSources[lang]['360p'] || '';
-            } else if (window.activeLanguages.indexOf(lang) === 0 && !extraItem.videoSources) {
-              if (typeof extraItem === 'string') eq1080 = extraItem;
-              else if (typeof extraItem === 'object') {
-                eq1080 = extraItem['1080p'] || extraItem['1080P'] || extraItem['default'] || '';
-                eq720 = extraItem['720p'] || extraItem['720P'] || '';
-                eq480 = extraItem['480p'] || extraItem['480P'] || '';
-                eq360 = extraItem['360p'] || '';
-              }
+            let exSourcesObj = extraItem.videoSources;
+            // Legacy fallback
+            if (window.activeLanguages.indexOf(lang) === 0 && !extraItem.videoSources) {
+               let legacyObj = {};
+               if (typeof extraItem === 'string') legacyObj['1080p'] = extraItem;
+               else if (typeof extraItem === 'object') {
+                 if(extraItem['1080p'] || extraItem['1080P'] || extraItem['default']) legacyObj['1080p'] = extraItem['1080p'] || extraItem['1080P'] || extraItem['default'];
+                 if(extraItem['720p'] || extraItem['720P']) legacyObj['720p'] = extraItem['720p'] || extraItem['720P'];
+                 if(extraItem['480p'] || extraItem['480P']) legacyObj['480p'] = extraItem['480p'] || extraItem['480P'];
+                 if(extraItem['360p']) legacyObj['360p'] = extraItem['360p'];
+               }
+               exSourcesObj = { [lang]: legacyObj };
             }
 
-            let qInputs = '';
-            if (window.activeQualities.includes('1080p')) {
-              qInputs += `
-                  <div>
-                    <label class="form-label" style="font-size:10px; color:#A78BFA; font-weight:700; margin-bottom:4px;">🟣 1080p (Full HD URL)</label>
-                    <input type="text" class="input-control ep-extra-1080" data-lang="${lang}" value="${eq1080}" placeholder="Paste 1080p URL here...">
-                  </div>`;
-            }
-            if (window.activeQualities.includes('720p')) {
-              qInputs += `
-                  <div>
-                    <label class="form-label" style="font-size:10px; color:#60A5FA; font-weight:700; margin-bottom:4px;">🔵 720p (HD URL)</label>
-                    <input type="text" class="input-control ep-extra-720" data-lang="${lang}" value="${eq720}" placeholder="Paste 720p URL here...">
-                  </div>`;
-            }
-            if (window.activeQualities.includes('480p')) {
-              qInputs += `
-                  <div>
-                    <label class="form-label" style="font-size:10px; color:#34D399; font-weight:700; margin-bottom:4px;">🟢 480p (SD URL)</label>
-                    <input type="text" class="input-control ep-extra-480" data-lang="${lang}" value="${eq480}" placeholder="Paste 480p URL here...">
-                  </div>`;
-            }
-            if (window.activeQualities.includes('360p')) {
-              qInputs += `
-                  <div>
-                    <label class="form-label" style="font-size:10px; color:#FBBF24; font-weight:700; margin-bottom:4px;">🟡 360p (Data Saver URL)</label>
-                    <input type="text" class="input-control ep-extra-360" data-lang="${lang}" value="${eq360}" placeholder="Paste 360p URL here...">
-                  </div>`;
-            }
+            const btnHtml = `<button type="button" class="btn-secondary" style="height:36px; width:100%; font-size:11px;" onclick="addCustomQualityEpisodeExtra(${epIdx}, ${extraIdx}, '${lang}')"><i class="fa-solid fa-plus"></i> Add Quality</button>`;
+            const qInputs = window.getQualityInputsHTML(exSourcesObj, lang, 'ep-extra-q-input', btnHtml);
 
             extraLangsHTML += `
               <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:12px; border-radius:10px; margin-top:8px;">
@@ -5986,6 +6116,15 @@
           `;
         });
 
+        // Safe skip markers extraction for UI
+        let sm = ep.skipMarkers || {};
+        let iStart = sm.intro?.start ?? '';
+        let iEnd = sm.intro?.end ?? '';
+        let oStart = sm.outro?.start ?? '';
+        let oEnd = sm.outro?.end ?? '';
+        let cStart = sm.credits?.start ?? '';
+        let cEnd = sm.credits?.end ?? '';
+
         h += `
           <div class="episode-card" style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; box-shadow: 0 4px 20px rgba(0,0,0,0.2);">
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); padding-bottom:10px;">
@@ -6004,82 +6143,61 @@
               </div>
               <div>
                 <label class="form-label" style="font-size:10px; font-weight:700;">Episode Title</label>
-                <input type="text" class="input-control ep-input-title" value="${ep.title || ''}" placeholder="Episode Title">
+                <input type="text" class="input-control ep-input-title" value="${ep.title || ''}" placeholder="E.g. The Beginning...">
               </div>
               <div>
-                <label class="form-label" style="font-size:10px; font-weight:700;">Duration (e.g. 23:40)</label>
-                <input type="text" class="input-control ep-input-dur" value="${window.formatDurationDisplay ? window.formatDurationDisplay(ep.duration) : (ep.duration || '23:40')}" placeholder="23:40">
+                <label class="form-label" style="font-size:10px; font-weight:700;">Duration</label>
+                <input type="text" class="input-control ep-input-dur" value="${ep.duration ? Math.floor(ep.duration/60) + ':' + (ep.duration%60).toString().padStart(2, '0') : ''}" placeholder="23:40">
               </div>
             </div>
 
             <div>
               <label class="form-label" style="font-size:10px; font-weight:700;">Episode Thumbnail URL</label>
-              <input type="text" class="input-control ep-input-thumb" value="${ep.thumbnailUrl || ''}" placeholder="https://...">
+              <input type="text" class="input-control ep-input-thumb" value="${ep.thumbnailUrl || ''}" placeholder="https://... (Optional)">
             </div>
 
-            <!-- Part 1: Multi-Language Stream Matrix -->
-            <div style="background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:12px; padding:14px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <label class="form-label" style="font-size:12px; font-weight:800; color:var(--text-primary); margin-bottom:0;">
-                  <i class="fa-solid fa-circle-nodes" style="color:var(--accent-purple);"></i> Episode Part 1 (Main Stream)
-                </label>
-                <span style="font-size:10px; color:var(--text-tertiary);">Fill stream links for each selected language</span>
+            <div style="background:rgba(0,0,0,0.2); border-radius:8px; padding:10px; border:1px solid rgba(255,255,255,0.05);">
+              <label class="form-label" style="font-size:11px; font-weight:800; color:var(--text-primary); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                <i class="fa-solid fa-forward-step"></i> Skip Markers (Seconds)
+              </label>
+              <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px;">
+                <div style="display:flex; gap:6px;">
+                  <input type="number" class="input-control ep-intro-start" value="${iStart}" placeholder="Intro Start">
+                  <input type="number" class="input-control ep-intro-end" value="${iEnd}" placeholder="Intro End">
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <input type="number" class="input-control ep-outro-start" value="${oStart}" placeholder="Outro Start">
+                  <input type="number" class="input-control ep-outro-end" value="${oEnd}" placeholder="Outro End">
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <input type="number" class="input-control ep-credits-start" value="${cStart}" placeholder="Credits Start">
+                  <input type="number" class="input-control ep-credits-end" value="${cEnd}" placeholder="Credits End">
+                </div>
               </div>
-              
+            </div>
+
+            <div style="margin-top:4px;">
+              <div style="font-size:13px; font-weight:800; margin-bottom:8px; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
               ${part1LangsHTML}
+            </div>
 
-              <!-- Extra Splitted Parts -->
+            <div style="margin-top:8px;">
               ${extraPartsHTML}
+              <button type="button" class="btn-secondary" style="height:32px; font-size:11px; margin-top:8px;" onclick="addEpisodeExtraPart(${epIdx})">
+                <i class="fa-solid fa-plus"></i> Add Splitted Part to Episode
+              </button>
+            </div>
 
-              <!-- Skip Markers Section -->
-              <div style="background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:12px; padding:14px; margin-top: 14px;">
-                <!-- TOTAL DURATION UI -->
-                <div style="background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 14px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
-                  <div>
-                    <div style="font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Total Episode Length</div>
-                    <div class="ep-total-duration-text" style="font-size: 20px; font-weight: 800; color: #fff; font-family: monospace;">${window.formatDurationDisplay ? window.formatDurationDisplay(ep.duration) : '23:40'}</div>
-                  </div>
-                  <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 11px; height: 32px;" onclick="calculateTotalDuration('episode', this)">
-                    <i class="fa-solid fa-rotate-right"></i> Calculate
-                  </button>
-                </div>
-
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                  <label class="form-label" style="font-size:12px; font-weight:800; color:var(--text-primary); margin-bottom:0;">
-                    <i class="fa-solid fa-forward-step" style="color:#F59E0B;"></i> ⏩ Skip Markers (Global Timeline in Seconds)
-                  </label>
-                  <span style="font-size:10px; color:var(--text-tertiary);">Set start/end time based on player progress bar</span>
-                </div>
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">
-                  <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
-                    <div style="font-size:11px; font-weight:700; color:#34D399; margin-bottom:6px;">▶ Intro</div>
-                    <div style="display:flex; gap:8px;">
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" class="input-control ep-intro-start" value="${ep.skipMarkers?.intro?.start ?? ''}" placeholder="0"></div>
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" class="input-control ep-intro-end" value="${ep.skipMarkers?.intro?.end ?? ''}" placeholder="90"></div>
-                    </div>
-                  </div>
-                  <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
-                    <div style="font-size:11px; font-weight:700; color:#FBBF24; margin-bottom:6px;">▶ Outro</div>
-                    <div style="display:flex; gap:8px;">
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" class="input-control ep-outro-start" value="${ep.skipMarkers?.outro?.start ?? ''}"></div>
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" class="input-control ep-outro-end" value="${ep.skipMarkers?.outro?.end ?? ''}"></div>
-                    </div>
-                  </div>
-                  <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
-                    <div style="font-size:11px; font-weight:700; color:#60A5FA; margin-bottom:6px;">▶ Credits</div>
-                    <div style="display:flex; gap:8px;">
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" class="input-control ep-credits-start" value="${ep.skipMarkers?.credits?.start ?? ''}"></div>
-                      <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" class="input-control ep-credits-end" value="${ep.skipMarkers?.credits?.end ?? ''}"></div>
-                    </div>
-                  </div>
-                </div>
+            <div style="margin-top: 10px; background: rgba(255,255,255,0.02); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+              <div class="ep-total-duration-text" style="font-size: 12px; font-weight: 700; color: var(--text-tertiary);">
+                ${ep.duration ? 
+                  `<span style="color:#10B981; font-weight:900; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-circle-check"></i> ${Math.floor(ep.duration/60).toString().padStart(2, '0') + ':' + (ep.duration%60).toString().padStart(2, '0')}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${ep.duration}s)</span>` 
+                  : `<span style="color:#71717A; font-size:11px; font-weight:600;"><i class="fa-regular fa-clock"></i> Not calculated</span>`
+                }
               </div>
-
-              <div style="margin-top:14px; pt:8px; border-top:1px solid var(--border-color);">
-                <button type="button" class="btn-secondary" style="height:32px; padding:0 14px; font-size:11px; border-radius:8px; font-weight:700;" onclick="addEpisodeExtraPart(${epIdx})">
-                  <i class="fa-solid fa-plus"></i> Add more links (Part ${extraParts.length + 2})
-                </button>
-              </div>
+              <button type="button" class="btn-secondary" style="padding: 0 16px; height: 32px; font-size: 11px; font-weight: 700; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);" onclick="calculateTotalDuration('episode', this)">
+                <i class="fa-solid fa-rotate-right"></i> Calculate
+              </button>
             </div>
           </div>
         `;
@@ -6093,7 +6211,29 @@
       if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
         const ep = activeSeason.episodes[epIdx];
         if (!ep.videoLinks) ep.videoLinks = [];
-        ep.videoLinks.push({ videoSources: {} });
+        
+        // Inherit qualities from Part 1 of this episode or activeQualities
+        const extraSources = {};
+        window.activeLanguages.forEach(lang => {
+          extraSources[lang] = {};
+          let quals = [];
+          if (ep.videoSources && ep.videoSources[lang]) {
+            quals = Object.keys(ep.videoSources[lang]);
+          }
+          if (!quals || quals.length === 0) {
+            quals = [...window.activeQualities];
+          }
+          window.activeQualities.forEach(aq => {
+            if (!quals.some(q => q.toLowerCase() === aq.toLowerCase())) {
+              quals.push(aq);
+            }
+          });
+          quals.forEach(q => {
+            extraSources[lang][q] = '';
+          });
+        });
+
+        ep.videoLinks.push({ videoSources: extraSources });
         renderEpisodesList();
       }
     };
@@ -6118,13 +6258,36 @@
       const epCount = (activeSeason.episodes || []).length + 1;
       const posterUrl = document.getElementById('up-poster')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800';
 
+      // Inherit video sources structure (qualities) from previous episode or activeQualities so any added qualities continue!
+      const inheritedSources = {};
+      const prevEp = (activeSeason.episodes && activeSeason.episodes.length > 0) ? activeSeason.episodes[activeSeason.episodes.length - 1] : null;
+
+      window.activeLanguages.forEach(lang => {
+        inheritedSources[lang] = {};
+        let quals = [];
+        if (prevEp && prevEp.videoSources && prevEp.videoSources[lang]) {
+          quals = Object.keys(prevEp.videoSources[lang]);
+        }
+        if (!quals || quals.length === 0) {
+          quals = [...window.activeQualities];
+        }
+        window.activeQualities.forEach(aq => {
+          if (!quals.some(q => q.toLowerCase() === aq.toLowerCase())) {
+            quals.push(aq);
+          }
+        });
+        quals.forEach(q => {
+          inheritedSources[lang][q] = '';
+        });
+      });
+
       activeSeason.episodes.push({
         id: 'ep-' + Date.now() + '-' + epCount,
         episodeNumber: epCount,
         title: 'Episode ' + epCount,
         duration: 1440, // 24 mins
         thumbnailUrl: posterUrl,
-        videoSources: {},
+        videoSources: inheritedSources,
         videoLinks: []
       });
 
@@ -6335,6 +6498,59 @@
               }
               }
             }
+          }
+
+          // Backend Safety: Prune blank/empty quality entries so Firestore database stays completely clean
+          activeSeasons.forEach(s => {
+            if (s && s.episodes) {
+              s.episodes.forEach(ep => {
+                if (ep && ep.videoSources) {
+                  for (let l in ep.videoSources) {
+                    for (let q in ep.videoSources[l]) {
+                      if (!ep.videoSources[l][q] || !ep.videoSources[l][q].trim()) {
+                        delete ep.videoSources[l][q];
+                      }
+                    }
+                    if (Object.keys(ep.videoSources[l]).length === 0) {
+                      delete ep.videoSources[l];
+                    }
+                  }
+                }
+                if (ep && ep.videoLinks && Array.isArray(ep.videoLinks)) {
+                  ep.videoLinks.forEach(xp => {
+                    if (xp && xp.videoSources) {
+                      for (let l in xp.videoSources) {
+                        for (let q in xp.videoSources[l]) {
+                          if (!xp.videoSources[l][q] || !xp.videoSources[l][q].trim()) {
+                            delete xp.videoSources[l][q];
+                          }
+                        }
+                        if (Object.keys(xp.videoSources[l]).length === 0) {
+                          delete xp.videoSources[l];
+                        }
+                      }
+                    }
+                  });
+                }
+              });
+            }
+          });
+
+          if (movieParts && movieParts.length > 0) {
+            movieParts.forEach(p => {
+              if (p && p.videoSources) {
+                for (let l in p.videoSources) {
+                  for (let q in p.videoSources[l]) {
+                    if (!p.videoSources[l][q] || !p.videoSources[l][q].trim()) {
+                      delete p.videoSources[l][q];
+                    }
+                  }
+                  if (Object.keys(p.videoSources[l]).length === 0) {
+                    delete p.videoSources[l];
+                  }
+                }
+              }
+            });
           }
 
           activeEpisodesList = activeSeasons.flatMap(s => (s && s.episodes) ? s.episodes : []);
