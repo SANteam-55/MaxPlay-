@@ -29,6 +29,7 @@ interface SeasonOption {
 interface SoloLevelingSelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
+  triggerRef?: React.RefObject<HTMLElement | null>;
   type: 'language' | 'season';
   // Language props
   languages?: string[];
@@ -45,6 +46,7 @@ interface SoloLevelingSelectorModalProps {
 export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps> = ({
   isOpen,
   onClose,
+  triggerRef,
   type,
   languages = [],
   activeLanguage = '',
@@ -60,9 +62,22 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
     if (!isOpen) return;
 
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      if (modalRef.current && !modalRef.current.contains(event.target as Node)) {
-        onClose();
+      const target = event.target as Node;
+      // If clicked inside the dropdown modal, do nothing
+      if (modalRef.current && modalRef.current.contains(target)) {
+        return;
       }
+      // If clicked on or inside the trigger button that opens this modal, ignore
+      // so the trigger button's own onClick can cleanly toggle it closed
+      if (triggerRef?.current && triggerRef.current.contains(target)) {
+        return;
+      }
+      // Also check by data attribute for safety
+      if ((target as Element)?.closest?.(`[data-selector-trigger="${type}"]`)) {
+        return;
+      }
+
+      onClose();
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -72,7 +87,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('touchstart', handleClickOutside);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, triggerRef, type]);
 
   // Helper to get formatted language metadata
   const getLanguageMeta = (lang: string): LanguageOption => {

@@ -544,6 +544,13 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastSaveTimeRef = useRef<number>(0);
+  const languageTriggerRef = useRef<HTMLButtonElement>(null);
+  const seasonTriggerRef = useRef<HTMLButtonElement>(null);
+
+  // Initialize details screen ad grace period
+  useEffect(() => {
+    adManager.enterDetailsScreen();
+  }, []);
 
   // Unique identifier for the active part to guarantee zero timestamp bleed
   const currentPartKey = useMemo(() => {
@@ -1922,11 +1929,19 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 <div className="relative flex flex-wrap items-center gap-2">
                   {/* Dub / Language Trigger Button (Solo Leveling HUD) */}
                   <button
+                    ref={languageTriggerRef}
+                    data-selector-trigger="language"
                     type="button"
-                    onClick={() => {
-                      adManager.handleSelectorClick(!!user?.isPremium);
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setIsSeasonModalOpen(false);
-                      setIsLanguageModalOpen(prev => !prev);
+                      setIsLanguageModalOpen(prev => {
+                        const next = !prev;
+                        if (next) {
+                          adManager.handleSelectorClick(!!user?.isPremium);
+                        }
+                        return next;
+                      });
                     }}
                     className="relative inline-flex items-center gap-2 bg-[#121626] hover:bg-[#182038] active:scale-95 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(6,182,212,0.12)] transition-all cursor-pointer group"
                     title="Change Audio Track"
@@ -1944,6 +1959,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   <SoloLevelingSelectorModal
                     isOpen={isLanguageModalOpen}
                     onClose={() => setIsLanguageModalOpen(false)}
+                    triggerRef={languageTriggerRef}
                     type="language"
                     contentTitle={content.title}
                     languages={availableLanguages}
@@ -1958,11 +1974,19 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   {!isMovie && (
                     <>
                       <button
+                        ref={seasonTriggerRef}
+                        data-selector-trigger="season"
                         type="button"
-                        onClick={() => {
-                          adManager.handleSelectorClick(!!user?.isPremium);
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setIsLanguageModalOpen(false);
-                          setIsSeasonModalOpen(prev => !prev);
+                          setIsSeasonModalOpen(prev => {
+                            const next = !prev;
+                            if (next) {
+                              adManager.handleSelectorClick(!!user?.isPremium);
+                            }
+                            return next;
+                          });
                         }}
                         className="relative inline-flex items-center gap-2 bg-[#181329] hover:bg-[#231a3d] active:scale-95 border border-purple-500/30 hover:border-purple-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(168,85,247,0.12)] transition-all cursor-pointer group"
                         title="Change Season"
@@ -1980,6 +2004,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <SoloLevelingSelectorModal
                         isOpen={isSeasonModalOpen}
                         onClose={() => setIsSeasonModalOpen(false)}
+                        triggerRef={seasonTriggerRef}
                         type="season"
                         contentTitle={content.title}
                         seasons={seasonOptions}

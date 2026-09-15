@@ -953,13 +953,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               handleControlInteraction();
             }}
             onSpeedPress={() => {
-              setActiveMenu('speed');
+              setActiveMenu(prev => prev === 'speed' ? null : 'speed');
             }}
             onLanguagePress={availableLanguages.length > 0 ? () => {
-              setActiveMenu('language');
+              setActiveMenu(prev => prev === 'language' ? null : 'language');
             } : undefined}
             onQualityPress={availableQualities.length > 0 ? () => {
-              setActiveMenu('quality');
+              setActiveMenu(prev => prev === 'quality' ? null : 'quality');
             } : undefined}
             onBack={isFullscreen ? () => {
               handleFullscreen();
