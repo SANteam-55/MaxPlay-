@@ -72,7 +72,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
             </div>
             <h3 className="mt-3 text-base font-semibold text-white">Reset Link Sent!</h3>
             <p className="mt-2 text-xs text-[#A1A1AA] leading-relaxed">
-              We have sent password reset instructions to <span className="text-white font-medium">{email}</span>. Please check your Inbox and Spam folder.
+              We have sent password reset instructions from <span className="font-semibold text-white">noreply</span> to <span className="text-white font-medium">{email}</span>. Please check your Inbox, Promotions, or Spam folders if you don't see it.
             </p>
 
             <div className="mt-6 flex flex-col gap-2.5 w-full">
@@ -102,7 +102,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
                   setEmail(e.target.value);
                   if (error) setError('');
                 }}
-                placeholder="Registered email address"
+                placeholder="Enter your registered email"
                 required
                 className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
               />
@@ -110,6 +110,7 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ onBa
 
             <div className="mt-2">
               <GradientButton
+                type="submit"
                 title={loading ? 'Sending link...' : 'Send Reset Link'}
                 size="lg"
                 fullWidth

@@ -10,6 +10,7 @@ interface GradientButtonProps {
   icon?: ReactNode;
   className?: string;
   fullWidth?: boolean;
+  type?: 'button' | 'submit' | 'reset';
 }
 
 export const GradientButton: React.FC<GradientButtonProps> = ({
@@ -21,6 +22,7 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
   icon,
   className = '',
   fullWidth = false,
+  type = 'button',
 }) => {
   let height = 'h-[44px]';
   let px = 'px-6';
@@ -51,6 +53,7 @@ export const GradientButton: React.FC<GradientButtonProps> = ({
 
   return (
     <button
+      type={type}
       onClick={disabled ? undefined : onPress}
       disabled={disabled}
       style={bgStyle}

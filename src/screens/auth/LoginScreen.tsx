@@ -148,7 +148,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 setEmail(e.target.value);
                 if (error && !isLocked) setError('');
               }}
-              placeholder="Email address"
+              placeholder="Enter your account email"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
           </div>
@@ -163,7 +163,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 setPassword(e.target.value);
                 if (error && !isLocked) setError('');
               }}
-              placeholder="Password"
+              placeholder="Enter your account password"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
             <button
@@ -187,6 +187,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
           <div className="mt-2">
             <GradientButton
+              type="submit"
               title={
                 loading
                   ? 'Signing in...'
@@ -208,8 +209,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <div className="h-[1px] flex-1 bg-[#1C1C1E]" />
         </div>
 
-        {/* Guest sign-in option */}
+        {/* Sign-up option */}
         <div className="flex flex-col gap-2.5">
+          <button
+            onClick={onNavigateToRegister}
+            type="button"
+            className="flex h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-[#1C1C1E] text-sm font-semibold text-white transition hover:bg-[#2C2C2E] border border-white/10 cursor-pointer"
+          >
+            <span>📝 Create an Account</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="py-4 text-center">
+        <p className="text-xs text-[#A1A1AA]">
+          Just want to look around?{' '}
           <button
             onClick={async () => {
               setLoading(true);
@@ -218,22 +232,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               await login(guestEmail, 'guestpass123');
               onSuccess();
             }}
-            type="button"
-            className="flex h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-[#1C1C1E] text-sm font-semibold text-white transition hover:bg-[#2C2C2E] border border-white/10 cursor-pointer"
-          >
-            <span>✨ Continue as Guest</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="py-4 text-center">
-        <p className="text-xs text-[#A1A1AA]">
-          Don't have an account?{' '}
-          <button
-            onClick={onNavigateToRegister}
             className="font-semibold text-[#8B5CF6] hover:underline cursor-pointer"
           >
-            Sign Up
+            Continue as Guest
           </button>
         </p>
       </div>

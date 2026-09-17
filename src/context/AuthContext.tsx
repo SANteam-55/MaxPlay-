@@ -270,7 +270,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       );
     }
 
-    setIsLoading(true);
     try {
       const res = await signInWithEmailAndPassword(auth, cleanEmail, pass);
       // Reset rate limit attempts counter on success
@@ -279,11 +278,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const profile = await syncFirestoreUserProfile(res.user);
       setUser(profile);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profile));
-      setIsLoading(false);
       return true;
     } catch (err: any) {
-      setIsLoading(false);
-
       // Allow guest accounts to succeed smoothly without blocking
       if (cleanEmail.startsWith('guest_')) {
         const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
@@ -355,12 +351,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error('Please enter a valid email address.');
     }
 
-    setIsLoading(true);
     try {
       await sendPasswordResetEmail(auth, cleanEmail);
-      setIsLoading(false);
     } catch (err: any) {
-      setIsLoading(false);
       console.warn('sendPasswordResetEmail failed:', err);
       if (err?.code === 'auth/user-not-found') {
         throw new Error('No account found with this email address.');
@@ -376,7 +369,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const register = async (name: string, email: string, pass: string): Promise<boolean> => {
-    setIsLoading(true);
     try {
       const res = await createUserWithEmailAndPassword(auth, email, pass);
       const userRef = doc(db, 'users', res.user.uid);
@@ -415,7 +407,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
       setUser(profile);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profile));
-      setIsLoading(false);
       return true;
     } catch (err) {
       const fallbackUid = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
@@ -464,13 +455,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.warn('Firestore fallback register sync failed:', e);
       }
 
-      setIsLoading(false);
       return true;
     }
   };
 
   const loginWithGoogle = async (): Promise<boolean> => {
-    setIsLoading(true);
     try {
       const provider = new GoogleAuthProvider();
       // Force Google account selection screen so the user always sees the Gmail selector popup
@@ -558,11 +547,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       setUser(profileData);
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(profileData));
-      setIsLoading(false);
       return true;
     } catch (err: any) {
       console.warn('Firebase Google Sign-In failed:', err);
-      setIsLoading(false);
       
       if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
         return false;

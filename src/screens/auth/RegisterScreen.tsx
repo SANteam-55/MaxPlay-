@@ -82,7 +82,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              placeholder="Full Name"
+              placeholder="Enter your full name"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
           </div>
@@ -94,7 +94,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Email address"
+              placeholder="Enter your email address"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
           </div>
@@ -106,7 +106,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
+              placeholder="Create an account password"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
             <button
@@ -125,13 +125,14 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
               type={showPassword ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm Password"
+              placeholder="Confirm your account password"
               className="ml-3 flex-1 bg-transparent text-sm text-white placeholder-[#6B7280] outline-none"
             />
           </div>
 
           <div className="mt-2">
             <GradientButton
+              type="submit"
               title={loading ? 'Creating Account...' : 'Create Account'}
               size="lg"
               fullWidth
