@@ -23,6 +23,15 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
   const push = (screen: ScreenState) => setStack(prev => [...prev, screen]);
   const pop = () => setStack(prev => prev.length > 1 ? prev.slice(0, -1) : prev);
 
+  const handleBack = () => {
+    pop();
+    try {
+      if (window.location.hash.includes('-detail')) {
+        window.history.back();
+      }
+    } catch (_) {}
+  };
+
   const current = stack[stack.length - 1];
   const isDetailOpen = current.name !== 'anime';
   const prevIsOpenRef = React.useRef<boolean>(false);
@@ -68,7 +77,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
         <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
           <ContentDetailScreen
             content={current.item}
-            onBack={() => window.history.back()}
+            onBack={handleBack}
             onSelectContent={handleSelect}
           />
         </div>

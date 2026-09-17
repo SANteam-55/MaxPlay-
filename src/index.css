@@ -20,6 +20,11 @@
   .animate-shimmer {
     animation: shimmer 1.8s infinite linear;
   }
+  .no-callout {
+    -webkit-touch-callout: none !important;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+  }
 }
 
 html,

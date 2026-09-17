@@ -31,6 +31,15 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   const push = (screen: ScreenState) => setStack(prev => [...prev, screen]);
   const pop = () => setStack(prev => prev.length > 1 ? prev.slice(0, -1) : prev);
 
+  const handleBack = () => {
+    pop();
+    try {
+      if (window.location.hash.includes('-detail')) {
+        window.history.back();
+      }
+    } catch (_) {}
+  };
+
   const current = stack[stack.length - 1];
   const isDetailOpen = current.name !== 'home';
   const prevIsOpenRef = React.useRef<boolean>(false);
@@ -88,28 +97,28 @@ export const HomeStack: React.FC<HomeStackProps> = ({
           {current.name === 'network_detail' && (
             <NetworkDetailScreen
               network={current.network}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'collection_detail' && (
             <CollectionDetailScreen
               collection={current.item}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'filter' && (
             <FilterScreen
               initialFilter={current.query}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onOpenSearch={onOpenSearch}
               onSelectContent={handleSelect}
             />

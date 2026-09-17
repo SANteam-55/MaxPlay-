@@ -1,11 +1,25 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import Hls from 'hls.js';
-import { Loader2, AlertTriangle, Play, SkipForward } from 'lucide-react';
+import { 
+  Loader2, 
+  AlertTriangle, 
+  Play, 
+  SkipForward, 
+  FastForward,
+  Sun,
+  SunMedium,
+  Volume2,
+  Volume1,
+  VolumeX,
+  Zap,
+  ArrowLeft
+} from 'lucide-react';
 import { PlayerControls } from './PlayerControls';
 import { GestureHandler } from './GestureHandler';
 import { SpeedDrawer } from './SpeedDrawer';
 import { QualityDrawer } from './QualityDrawer';
 import { AudioLangDrawer } from './AudioLangDrawer';
+import { SpeedCapsuleHUD } from './SpeedCapsuleHUD';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../context/AuthContext';
 
@@ -65,6 +79,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const prevStreamKeyRef = useRef<string | undefined>(streamKey);
   
+  // Gesture and volume states
+  const [brightness, setBrightness] = useState<number>(100);
+  const [volume, setVolume] = useState<number>(100);
+  const [showBrightnessIndicator, setShowBrightnessIndicator] = useState(false);
+  const [showVolumeIndicator, setShowVolumeIndicator] = useState(false);
+  const indicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isFastForwarding, setIsFastForwarding] = useState(false);
+  const [capsuleSpeed, setCapsuleSpeed] = useState<number>(2.0);
+  const [capsuleProgress, setCapsuleProgress] = useState<number>(66.66);
+  const prevSpeedRef = useRef<number>(1);
+
   // Basic states
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -220,6 +245,105 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
   }, [isPlaying, activeMenu, isLocked]);
 
+  // Handle gestures
+  const showIndicator = (type: 'brightness' | 'volume') => {
+    if (type === 'brightness') {
+      setShowBrightnessIndicator(true);
+      setShowVolumeIndicator(false);
+    } else {
+      setShowVolumeIndicator(true);
+      setShowBrightnessIndicator(false);
+    }
+    
+    if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+    indicatorTimeoutRef.current = setTimeout(() => {
+      setShowBrightnessIndicator(false);
+      setShowVolumeIndicator(false);
+    }, 1500);
+  };
+
+  const handleBrightnessChange = useCallback((delta: number) => {
+    setBrightness((prev) => {
+      const newVal = Math.max(10, Math.min(200, prev + delta));
+      return Math.round(newVal);
+    });
+    showIndicator('brightness');
+  }, []);
+
+  const handleVolumeChange = useCallback((delta: number) => {
+    setVolume((prev) => {
+      const newVal = Math.max(0, Math.min(200, prev + delta));
+      return Math.round(newVal);
+    });
+    showIndicator('volume');
+  }, []);
+
+  // Apply volume changes directly to native HTML5 video element (unblocks audio and prevents Web Audio CORS muting)
+  useEffect(() => {
+    if (!videoRef.current) return;
+    const clampedVolume = Math.min(1, Math.max(0, volume / 100));
+    videoRef.current.volume = clampedVolume;
+    videoRef.current.muted = volume === 0;
+  }, [volume]);
+
+  const handleLongPressStart = useCallback(() => {
+    if (videoRef.current && !isFastForwarding) {
+      prevSpeedRef.current = videoRef.current.playbackRate || 1;
+      videoRef.current.playbackRate = 2.0;
+      setPlaybackRate(2.0);
+      setCapsuleSpeed(2.0);
+      setCapsuleProgress(66.66);
+      setIsFastForwarding(true);
+    }
+  }, [isFastForwarding]);
+
+  const handleLongPressMove = useCallback((deltaX: number) => {
+    // Starting anchor progress is 66.66% (2.0x Fast)
+    // Left drag (negative deltaX) moves down towards 0.5x Slow (0%)
+    // Right drag (positive deltaX) moves up towards 3.0x Max (100%)
+    const newProgress = Math.max(0, Math.min(100, 66.66 + deltaX * 0.35));
+
+    let calcSpeed = 1.0;
+    if (newProgress <= 33.33) {
+      // 0% to 33.33% maps smoothly from 0.5x to 1.0x
+      calcSpeed = 0.5 + (newProgress / 33.33) * 0.5;
+    } else if (newProgress <= 66.66) {
+      // 33.33% to 66.66% maps smoothly from 1.0x to 2.0x
+      calcSpeed = 1.0 + ((newProgress - 33.33) / 33.33) * 1.0;
+    } else {
+      // 66.66% to 100% maps smoothly from 2.0x to 3.0x
+      calcSpeed = 2.0 + ((newProgress - 66.66) / 33.34) * 1.0;
+    }
+
+    // Snap cleanly near standard milestone points (0.5x, 1.0x, 2.0x, 3.0x)
+    let finalSpeed = Math.round(calcSpeed * 10) / 10;
+    if (Math.abs(calcSpeed - 0.5) < 0.08) finalSpeed = 0.5;
+    else if (Math.abs(calcSpeed - 1.0) < 0.08) finalSpeed = 1.0;
+    else if (Math.abs(calcSpeed - 2.0) < 0.08) finalSpeed = 2.0;
+    else if (Math.abs(calcSpeed - 3.0) < 0.08) finalSpeed = 3.0;
+
+    finalSpeed = Math.max(0.5, Math.min(3.0, finalSpeed));
+
+    setCapsuleProgress(newProgress);
+    setCapsuleSpeed(finalSpeed);
+
+    if (videoRef.current) {
+      videoRef.current.playbackRate = finalSpeed;
+    }
+    setPlaybackRate(finalSpeed);
+  }, []);
+
+  const handleLongPressEnd = useCallback(() => {
+    // Release resets back to normal speed (1.0x) smoothly
+    if (videoRef.current) {
+      videoRef.current.playbackRate = 1.0;
+    }
+    setPlaybackRate(1.0);
+    setIsFastForwarding(false);
+    setCapsuleSpeed(2.0);
+    setCapsuleProgress(66.66);
+  }, []);
+
   // Keep controls timer in sync with playback state and menus
   useEffect(() => {
     if (showControls && isPlaying && !activeMenu && !isLocked) {
@@ -237,6 +361,25 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       }
     };
   }, [showControls, isPlaying, activeMenu, isLocked, resetControlsTimeout]);
+
+  // Prevent default browser context menu (Back, Forward, Reload, Print, Share, etc.) during player interactions
+  useEffect(() => {
+    const handlePreventContextMenu = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const container = playerContainerRef.current;
+    if (container) {
+      container.addEventListener('contextmenu', handlePreventContextMenu, { passive: false });
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener('contextmenu', handlePreventContextMenu);
+      }
+    };
+  }, []);
 
   const handleControlInteraction = useCallback(() => {
     if (showControls && !isLocked) {
@@ -742,7 +885,12 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   return (
     <div 
       ref={playerContainerRef}
-      className="relative w-full h-full bg-black group overflow-hidden flex items-center justify-center select-none"
+      className="relative w-full h-full bg-black group overflow-hidden flex items-center justify-center select-none no-callout"
+      style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
       onClickCapture={() => {
         adManager.handlePlayerAction(!!user?.isPremium);
       }}
@@ -752,6 +900,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       <GestureHandler
         isLocked={isLocked}
         onToggleControls={toggleControls}
+        onChangeBrightness={handleBrightnessChange}
+        onChangeVolume={handleVolumeChange}
+        onLongPressStart={handleLongPressStart}
+        onLongPressMove={handleLongPressMove}
+        onLongPressEnd={handleLongPressEnd}
         onDoubleTapRewind={() => {
           const currentGlobal = timeOffset + currentTime;
           const targetGlobal = Math.max(0, currentGlobal - 10);
@@ -780,6 +933,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             ref={videoRef}
             playsInline
             className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+            style={{ filter: `brightness(${brightness}%)` }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
           onPlay={() => { 
             setIsPlaying(true); 
             setHasStarted(true); 
@@ -893,6 +1051,31 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           </div>
         )}
 
+        {/* Dedicated Top-Left Exit Button when PlayerControls are not mounted (unstarted, error, or iframe) */}
+        {onBack && (!hasStarted || playbackError || isIframe) && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onBack();
+            }}
+            onTouchStart={(e) => {
+              e.stopPropagation();
+            }}
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onBack();
+            }}
+            className="absolute top-3 left-3 sm:top-4 sm:left-4 z-40 flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/80 hover:bg-black text-white border border-white/35 hover:border-white/70 shadow-2xl cursor-pointer pointer-events-auto transition-all hover:scale-105 active:scale-90 backdrop-blur-md"
+            title="Exit details screen"
+            aria-label="Go Back"
+          >
+            <ArrowLeft className="h-5 w-5 sm:h-6 sm:w-6 stroke-[2.5]" />
+          </button>
+        )}
+
         {/* CRUNCHYROLL / NETFLIX SINGLE UNIFIED SKIP INTRO / OUTRO BUTTON */}
         {isSkipButtonVisible && activeSkipMarker && (
           <div className="absolute right-4 sm:right-8 bottom-16 sm:bottom-20 z-40 pointer-events-auto select-none animate-in fade-in zoom-in-95 duration-200">
@@ -906,6 +1089,101 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             </button>
           </div>
         )}
+
+        {/* PlayIt-Style Long-Press Speed Capsule HUD */}
+        <SpeedCapsuleHUD 
+          visible={isFastForwarding} 
+          speed={capsuleSpeed} 
+          progress={capsuleProgress} 
+        />
+
+        {/* Brightness Indicator HUD */}
+        <div 
+          className={`absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 z-40 transition-all duration-300 pointer-events-none ${
+            showBrightnessIndicator 
+              ? 'opacity-100 scale-100 translate-x-0' 
+              : 'opacity-0 scale-95 -translate-x-2'
+          }`}
+        >
+          <div className="bg-black/85 backdrop-blur-xl border border-white/20 rounded-2xl px-3 py-4 flex flex-col items-center gap-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)] min-w-[56px]">
+            <div className="p-1.5 rounded-full bg-amber-500/20 text-amber-300">
+              {brightness > 100 ? (
+                <Sun className="w-5 h-5 animate-pulse text-amber-300" />
+              ) : (
+                <SunMedium className="w-5 h-5 text-amber-300" />
+              )}
+            </div>
+            <div className="w-2 sm:w-2.5 h-28 bg-white/15 rounded-full overflow-hidden flex flex-col-reverse p-0.5 shadow-inner">
+              <div 
+                className="w-full bg-gradient-to-t from-amber-400 via-amber-300 to-yellow-100 rounded-full transition-all duration-75 shadow-[0_0_10px_rgba(251,191,36,0.7)]" 
+                style={{ height: `${Math.min(100, Math.max(5, (brightness - 10) / 190 * 100))}%` }}
+              />
+            </div>
+            <span className="font-mono text-xs font-bold text-white tracking-wider tabular-nums">
+              {brightness}%
+            </span>
+            <span className="text-[9px] uppercase font-semibold tracking-widest text-white/50 -mt-1">
+              Light
+            </span>
+          </div>
+        </div>
+
+        {/* Volume Indicator HUD */}
+        <div 
+          className={`absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 z-40 transition-all duration-300 pointer-events-none ${
+            showVolumeIndicator 
+              ? 'opacity-100 scale-100 translate-x-0' 
+              : 'opacity-0 scale-95 translate-x-2'
+          }`}
+        >
+          <div className={`backdrop-blur-xl border rounded-2xl px-3 py-4 flex flex-col items-center gap-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)] min-w-[56px] transition-colors duration-200 ${
+            volume > 100 
+              ? 'bg-black/90 border-orange-500/60 shadow-[0_0_25px_rgba(249,115,22,0.35)]' 
+              : 'bg-black/85 border-white/20'
+          }`}>
+            <div className={`p-1.5 rounded-full transition-colors duration-200 ${
+              volume > 100 
+                ? 'bg-orange-500/25 text-orange-400' 
+                : volume === 0 
+                  ? 'bg-red-500/20 text-red-400' 
+                  : 'bg-cyan-500/20 text-cyan-300'
+            }`}>
+              {volume === 0 ? (
+                <VolumeX className="w-5 h-5" />
+              ) : volume > 100 ? (
+                <Zap className="w-5 h-5 animate-pulse text-orange-400" />
+              ) : volume > 50 ? (
+                <Volume2 className="w-5 h-5 text-cyan-300" />
+              ) : (
+                <Volume1 className="w-5 h-5 text-cyan-300" />
+              )}
+            </div>
+            <div className="w-2 sm:w-2.5 h-28 bg-white/15 rounded-full overflow-hidden flex flex-col-reverse p-0.5 shadow-inner">
+              <div 
+                className={`w-full rounded-full transition-all duration-75 ${
+                  volume > 100 
+                    ? 'bg-gradient-to-t from-amber-500 via-orange-500 to-rose-500 shadow-[0_0_12px_rgba(249,115,22,0.9)]' 
+                    : 'bg-gradient-to-t from-cyan-500 via-blue-400 to-teal-200 shadow-[0_0_10px_rgba(6,182,212,0.6)]'
+                }`} 
+                style={{ height: `${Math.min(100, Math.max(volume === 0 ? 0 : 5, volume / 2))}%` }}
+              />
+            </div>
+            <span className={`font-mono text-xs font-bold tracking-wider tabular-nums ${
+              volume > 100 ? 'text-orange-400 drop-shadow-[0_0_6px_rgba(249,115,22,0.8)]' : 'text-white'
+            }`}>
+              {volume}%
+            </span>
+            {volume > 100 ? (
+              <span className="text-[8px] uppercase font-black tracking-widest text-orange-400 bg-orange-500/20 border border-orange-500/40 px-1.5 py-0.5 rounded-full -mt-1 animate-pulse">
+                BOOST
+              </span>
+            ) : (
+              <span className="text-[9px] uppercase font-semibold tracking-widest text-white/50 -mt-1">
+                Vol
+              </span>
+            )}
+          </div>
+        </div>
 
         {!isIframe && hasStarted && (
           <PlayerControls

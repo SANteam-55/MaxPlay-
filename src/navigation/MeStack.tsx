@@ -35,6 +35,15 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
   const push = (screen: ScreenState) => setStack(prev => [...prev, screen]);
   const pop = () => setStack(prev => prev.length > 1 ? prev.slice(0, -1) : prev);
 
+  const handleBack = () => {
+    pop();
+    try {
+      if (window.location.hash.includes('-detail')) {
+        window.history.back();
+      }
+    } catch (_) {}
+  };
+
   const current = stack[stack.length - 1];
   const isDetailOpen = current.name !== 'me';
   const prevIsOpenRef = React.useRef<boolean>(false);
@@ -88,35 +97,35 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onSelectContent={(item) => push({ name: 'detail', item })}
             />
           )}
-          {current.name === 'edit-profile' && <EditProfileScreen onBack={() => window.history.back()} />}
+          {current.name === 'edit-profile' && <EditProfileScreen onBack={handleBack} />}
           {current.name === 'settings' && (
             <SettingsScreen
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onLogout={onLogout}
               onOpenFeedback={() => push({ name: 'feedback' })}
             />
           )}
-          {current.name === 'feedback' && <FeedbackScreen onBack={() => window.history.back()} />}
+          {current.name === 'feedback' && <FeedbackScreen onBack={handleBack} />}
           {current.name === 'history' && (
             <WatchHistoryScreen
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onPlayContent={handlePlayContent}
             />
           )}
           {current.name === 'my-list' && (
             <MyListScreen
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onPlayContent={handlePlayContent}
             />
           )}
-          {current.name === 'messages' && <MessagesScreen onBack={() => window.history.back()} onPlayContent={handlePlayContent} />}
+          {current.name === 'messages' && <MessagesScreen onBack={handleBack} onPlayContent={handlePlayContent} />}
           {current.name === 'my-comments' && (
             <MyCommentsScreen 
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onPlayContent={handlePlayContent}
             />
           )}

@@ -156,10 +156,19 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
             <button
               type="button"
               onClick={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 onBack();
               }}
-              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/75 hover:bg-black/95 text-white border border-white/30 hover:border-white/60 shadow-xl cursor-pointer shrink-0 transition-all hover:scale-105 active:scale-90"
+              onTouchStart={(e) => {
+                e.stopPropagation();
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onBack();
+              }}
+              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/80 hover:bg-black text-white border border-white/35 hover:border-white/70 shadow-2xl cursor-pointer shrink-0 transition-all hover:scale-105 active:scale-90"
               title="Go Back / Exit"
               aria-label="Exit player"
             >

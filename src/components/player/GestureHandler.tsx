@@ -9,6 +9,9 @@ interface GestureHandlerProps {
   onDoubleTapForward: () => void;
   onChangeBrightness?: (delta: number) => void;
   onChangeVolume?: (delta: number) => void;
+  onLongPressStart?: () => void;
+  onLongPressMove?: (deltaX: number) => void;
+  onLongPressEnd?: () => void;
 }
 
 export const GestureHandler: React.FC<GestureHandlerProps> = ({
@@ -19,6 +22,9 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
   onDoubleTapForward,
   onChangeBrightness,
   onChangeVolume,
+  onLongPressStart,
+  onLongPressMove,
+  onLongPressEnd,
 }) => {
   const [doubleTapSide, setDoubleTapSide] = useState<'left' | 'right' | null>(null);
   const [rippleKey, setRippleKey] = useState<number>(0);
@@ -27,15 +33,41 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
   const lastTapTimeRef = useRef<number>(0);
   const lastTapPosRef = useRef<{ x: number; y: number } | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const mouseStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef = useRef<boolean>(false);
+  const dragSideRef = useRef<'left' | 'right' | null>(null);
   const animTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastTouchTimeRef = useRef<number>(0);
+  const longPressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressingRef = useRef<boolean>(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  // Prevent default browser context menu (Back, Forward, Reload, Share, etc.) during long press gestures
+  useEffect(() => {
+    const handlePreventContextMenu = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const overlay = overlayRef.current;
+    if (overlay) {
+      overlay.addEventListener('contextmenu', handlePreventContextMenu, { passive: false });
+    }
+
+    return () => {
+      if (overlay) {
+        overlay.removeEventListener('contextmenu', handlePreventContextMenu);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
       if (animTimeoutRef.current) clearTimeout(animTimeoutRef.current);
+      if (longPressTimeoutRef.current) clearTimeout(longPressTimeoutRef.current);
+      if (isLongPressingRef.current && onLongPressEnd) onLongPressEnd();
     };
-  }, []);
+  }, [onLongPressEnd]);
 
   const triggerRewindAnimation = () => {
     onDoubleTapRewind();
@@ -57,12 +89,31 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
     }, 650);
   };
 
+  const clearLongPress = () => {
+    if (longPressTimeoutRef.current) clearTimeout(longPressTimeoutRef.current);
+    if (isLongPressingRef.current) {
+      isLongPressingRef.current = false;
+      if (onLongPressEnd) onLongPressEnd();
+    }
+  };
+
   const handleTouchStart = (e: React.TouchEvent) => {
     lastTouchTimeRef.current = Date.now();
     if (e.touches.length > 0) {
       const touch = e.touches[0];
       touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
       isDraggingRef.current = false;
+      dragSideRef.current = null;
+      
+      clearLongPress();
+      if (!isLocked && onLongPressStart) {
+        longPressTimeoutRef.current = setTimeout(() => {
+          if (!isDraggingRef.current) {
+            isLongPressingRef.current = true;
+            onLongPressStart();
+          }
+        }, 300);
+      }
     }
   };
 
@@ -71,27 +122,43 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
     if (isLocked) return;
     if (!touchStartPosRef.current || e.touches.length === 0) return;
 
+    const touch = e.touches[0];
+
+    // Priority 1: When long-pressing, horizontal finger movement slides the speed capsule!
+    if (isLongPressingRef.current) {
+      const deltaX = touch.clientX - touchStartPosRef.current.x;
+      if (onLongPressMove) {
+        onLongPressMove(deltaX);
+      }
+      return;
+    }
+
     // Only process brightness/volume drag if handlers exist
     if (!onChangeBrightness && !onChangeVolume) return;
 
-    const touch = e.touches[0];
-    const deltaX = touch.clientX - touchStartPosRef.current.x;
-    const deltaY = touch.clientY - touchStartPosRef.current.y;
+    if (!isDraggingRef.current) {
+      const deltaX = touch.clientX - touchStartPosRef.current.x;
+      const deltaY = touch.clientY - touchStartPosRef.current.y;
 
-    // Detect intentional vertical swipe (movement Y > 40px and steep angle)
-    if (Math.abs(deltaY) > 40 && Math.abs(deltaY) > Math.abs(deltaX) * 1.5) {
-      isDraggingRef.current = true;
-      const screenWidth = window.innerWidth;
-      const isLeftHalf = touchStartPosRef.current.x < screenWidth / 2;
-      const sensitivity = 0.45;
+      // Intentional vertical swipe threshold: 16px travel and vertical angle dominance
+      if (Math.abs(deltaY) > 16 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2) {
+        isDraggingRef.current = true;
+        clearLongPress();
+        const screenWidth = window.innerWidth;
+        dragSideRef.current = touchStartPosRef.current.x < screenWidth / 2 ? 'left' : 'right';
+        touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    } else {
+      // Actively dragging: update every single touch frame for 60fps/120fps fluid response
+      const deltaY = touch.clientY - touchStartPosRef.current.y;
+      const sensitivity = 0.55;
 
-      if (isLeftHalf && onChangeBrightness) {
+      if (dragSideRef.current === 'left' && onChangeBrightness) {
         onChangeBrightness(-deltaY * sensitivity);
-      } else if (!isLeftHalf && onChangeVolume) {
+      } else if (dragSideRef.current === 'right' && onChangeVolume) {
         onChangeVolume(-deltaY * sensitivity);
       }
 
-      // Reset start pos for continuous smooth dragging
       touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
     }
   };
@@ -99,10 +166,19 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
   const handleTouchEnd = (e: React.TouchEvent) => {
     lastTouchTimeRef.current = Date.now();
     
+    const wasLongPressing = isLongPressingRef.current;
+    clearLongPress();
+    
     // If it was an actual swipe drag, don't trigger tap
     if (isDraggingRef.current) {
       touchStartPosRef.current = null;
       isDraggingRef.current = false;
+      dragSideRef.current = null;
+      return;
+    }
+
+    if (wasLongPressing) {
+      touchStartPosRef.current = null;
       return;
     }
 
@@ -163,11 +239,36 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
     touchStartPosRef.current = null;
   };
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (Date.now() - lastTouchTimeRef.current < 800) return;
+    mouseStartPosRef.current = { x: e.clientX, y: e.clientY };
+    clearLongPress();
+    if (!isLocked && onLongPressStart) {
+      longPressTimeoutRef.current = setTimeout(() => {
+        isLongPressingRef.current = true;
+        onLongPressStart();
+      }, 300);
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isLongPressingRef.current && onLongPressMove && mouseStartPosRef.current) {
+      const deltaX = e.clientX - mouseStartPosRef.current.x;
+      onLongPressMove(deltaX);
+    }
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    const wasLongPressing = isLongPressingRef.current;
+    clearLongPress();
+    mouseStartPosRef.current = null;
+    
     // Ignore synthetic click event triggered right after touch to prevent double firing
     if (Date.now() - lastTouchTimeRef.current < 800) {
       return;
     }
+
+    if (wasLongPressing) return;
 
     if (isLocked) {
       onToggleControls();
@@ -178,6 +279,13 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
     if (e.detail >= 2) return;
 
     onToggleControls(); // Instant response
+  };
+
+  const handleMouseLeave = () => {
+    if (isLongPressingRef.current) {
+      clearLongPress();
+    }
+    mouseStartPosRef.current = null;
   };
 
   const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -198,19 +306,36 @@ export const GestureHandler: React.FC<GestureHandlerProps> = ({
   };
 
   return (
-    <div className="relative h-full w-full overflow-hidden select-none">
+    <div 
+      className="relative h-full w-full overflow-hidden select-none no-callout"
+      style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       {/* Background children (video, controls, etc.) */}
       {children}
 
       {/* Explicit Gesture Catching Overlay */}
       <div
-        className="absolute inset-0 z-10 touch-none cursor-pointer bg-black/1"
+        ref={overlayRef}
+        className="absolute inset-0 z-10 touch-none cursor-pointer bg-black/1 select-none no-callout"
+        style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
         onDoubleClick={handleDoubleClick}
-        onClick={handleClick}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        onClick={handleMouseUp}
       />
 
       {/* Double Tap / Click Left Ripple Overlay (-10 SEC) */}

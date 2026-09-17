@@ -20,6 +20,15 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
   const push = (screen: ScreenState) => setStack(prev => [...prev, screen]);
   const pop = () => setStack(prev => prev.length > 1 ? prev.slice(0, -1) : prev);
 
+  const handleBack = () => {
+    pop();
+    try {
+      if (window.location.hash.includes('-detail')) {
+        window.history.back();
+      }
+    } catch (_) {}
+  };
+
   const current = stack[stack.length - 1];
   const isDetailOpen = current.name !== 'search';
   const prevIsOpenRef = React.useRef<boolean>(false);
@@ -63,13 +72,13 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
           {current.name === 'detail' && (
             <ContentDetailScreen
               content={current.item}
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onSelectContent={handleSelect}
             />
           )}
           {current.name === 'filter' && (
             <FilterScreen
-              onBack={() => window.history.back()}
+              onBack={handleBack}
               onOpenSearch={() => { /* fallback */ }}
               onSelectContent={handleSelect}
             />
