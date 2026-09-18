@@ -244,7 +244,10 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
               totalWatchedSeconds: data.currentTime,
               totalDuration: data.totalDuration,
               percentWatched: Math.round((data.currentTime / (data.totalDuration || 1)) * 100),
-              thumbnailUrl: episodeData.posterUrl
+              thumbnailUrl: episodeData.posterUrl,
+              seasonIndex: (episodeData as any).seasonIndex ?? 0,
+              episodeIndex: (episodeData as any).episodeIndex ?? 0,
+              partIndex: (episodeData as any).partIndex ?? 0,
             });
           }
           const watchHistory = JSON.parse(localStorage.getItem(STORAGE_KEYS.WATCH_HISTORY) || '[]');
@@ -253,13 +256,16 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
               id: episodeData.id,
               contentId: episodeData.contentId,
               title: episodeData.title,
+              seasonIndex: (episodeData as any).seasonIndex ?? 0,
+              episodeIndex: (episodeData as any).episodeIndex ?? 0,
+              partIndex: (episodeData as any).partIndex ?? 0,
               currentTime: data.currentTime,
               totalDuration: data.totalDuration,
               lastWatchedAt: new Date().toISOString(),
             },
             ...watchHistory.filter((i: any) => i.id !== episodeData.id),
           ];
-          localStorage.setItem(STORAGE_KEYS.WATCH_HISTORY, JSON.stringify(updated.slice(0, 20)));
+          localStorage.setItem(STORAGE_KEYS.WATCH_HISTORY, JSON.stringify(updated.slice(0, 100)));
           onSaveProgress?.(data.currentTime, data.totalDuration);
         } catch (e) {
           // ignore

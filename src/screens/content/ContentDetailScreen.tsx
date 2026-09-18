@@ -54,12 +54,26 @@ import { CommentCard } from '../../components/common/CommentCard';
 import { SoloLevelingSelectorModal } from '../../components/content/SoloLevelingSelectorModal';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 import { adManager } from '../../services/adService';
+import { STORAGE_KEYS } from '../../utils/constants';
 
 interface ContentDetailScreenProps {
   content: ContentItem | null;
   onBack: () => void;
   onSelectContent?: (item: ContentItem) => void;
+  onStartDownload?: (item: any, partKey?: string) => void;
 }
+
+const formatResumeTime = (seconds: number) => {
+  if (!seconds || isNaN(seconds) || seconds <= 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  const hrs = Math.floor(mins / 60);
+  if (hrs > 0) {
+    const remMins = mins % 60;
+    return `${hrs}:${remMins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
 
 // 30 High-Quality Curated Recommendation Items (10 rows of 3 columns)
 const CURATED_RECOMMENDATIONS: Partial<ContentItem>[] = [
@@ -485,10 +499,29 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     if (!content?.id) return null;
     try {
       const userKey = user?.uid ? `maxplay_progress_${user.uid}_${content.id}` : null;
+      const userSeriesKey = user?.uid ? `maxplay_series_progress_${user.uid}_${content.id}` : null;
       const globalKey = `maxplay_progress_${content.id}`;
-      const raw = (userKey && localStorage.getItem(userKey)) || localStorage.getItem(globalKey);
+      const globalSeriesKey = `maxplay_series_progress_${content.id}`;
+      
+      const raw = (userKey && localStorage.getItem(userKey)) || 
+                  (userSeriesKey && localStorage.getItem(userSeriesKey)) ||
+                  localStorage.getItem(globalKey) || 
+                  localStorage.getItem(globalSeriesKey);
       if (raw) {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (parsed) return parsed;
+      }
+
+      // Check in maxplay_watch_history array
+      const historyRaw = localStorage.getItem(STORAGE_KEYS.WATCH_HISTORY || 'maxplay_watch_history');
+      if (historyRaw) {
+        const histList = JSON.parse(historyRaw);
+        if (Array.isArray(histList)) {
+          const match = histList.find((h: any) => h.contentId === content.id || h.id === content.id);
+          if (match) {
+            return match;
+          }
+        }
       }
     } catch (e) {
       console.warn('Initial storage load error:', e);
@@ -524,6 +557,12 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [activeLanguage, setActiveLanguage] = useState<string>(() => initialSavedData?.activeLanguage || '');
   const [activeQuality, setActiveQuality] = useState<string>(() => initialSavedData?.activeQuality || 'auto');
   const [partProgressMap, setPartProgressMap] = useState<Record<string, { time: number; duration?: number; language?: string; quality?: string }>>(() => initialSavedData?.partProgressMap || {});
+
+  // Ultra Pro Max Resume Controls & Anti-Overwrite Guards
+  const [isCloudResumeChecking, setIsCloudResumeChecking] = useState<boolean>(() => !isMovie && !initialSavedData);
+  const isCloudResumeResolvedRef = useRef<boolean>(!!initialSavedData);
+  const userExplicitlyChoseEpisodeRef = useRef<boolean>(false);
+  const maxWatchedEpisodeRef = useRef<number>(initialSavedData?.episodeIndex ?? 0);
   
   const [episodeViewMode, setEpisodeViewMode] = useState<'list' | 'grid'>('list');
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
@@ -639,7 +678,26 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     setPlaybackPosition(actualTime);
 
     const now = Date.now();
-    const shouldSyncCloud = forceSave || isFinished || (now - lastSaveTimeRef.current >= 5000);
+    let shouldSyncCloud = forceSave || isFinished || (now - lastSaveTimeRef.current >= 5000);
+
+    // ANTI-OVERWRITE PROTECTION (Ultra Pro Max Safe Guard):
+    // 1. If cloud resume check is pending, and user has NOT explicitly chosen this episode,
+    //    suppress cloud sync to prevent zero pulses or default Episode 1 from wiping cloud history
+    if (!isCloudResumeResolvedRef.current && curState.selectedEpisodeIndex === 0 && !userExplicitlyChoseEpisodeRef.current) {
+      shouldSyncCloud = false;
+    }
+
+    // 2. If user previously reached a higher episode (e.g. Episode 27) and current episode is lower,
+    //    and watch time on this lower episode is under 15 seconds, and user did NOT explicitly select it:
+    if (!curState.isMovie && maxWatchedEpisodeRef.current > curState.selectedEpisodeIndex && actualTime < 15 && !userExplicitlyChoseEpisodeRef.current) {
+      console.log('[ResumeGuard] Shielded higher episode', maxWatchedEpisodeRef.current, 'from being overwritten by episode', curState.selectedEpisodeIndex);
+      return;
+    }
+
+    // Keep track of highest episode watched
+    if (curState.selectedEpisodeIndex > maxWatchedEpisodeRef.current) {
+      maxWatchedEpisodeRef.current = curState.selectedEpisodeIndex;
+    }
 
     const curPartOffset = curState.selectedPartIndex < partOffsets.length ? (partOffsets[curState.selectedPartIndex] || 0) : 0;
     const globalCurTime = curPartOffset + actualTime;
@@ -673,12 +731,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       lastWatchedAt: new Date().toISOString()
     };
 
-    // 1. Save to User-Isolated LocalStorage & Global Fallback
+    // 1. Save to User-Isolated LocalStorage & Global Fallback & Series Master Index
     try {
       if (curState.user?.uid) {
         localStorage.setItem(`maxplay_progress_${curState.user.uid}_${curState.content.id}`, JSON.stringify(progressPayload));
+        localStorage.setItem(`maxplay_series_progress_${curState.user.uid}_${curState.content.id}`, JSON.stringify(progressPayload));
       }
       localStorage.setItem(`maxplay_progress_${curState.content.id}`, JSON.stringify(progressPayload));
+      localStorage.setItem(`maxplay_series_progress_${curState.content.id}`, JSON.stringify(progressPayload));
     } catch (e) {
       console.warn('Local save progress error:', e);
     }
@@ -692,43 +752,128 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   };
 
-  // Robust Resume Restore on Load (User-Scoped localStorage + Firestore)
+  // Robust Resume Restore on Load (User-Scoped localStorage + Dual Cloud Firestore)
   useEffect(() => {
     if (!content?.id) return;
+
+    let isMounted = true;
+
+    // Safety timeout to guarantee player is never blocked for more than 1.2s
+    const timeoutId = setTimeout(() => {
+      if (isMounted) {
+        setIsCloudResumeChecking(false);
+        isCloudResumeResolvedRef.current = true;
+      }
+    }, 1200);
 
     // Fetch latest from Firestore for current User Account
     if (user?.uid) {
       getUserProgress(user.uid, content.id).then((cloud) => {
+        if (!isMounted) return;
+        isCloudResumeResolvedRef.current = true;
+        setIsCloudResumeChecking(false);
+
         if (cloud) {
+          if (cloud.episodeIndex !== undefined) {
+            maxWatchedEpisodeRef.current = Math.max(maxWatchedEpisodeRef.current, cloud.episodeIndex);
+          }
+
           if (cloud.partProgressMap && typeof cloud.partProgressMap === 'object') {
             setPartProgressMap(prev => ({ ...prev, ...cloud.partProgressMap }));
           }
           if (cloud.seasonEpisodeMap && typeof cloud.seasonEpisodeMap === 'object') {
             setSeasonEpisodeMap(prev => ({ ...prev, ...cloud.seasonEpisodeMap }));
           }
-          if (cloud.lastWatchedAt) {
-            if (cloud.seasonIndex !== undefined && !isMovie) setSelectedSeasonIndex(cloud.seasonIndex);
-            if (cloud.episodeIndex !== undefined && !isMovie) setSelectedEpisodeIndex(cloud.episodeIndex);
-            if (cloud.partIndex !== undefined) setSelectedPartIndex(cloud.partIndex);
-            if (cloud.activeLanguage) setActiveLanguage(cloud.activeLanguage);
-            if (cloud.activeQuality) setActiveQuality(cloud.activeQuality);
-            const savedTime = cloud.currentTime || cloud.watchedSeconds || 0;
-            if (savedTime > 0) {
-              setPlaybackPosition(savedTime);
+
+          if (cloud.lastWatchedAt || cloud.episodeIndex !== undefined) {
+            let targetSeason = cloud.seasonIndex ?? 0;
+            let targetEpisode = cloud.episodeIndex ?? 0;
+            let targetPart = cloud.partIndex ?? 0;
+            let targetTime = cloud.currentTime || cloud.watchedSeconds || 0;
+
+            // Auto-advance to next episode if previous episode completed (>90%)
+            const isEpFinished = cloud.percentWatched >= 90 || cloud.isFinished;
+            const seasonsList = (content.seasonsData && content.seasonsData.length > 0)
+              ? content.seasonsData
+              : [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: content.episodesList || [] }];
+            const currentSeasonEpisodes = seasonsList[targetSeason]?.episodes || [];
+
+            if (isEpFinished && currentSeasonEpisodes.length > targetEpisode + 1) {
+              targetEpisode = targetEpisode + 1;
+              targetPart = 0;
+              targetTime = 0;
+            }
+
+            // Only auto-restore if user hasn't deliberately tapped another episode in this session
+            if (!userExplicitlyChoseEpisodeRef.current) {
+              if (!isMovie) {
+                setSelectedSeasonIndex(targetSeason);
+                setSelectedEpisodeIndex(targetEpisode);
+                setSeasonEpisodeMap(prev => ({ ...prev, [targetSeason]: targetEpisode }));
+              }
+              setSelectedPartIndex(targetPart);
+              if (cloud.activeLanguage) setActiveLanguage(cloud.activeLanguage);
+              if (cloud.activeQuality) setActiveQuality(cloud.activeQuality);
+              setPlaybackPosition(targetTime);
+
+              // Update stateRefs immediately
+              stateRefs.current.selectedSeasonIndex = targetSeason;
+              stateRefs.current.selectedEpisodeIndex = targetEpisode;
+              stateRefs.current.selectedPartIndex = targetPart;
+              stateRefs.current.playbackPosition = targetTime;
+              stateRefs.current.currentPartKey = isMovie ? `movie_p${targetPart}` : `s${targetSeason}_e${targetEpisode}_p${targetPart}`;
+
+              // Cache immediately into localStorage
+              try {
+                const localData = {
+                  ...cloud,
+                  seasonIndex: targetSeason,
+                  episodeIndex: targetEpisode,
+                  partIndex: targetPart,
+                  currentTime: targetTime,
+                  watchedSeconds: targetTime
+                };
+                localStorage.setItem(`maxplay_progress_${user.uid}_${content.id}`, JSON.stringify(localData));
+                localStorage.setItem(`maxplay_series_progress_${user.uid}_${content.id}`, JSON.stringify(localData));
+                localStorage.setItem(`maxplay_progress_${content.id}`, JSON.stringify(localData));
+                localStorage.setItem(`maxplay_series_progress_${content.id}`, JSON.stringify(localData));
+              } catch {
+                // ignore
+              }
+
+              // Show reassuring resume indicator toast
+              if (targetEpisode > 0 || targetTime > 15) {
+                const epLabel = !isMovie ? `Episode ${targetEpisode + 1}` : 'Movie';
+                setToastMessage(`Resumed ${epLabel}${targetTime > 15 ? ` from ${formatResumeTime(targetTime)}` : ''}`);
+                setTimeout(() => setToastMessage(null), 3500);
+              }
             }
           }
         }
-      }).catch(console.warn);
+      }).catch((err) => {
+        console.warn('Cloud progress fetch warning:', err);
+        if (isMounted) {
+          isCloudResumeResolvedRef.current = true;
+          setIsCloudResumeChecking(false);
+        }
+      });
+    } else {
+      isCloudResumeResolvedRef.current = true;
+      setIsCloudResumeChecking(false);
     }
 
     // Attach window unload & visibility listeners for immediate save on tab/browser close
     const handleExitSave = () => {
-      saveProgressNow(stateRefs.current.playbackPosition, false, true);
+      if (isCloudResumeResolvedRef.current || userExplicitlyChoseEpisodeRef.current) {
+        saveProgressNow(stateRefs.current.playbackPosition, false, true);
+      }
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        saveProgressNow(stateRefs.current.playbackPosition, false, true);
+        if (isCloudResumeResolvedRef.current || userExplicitlyChoseEpisodeRef.current) {
+          saveProgressNow(stateRefs.current.playbackPosition, false, true);
+        }
       }
     };
 
@@ -737,7 +882,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      // Flush save on unmount
+      isMounted = false;
+      clearTimeout(timeoutId);
       handleExitSave();
       window.removeEventListener('beforeunload', handleExitSave);
       window.removeEventListener('pagehide', handleExitSave);
@@ -1204,6 +1350,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   };
 
   const handleNextEpisode = () => {
+    userExplicitlyChoseEpisodeRef.current = true;
     // 1. In Movie Mode
     if (isMovie) {
       if (selectedPartIndex + 1 < movieTotalParts) {
@@ -1244,6 +1391,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     const season = seasonsList[selectedSeasonIndex];
     if (season?.episodes && season.episodes.length > selectedEpisodeIndex + 1) {
       const nextEpIdx = selectedEpisodeIndex + 1;
+      maxWatchedEpisodeRef.current = Math.max(maxWatchedEpisodeRef.current, nextEpIdx);
       setSelectedEpisodeIndex(nextEpIdx);
       setSeasonEpisodeMap(prev => ({ ...prev, [selectedSeasonIndex]: nextEpIdx }));
       setSelectedPartIndex(0);
@@ -1583,6 +1731,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
   // Smart episode selector: automatically resumes from the user's active multi-part & timestamp
   const handleSelectEpisode = useCallback((idx: number) => {
+    userExplicitlyChoseEpisodeRef.current = true;
+    maxWatchedEpisodeRef.current = Math.max(maxWatchedEpisodeRef.current, idx);
     saveProgressNow(playbackPosition, false, true);
     setSelectedEpisodeIndex(idx);
     setSeasonEpisodeMap(prev => ({ ...prev, [selectedSeasonIndex]: idx }));
@@ -1623,6 +1773,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         <div 
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-40 bg-rose-500/10 blur-3xl pointer-events-none -z-10" 
         />
+
+        {/* Resuming Progress Cloud Sync Overlay */}
+        {isCloudResumeChecking && !initialSavedData && (
+          <div className="absolute inset-0 z-50 bg-[#09090b] flex flex-col items-center justify-center gap-3">
+            <div className="relative">
+              <div className="w-10 h-10 border-2 border-purple-500/20 border-t-purple-500 rounded-full animate-spin" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-2.5 h-2.5 bg-purple-500 rounded-full blur-[2px] animate-pulse" />
+              </div>
+            </div>
+            <p className="text-xs font-medium text-white/80 tracking-wide">
+              Restoring your watch progress...
+            </p>
+          </div>
+        )}
         
         {(() => {
           const currentPlayerSkipMarkers = isMovie 
@@ -2010,6 +2175,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         seasons={seasonOptions}
                         selectedSeasonIndex={selectedSeasonIndex}
                         onSelectSeason={(sIdx) => {
+                          userExplicitlyChoseEpisodeRef.current = true;
                           saveProgressNow(playbackPosition, false, true);
                           setSelectedSeasonIndex(sIdx);
                           

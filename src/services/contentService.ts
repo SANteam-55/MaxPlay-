@@ -587,15 +587,59 @@ export const subscribeToWatchHistory = (userId: string, callback: (items: any[])
   });
 };
 
-// Subscribe to User Watch Progress
+// Subscribe to User Watch Progress (Ultra-Resilient Dual Firestore + Master Index)
 export const getUserProgress = async (userId: string, contentId: string) => {
   try {
-    const ref = doc(db, `userProgress/${userId}/progress`, contentId);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      return snap.data();
+    let progressData: any = null;
+
+    // 1. Primary Firestore lookup: userProgress collection
+    try {
+      const ref = doc(db, `userProgress/${userId}/progress`, contentId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        progressData = snap.data();
+      }
+    } catch (err) {
+      console.warn('Primary user progress getDoc warning:', err);
     }
-    return null;
+
+    // 2. Secondary Firestore lookup: watchHistory collection (Fallback if primary missing or partial)
+    if (!progressData || progressData.episodeIndex === undefined) {
+      try {
+        const historyRef = doc(db, `watchHistory/${userId}/items`, contentId);
+        const histSnap = await getDoc(historyRef);
+        if (histSnap.exists()) {
+          const histData = histSnap.data();
+          if (!progressData) {
+            progressData = histData;
+          } else {
+            progressData = { ...histData, ...progressData };
+          }
+        }
+      } catch (histErr) {
+        console.warn('Watch history getDoc fallback warning:', histErr);
+      }
+    }
+
+    // 3. Local Master Series Index check (handles offline or cached recovery)
+    try {
+      const seriesKey = `maxplay_series_progress_${userId}_${contentId}`;
+      const raw = localStorage.getItem(seriesKey) || localStorage.getItem(`maxplay_series_progress_${contentId}`);
+      if (raw) {
+        const localParsed = JSON.parse(raw);
+        if (localParsed) {
+          if (!progressData) {
+            progressData = localParsed;
+          } else if (localParsed.episodeIndex !== undefined && (progressData.episodeIndex === undefined || localParsed.episodeIndex > progressData.episodeIndex)) {
+            progressData = { ...progressData, ...localParsed };
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return progressData;
   } catch (err) {
     console.warn('Get user progress error:', err);
     return null;
@@ -605,6 +649,21 @@ export const getUserProgress = async (userId: string, contentId: string) => {
 export const saveUserProgress = async (userId: string, contentId: string, progressData: any) => {
   try {
     const timestamp = new Date().toISOString();
+
+    // 1. Always update Local Master Series Index
+    try {
+      const seriesKey = `maxplay_series_progress_${userId}_${contentId}`;
+      const payloadWithTime = {
+        ...progressData,
+        lastWatchedAt: timestamp
+      };
+      localStorage.setItem(seriesKey, JSON.stringify(payloadWithTime));
+      localStorage.setItem(`maxplay_series_progress_${contentId}`, JSON.stringify(payloadWithTime));
+    } catch {
+      // ignore
+    }
+
+    // 2. Persist to Firestore userProgress
     const ref = doc(db, `userProgress/${userId}/progress`, contentId);
     await setDoc(ref, {
       contentId,
@@ -612,7 +671,7 @@ export const saveUserProgress = async (userId: string, contentId: string, progre
       lastWatchedAt: timestamp
     }, { merge: true });
 
-    // Also record in Watch History with rich playback state
+    // 3. Also record in Watch History with rich playback state
     const historyRef = doc(db, `watchHistory/${userId}/items`, contentId);
     await setDoc(historyRef, {
       contentId,
