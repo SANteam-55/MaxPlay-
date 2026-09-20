@@ -592,36 +592,52 @@ export const getUserProgress = async (userId: string, contentId: string) => {
   try {
     let progressData: any = null;
 
-    // 1. Primary Firestore lookup: userProgress collection
-    try {
-      const ref = doc(db, `userProgress/${userId}/progress`, contentId);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        progressData = snap.data();
+    // 1. Parallel Firestore lookup: userProgress AND watchHistory simultaneously!
+    let upData: any = null;
+    let whData: any = null;
+
+    const [upResult, whResult] = await Promise.allSettled([
+      getDoc(doc(db, `userProgress/${userId}/progress`, contentId)),
+      getDoc(doc(db, `watchHistory/${userId}/items`, contentId))
+    ]);
+
+    if (upResult.status === 'fulfilled' && upResult.value.exists()) {
+      upData = upResult.value.data();
+    }
+    if (whResult.status === 'fulfilled' && whResult.value.exists()) {
+      whData = whResult.value.data();
+      // Normalize watchHistory fields if needed
+      if (whData.episodeIndex === undefined && whData.currentEpisode !== undefined) {
+        whData.episodeIndex = Math.max(0, Number(whData.currentEpisode) - 1);
       }
-    } catch (err) {
-      console.warn('Primary user progress getDoc warning:', err);
     }
 
-    // 2. Secondary Firestore lookup: watchHistory collection (Fallback if primary missing or partial)
-    if (!progressData || progressData.episodeIndex === undefined) {
-      try {
-        const historyRef = doc(db, `watchHistory/${userId}/items`, contentId);
-        const histSnap = await getDoc(historyRef);
-        if (histSnap.exists()) {
-          const histData = histSnap.data();
-          if (!progressData) {
-            progressData = histData;
-          } else {
-            progressData = { ...histData, ...progressData };
-          }
+    // Merge smart: if both exist, compare episodeIndex and timestamps
+    if (upData && whData) {
+      const upEp = upData.episodeIndex ?? 0;
+      const whEp = whData.episodeIndex ?? 0;
+
+      if (whEp > upEp) {
+        // watchHistory has reached a higher episode (e.g. Episode 27 vs Episode 1)
+        progressData = { ...upData, ...whData };
+      } else if (upEp > whEp) {
+        // userProgress has reached a higher episode
+        progressData = { ...whData, ...upData };
+      } else {
+        // Same episode, choose the one with more recent timestamp
+        const upTime = new Date(upData.lastWatchedAt || 0).getTime();
+        const whTime = new Date(whData.watchedAt || whData.lastWatchedAt || 0).getTime();
+        if (whTime > upTime) {
+          progressData = { ...upData, ...whData };
+        } else {
+          progressData = { ...whData, ...upData };
         }
-      } catch (histErr) {
-        console.warn('Watch history getDoc fallback warning:', histErr);
       }
+    } else {
+      progressData = upData || whData;
     }
 
-    // 3. Local Master Series Index check (handles offline or cached recovery)
+    // 2. Also inspect Local Master Series Index & watchHistory array in localStorage
     try {
       const seriesKey = `maxplay_series_progress_${userId}_${contentId}`;
       const raw = localStorage.getItem(seriesKey) || localStorage.getItem(`maxplay_series_progress_${contentId}`);
@@ -630,8 +646,27 @@ export const getUserProgress = async (userId: string, contentId: string) => {
         if (localParsed) {
           if (!progressData) {
             progressData = localParsed;
-          } else if (localParsed.episodeIndex !== undefined && (progressData.episodeIndex === undefined || localParsed.episodeIndex > progressData.episodeIndex)) {
-            progressData = { ...progressData, ...localParsed };
+          } else {
+            const localEp = localParsed.episodeIndex ?? 0;
+            const curEp = progressData.episodeIndex ?? 0;
+            if (localEp > curEp) {
+              progressData = { ...progressData, ...localParsed };
+            }
+          }
+        }
+      }
+      // Also check maxplay_watch_history in localStorage
+      const historyRaw = localStorage.getItem('maxplay_watch_history');
+      if (historyRaw) {
+        const list = JSON.parse(historyRaw);
+        if (Array.isArray(list)) {
+          const match = list.find((h: any) => h.contentId === contentId || h.id === contentId);
+          if (match) {
+            const mEp = match.episodeIndex ?? (match.episodeNum ? match.episodeNum - 1 : 0);
+            const curEp = progressData?.episodeIndex ?? 0;
+            if (!progressData || mEp > curEp) {
+              progressData = { ...(progressData || {}), ...match, episodeIndex: mEp };
+            }
           }
         }
       }

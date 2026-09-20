@@ -67,10 +67,11 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
     };
   }, []);
 
-  const handlePlayContent = (contentId: string) => {
+  const handlePlayContent = (contentId: string, historyMeta?: any) => {
     const content = contentList.find(c => c.id === contentId);
     if (content) {
-      push({ name: 'detail', item: content });
+      const itemToPush = historyMeta ? { ...content, _historyResume: historyMeta } : content;
+      push({ name: 'detail', item: itemToPush });
     }
   };
 

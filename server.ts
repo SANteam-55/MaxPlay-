@@ -47,7 +47,7 @@ async function startServer() {
 You assist the Super Admin ("Master" / "Boss") by converting voice and text commands into structured DOM automation, extracting streaming links, fetching TMDB metadata, and calculating exact durations.
 
 CRITICAL LANGUAGE, INTENT & ROLEPLAY RULES:
-1. STRICT HINGLISH RESPONSE: You MUST write your 'reply' in natural, conversational, fluent Hinglish (Hindi written in English alphabets). Always speak like an intelligent, loyal, polite personal AI butler/copilot. Example: "Haan Boss! Main Jawan movie ke saare links aur metadata setup kar raha hoon. Aage bataiye kya aadesh hai?"
+1. STRICT HINGLISH RESPONSE: You MUST write your 'reply' in natural, conversational, fluent Hinglish (Hindi written in English alphabets). Always speak like an intelligent, loyal, polite personal AI butler/copilot. Example: "Haan Boss! Main Anime ke saare links aur metadata setup kar raha hoon. Aage bataiye kya aadesh hai?"
 2. ADDRESS THE ADMIN RESPECTFULLY: Address the admin as "Boss" or "Master" in every single reply. Be obedient, respectful, prompt, clear, and proactive.
 3. LOYALTY, BANTER & PLAYFUL REQUESTS (e.g. "meow meow bolo", "billi bano", "loyalty test", "kuch bol kar sunao"):
    - When Boss gives playful commands or tests your loyalty, like "meow meow bolo" or "kuch bolo": You MUST show 100% enthusiastic loyalty, obedience, and playful devotion!
@@ -60,45 +60,78 @@ CRITICAL LANGUAGE, INTENT & ROLEPLAY RULES:
    - CASE A (QUESTION / OPINION / INQUIRY): If Boss is just asking about a series or movie (e.g. "Breaking Bad kaisi series hai?", "Solo Leveling ki story kya hai?", "Jawan kab release hui thi?", "Mujhe best action anime suggest karo"):
      - Answer conversationally with exciting plot points, ratings, and recommendations in Hinglish!
      - Set intent: "general_query" and actions: []. DO NOT OPEN THE UPLOAD WIZARD or generate upload actions!
-   - CASE B (EXPLICIT UPLOAD ORDER): ONLY when Boss explicitly orders an upload using words like "upload karo", "add karo", "daal do", "chada do", "draft banao", "publish karo", "new series add karo", or provides video stream URLs (e.g. .mp4, .m3u8, https://...):
+   - CASE B (EXPLICIT UPLOAD ORDER): When Boss explicitly orders an upload using words like "upload karo", "add karo", "daal do", "chada do", "draft banao", "publish karo", "new series add karo", specifies episode counts, or provides video stream URLs (e.g. .mp4, .m3u8, https://...):
      - Set intent: "movie_upload" or "series_upload".
      - Generate full automation actions: FILL_UPLOAD_METADATA, BUILD_SERIES_EPISODES, CONFIGURE_MOVIE_LINKS, CALCULATE_DURATION, GO_TO_STEP.
+   - CASE C (DRAFT MODIFICATION / QUALITY SWAP): When Boss wants to modify an existing upload draft (e.g. "720p hata do 1080p is episode mein laga do", "Episode 4 se 720p remove karo aur 1080p lagao", "Episode 3 me 2 parts add kar do"):
+     - Set intent: "series_upload" or "content_management".
+     - Generate an "UPDATE_EPISODES_SPEC" action targeting the specified episode(s).
+     - DO NOT reset or wipe the rest of the form!
 6. COMPREHENSIVE PRESENTATION & MULTI-PART SUMMATION:
-   - Provide a complete breakdown of ALL episodes.
+   - Provide a complete breakdown of ALL episodes in your summary and reply.
    - MULTI-PART DURATION CALCULATION: When an episode contains multiple parts (e.g. Part 1, Part 2), the episode's total duration MUST be the sum of all its parts.
    - In your \`reply\` and \`summary\`, explicitly detail the parts and total calculation in Hinglish.
 
-CORE AUTOMATION RULES:
+CORE AUTOMATION RULES FOR MOVIES, SERIES & ANIME:
 
 1. CONTENT UPLOAD & LINK PASTING:
-Only generate upload actions when Master explicitly asks to upload, add, draft, publish, configure media, or create episodes (e.g. "upload karo", "12 episode banana hai", "banao", "draft karo", "stream links"):
-- DETECT TYPE: Set mode to "movie" or "series". (For anime or episodic shows, use mode "series").
-- EXTRACT METADATA & SYSTEM SETTINGS:
-  - Check \`context.tmdbMetadata\`. If present, use that exact title, description, posterUrl, backdropUrl, rating, year, and genres!
-- TARGET VIDEO QUALITIES ("kaun si quality target karni hai"):
-  - Check user prompt for target qualities (e.g. "1080p target karna hai", "720p", "480p", "360p", "all qualities").
-  - In \`FILL_UPLOAD_METADATA\`, set \`data.qualities\` to ONLY the requested qualities (e.g. ["1080p"]). If unspecified, default to ["1080p"].
-- TARGET AUDIO LANGUAGES ("kaun sa language rakhna hai"):
-  - Check user prompt for audio languages (e.g. "Hindi language rakhna hai", "Japanese", "English", "Urdu").
-  - In \`FILL_UPLOAD_METADATA\`, set \`data.languages\` to ONLY the requested languages (e.g. ["Hindi"]). If unspecified, default to ["Hindi"].
-- EPISODE COUNT & NUMBERING ("kitne episode banana hai"):
-  - When Boss specifies how many episodes to make (e.g. "12 episode banana hai", "5 episodes banao", "10 episodes"):
-    - In \`BUILD_SERIES_EPISODES\`, \`data.episodes\` MUST contain an array of EXACTLY that many episode objects (epNum: 1, 2, ... N)!
-    - NEVER generate only 1 episode when Boss asked for 12!
-- STREAM LINKS PASTING & EMPTY INPUT BOXES ("agar link diya hai to paste karo, agar nahi diya to khali chhod do"):
-  - If Boss provided stream links for specific episodes (e.g. "Episode 1 link: ..."):
-    - Paste that link into that episode's \`videoSources\` for the requested language and quality.
-    - If multi-parts were given (e.g. "Episode 1 Part 1 link: ... Part 2 link: ..."), assign to partNum 1 and partNum 2.
-  - CRITICAL - UNPROVIDED EPISODES:
-    - If Boss did NOT provide a link for an episode (e.g. Boss said "12 episode banana hai" and only gave a link for Ep 1, or gave NO links):
-      - DO NOT invent fake URLs (no example.com, no test.mp4, no duplicate URLs)!
-      - Set \`links: []\` for those episodes so their input boxes in the admin panel remain completely clean and empty for the admin to paste links later!
-- AUTOMATIC DURATION CALCULATION:
-  - Always include the \`CALCULATE_DURATION\` action (\`{ "type": "CALCULATE_DURATION", "mode": "movie" | "episode" }\`).
-- WIZARD NAVIGATION:
-  - End the action pipeline by navigating to Step 2 (\`{ "type": "GO_TO_STEP", "step": 2 }\`).
+- DETECT TYPE:
+  - For Anime (e.g. Naruto, Solo Leveling, Death Note, Demon Slayer, Attack on Titan, etc.): Set mode to "series" and genres MUST include "Anime".
+  - For TV / Web Series: Set mode to "series".
+  - For Movies: Set mode to "movie".
+- STRICT AUDIO LANGUAGE SELECTION ("sirf Hindi language select karna hai"):
+  - If Boss specifies audio languages (e.g. "Anime Hindi language ko hi select karna hai", "sirf Hindi", "Hindi audio only", "dual audio Hindi aur Japanese"):
+    - In \`FILL_UPLOAD_METADATA.data.languages\`, include ONLY those requested languages (e.g. ["Hindi"]).
+    - Do NOT include unrequested languages like English or Japanese unless Boss asked for them.
+- TARGET VIDEO QUALITIES & PER-EPISODE ISOLATED OVERRIDES:
+  - If Boss specifies a global/selected quality (e.g. "quality selected 720p rakhi gayi hai", "default quality 720p"):
+    - In \`FILL_UPLOAD_METADATA.data.qualities\`, set ONLY the globally selected qualities (e.g. ["720p"]) so only those are checked in Step 1.
+  - If Boss specifies a different quality for a specific episode (e.g. "episode 1 me 2 part hai per selected quality 720p rakhi gayi hai, lekin episode 1 ke liye quickly 1080p rakhna hai"):
+    - For that specific episode (e.g. Episode 1):
+      - DELETE/REMOVE the global selected quality (720p) for this episode.
+      - CREATE the quality box for the requested quality (1080p) using the system's isolated custom quality mechanism.
+      - In \`BUILD_SERIES_EPISODES.data.episodes\`, for that episode: set \`qualities: ["1080p"]\`, and all its parts (Part 1, Part 2, etc.) in \`videoSources\` MUST have only \`{"1080p": ""}\`!
+    - Other episodes (Episode 2, 3...) will remain with the global selected quality \`qualities: ["720p"]\` with \`videoSources: {"720p": ""}\`!
+- EXACT EPISODE COUNT & NUMBERING ("kitne episode banana hai"):
+  - When Boss specifies an episode count (e.g. "12 episode banane hain", "24 episodes banao", "5 episodes"):
+    - In \`BUILD_SERIES_EPISODES.data.episodes\`, you MUST generate EXACTLY that many episode objects (epNum: 1, 2, ... N).
+- SPECIFIC EPISODE MULTI-PARTS ("is wale episode mein Do parts honge", "episode 1 me 2 part hai"):
+  - Different episodes can have different parts! (e.g. Episode 1 has 2 parts, Episode 2 has 1 part, Episode 3 has 3 parts):
+    - For an episode with multiple parts, set \`partsCount: X\` and generate X link objects in \`links\` (Part 1, Part 2... Part X).
+    - Every part of that episode inherits that specific episode's isolated quality boxes!
+    - Even if NO streaming URLs are provided in the command, Part 1, Part 2... containers MUST be prepared with clean empty input boxes ready for the admin to paste URLs!
+- SPECIFIC EPISODE SKIP MARKERS ("alag-alag episode ka skip markers alag hote hain"):
+  - Different episodes can have completely different skip markers!
+  - If Boss specifies skip markers for specific episodes (e.g. "Episode 1 intro 0-90, Episode 2 me intro skip 15s se 95s aur outro 1320s se 1400s"):
+    - In \`BUILD_SERIES_EPISODES.data.episodes\`:
+      - Episode 1: \`skipMarkers: { intro: { start: 0, end: 90 } }\`
+      - Episode 2: \`skipMarkers: { intro: { start: 15, end: 95 }, outro: { start: 1320, end: 1400 } }\`
+    - If Boss says an episode has no intro skip, set \`skipMarkers: {}\`.
+- STREAM LINKS PASTING & EMPTY INPUT BOXES:
+  - If Boss provides stream URLs, paste them into the appropriate episode and part.
+  - If Boss did NOT provide stream URLs, keep \`links: []\` (or empty string sources) so input boxes remain clean and empty.
+- DURATION & STEP NAVIGATION:
+  - Always include \`CALCULATE_DURATION\` and finish with \`GO_TO_STEP: 2\`.
 
-2. BROADCAST / ANNOUNCEMENTS:
+2. IN-PLACE DRAFT MODIFICATION ("720p hata do 1080p is episode mein laga do", "Episode 2 me intro skip 15-95 kar do"):
+When Boss asks to modify qualities, parts, or skip markers of an existing episode in the current draft:
+- Output action \`UPDATE_EPISODES_SPEC\`:
+  {
+    "type": "UPDATE_EPISODES_SPEC",
+    "data": {
+      "episodeNumbers": [1],
+      "removeQualities": ["720p"],
+      "addQualities": ["1080p"],
+      "setQualities": ["1080p"],
+      "partsCount": 2,
+      "skipMarkers": {
+        "intro": { "start": 15, "end": 95 },
+        "outro": { "start": 1320, "end": 1400 }
+      }
+    }
+  }
+
+3. BROADCAST / ANNOUNCEMENTS:
 When Master wants to send an announcement or alert:
 - Populate \`FILL_ANNOUNCEMENT\` action with title, body, priority, senderName ("MaxPlay Admin").
 
@@ -350,32 +383,177 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       const isLoyaltyOrFunRequest = /\b(meow|meao|mew|billi|bark|bhau|sing|gaana|nacho|dance|wafadar|wafaadari|loyal|loyalty|tareef|praise|kuch\s*bolo|kuch\s*bol)\b/i.test(prompt);
 
-      const hasUploadAction = /\b(upload|add|draft|publish|insert|daal\s*do|dal\s*do|chada\s*do|chadhado|link\s*lagao|link\s*dalo|form\s*bharo|save\s*content|create|generate|setup|configure|banao|banana|bana\s*do|banayein?|banaoge|target\s*karna|target\s*karo|rakhna\s*hai|rakho|set\s*karo)\b/i.test(prompt);
-      const hasEpisodePattern = /\b\d+\s*(?:episodes?|eps?|ep|bhag)\b/i.test(prompt) || /\b(?:episode|ep)\s*\d+/i.test(prompt);
-      const isExplicitUploadOrder = !isLoyaltyOrFunRequest && (hasUploadAction || urlMatches.length > 0 || hasEpisodePattern);
+      // Word to number helper for Hindi and English numerals
+      const wordToNumMap: Record<string, number> = {
+        ek: 1, one: 1,
+        do: 2, dono: 2, donon: 2, two: 2,
+        teen: 3, teeno: 3, three: 3,
+        char: 4, chaar: 4, four: 4,
+        paanch: 5, panch: 5, five: 5,
+        che: 6, chhah: 6, six: 6,
+        saat: 7, seven: 7,
+        aath: 8, eight: 8,
+        nau: 9, nine: 9,
+        das: 10, ten: 10,
+        gyarah: 11, barah: 12, baarah: 12, terah: 13, chaudah: 14, pandrah: 15, solah: 16, satrah: 17, atharah: 18, unnis: 19, bees: 20, chaubees: 24, pachees: 25
+      };
 
-      const isCasualGreeting = !isExplicitUploadOrder && !isLoyaltyOrFunRequest && /^(hi|hello|hey|kaise\s*ho|kya\s*haal|good\s*(morning|evening|afternoon|night)|who\s*are\s*you|tum\s*kaun\s*ho|namaste|pranam|kya\s*chal\s*raha\s*hai|help|shukriya|thanks|thank\s*you)\b/i.test(prompt.trim());
+      // Voice selection
+      const selectedVoice = voice || req.body.voice || "Kore";
 
-      const isMediaInquiry = !isExplicitUploadOrder && !isCasualGreeting && !isLoyaltyOrFunRequest && /\b(movie|series|anime|season|film|show|kaisa|kaisi|story|plot|review|recommend|suggest|release|actor|cast|episode|details|batao|kya\s*hai)\b/i.test(prompt);
-
-      // Target qualities ("kaun si quality target karni hai")
+      // 1.A Base / Global Target Video Qualities
       const targetQualities: string[] = [];
-      if (/\b(all\s*qualit|sab\s*qualit|saari\s*qualit|har\s*qualit)\b/i.test(prompt)) {
+      const globalSelectedMatch = prompt.match(/(?:(?:per|global|default)?\s*selected\s*quality\s*(?:ke\s*liye\s*)?(?:rakhi\s*gai\s*hai|hai|rakho)?\s*(1080p?|720p?|480p?|360p?|4k|2k))/i)
+        || prompt.match(/(?:quality\s*(?:selected\s*)?(720p?|1080p?|480p?|360p?|4k)[^.\n,]*?rakhi\s*gai\s*hai)/i)
+        || prompt.match(/(?:per\s*selected\s*quality\s*(720p?|1080p?|480p?|360p?|4k))/i)
+        || prompt.match(/(?:baki\s*(?:sab\s*)?|global\s*quality\s*)(720p?|1080p?|480p?|360p?|4k)/i);
+
+      if (globalSelectedMatch) {
+        let baseQ = globalSelectedMatch[1].toLowerCase();
+        if (/^\d+$/.test(baseQ)) baseQ += "p";
+        targetQualities.push(baseQ);
+      } else if (/\b(all\s*qualit|sab\s*qualit|saari\s*qualit|har\s*qualit)\b/i.test(prompt)) {
         targetQualities.push("1080p", "720p", "480p", "360p");
       } else {
-        if (/\b(1080p?|fhd|full\s*hd)\b/i.test(prompt)) targetQualities.push("1080p");
-        if (/\b(720p?)\b/i.test(prompt) || (/\bhd\b/i.test(prompt) && !/full\s*hd|fhd/i.test(prompt))) targetQualities.push("720p");
-        if (/\b(480p?|sd)\b/i.test(prompt)) targetQualities.push("480p");
-        if (/\b(360p?)\b/i.test(prompt)) targetQualities.push("360p");
+        // Exclude episode-specific phrases when detecting global qualities
+        const generalPrompt = prompt.replace(/(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:1080p?|720p?|480p?|360p?|4k|2k)/gi, "");
+        if (/\b(1080p?|fhd|full\s*hd)\b/i.test(generalPrompt)) targetQualities.push("1080p");
+        if (/\b(720p?)\b/i.test(generalPrompt) || (/\bhd\b/i.test(generalPrompt) && !/full\s*hd|fhd/i.test(generalPrompt))) targetQualities.push("720p");
+        if (/\b(480p?|sd)\b/i.test(generalPrompt)) targetQualities.push("480p");
+        if (/\b(360p?)\b/i.test(generalPrompt)) targetQualities.push("360p");
+        if (/\b(4k|2160p?)\b/i.test(generalPrompt)) targetQualities.push("4k");
       }
       if (targetQualities.length === 0) {
-        targetQualities.push("1080p");
+        targetQualities.push("720p");
       }
 
-      // Target audio languages ("kaun sa language rakhna hai")
+      // Per-Episode Isolated Quality Overrides (e.g. "episode 1 me 2 part hai per selected quality 720p rakhi gai hai... episode 1 ke liye quickly 1080p rakhna hai")
+      const episodeQualitiesMap: Record<number, string[]> = {};
+      const epQualityPatterns = [
+        /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:ke\s*liye\s*)?(?:quickly\s*)?(?:quality\s*)?(1080p?|720p?|480p?|360p?|4k|2k)[^.\n,]*?(?:rakhna|rakho|laga|box|hoga|karna|chahiye)/gi,
+        /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:me|mein|par|ki)?\s*(?:quality\s*)?(?:quickly\s*)?(1080p?|720p?|480p?|360p?|4k|2k)/gi,
+        /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:720p?|1080p?|480p?)\s*(?:hata|delete|remove)[^.\n,]*?(1080p?|720p?|480p?|4k)/gi,
+        /(?:quickly\s*)?(1080p?|720p?|480p?|4k)\s*(?:rakhna\s*hai|laga\s*do|box\s*bana|quality\s*rakho)[^.\n,]*?(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?/gi
+      ];
+
+      epQualityPatterns.forEach(pat => {
+        let m: RegExpExecArray | null;
+        while ((m = pat.exec(prompt)) !== null) {
+          const epN = m[1] ? parseInt(m[1], 10) : 1;
+          let qVal = (m[2] || m[1]).toLowerCase();
+          if (/^\d+$/.test(qVal)) qVal += "p";
+          if (qVal === "1080" || qVal === "1080p") qVal = "1080p";
+          if (qVal === "720" || qVal === "720p") qVal = "720p";
+          if (qVal === "480" || qVal === "480p") qVal = "480p";
+          if (qVal === "360" || qVal === "360p") qVal = "360p";
+          if (['1080p', '720p', '480p', '360p', '4k', '2k'].includes(qVal)) {
+            // When an episode override is specified, replace default with this isolated quality
+            if (!episodeQualitiesMap[epN]) episodeQualitiesMap[epN] = [];
+            if (!episodeQualitiesMap[epN].includes(qVal)) episodeQualitiesMap[epN].push(qVal);
+          }
+        }
+      });
+
+      // Also detect complex patterns: "quality selected 720p ... episode 4 ... 1080p"
+      const complexOverrideRegex = /(?:quality\s*(?:selected\s*)?(720p?|1080p?|480p?)[^.\n,]*?(?:lekin|par|aur|baki)\s*(?:episode|ep)\s*(\d+)[^.\n,]*?(1080p?|720p?|480p?|4k))/gi;
+      let coMatch: RegExpExecArray | null;
+      while ((coMatch = complexOverrideRegex.exec(prompt)) !== null) {
+        const baseQ = coMatch[1].toLowerCase().replace(/(\d+)$/, '$1p');
+        const epN = parseInt(coMatch[2], 10);
+        const overQ = coMatch[3].toLowerCase().replace(/(\d+)$/, '$1p');
+        if (!targetQualities.includes(baseQ)) {
+          targetQualities.length = 0;
+          targetQualities.push(baseQ);
+        }
+        episodeQualitiesMap[epN] = [overQ];
+      }
+
+      // Per-Episode Parts: e.g. "use episode 1 Me 2 part hai", "episode 3 me 3 parts honge"
+      const episodePartsMap: Record<number, number> = {};
+      const epPartsPatterns = [
+        /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:me|mein|par|ke\s*liye)?\s*(?:mein\s*)?(\d+|ek|do|dono|teen|chaar|two|three|four)\s*parts?/gi,
+        /(\d+|ek|do|dono|teen|chaar|two|three|four)\s*parts?[^.\n,]*?(?:honge|karna|rakhna|bana|hai|rakho).*?(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?/gi
+      ];
+      epPartsPatterns.forEach(pat => {
+        let m: RegExpExecArray | null;
+        while ((m = pat.exec(prompt)) !== null) {
+          let epN = 1;
+          let rawP = "";
+          if (m[2] && isNaN(Number(m[1])) && !isNaN(Number(m[2]))) {
+            rawP = m[1].toLowerCase();
+            epN = parseInt(m[2], 10);
+          } else if (m[1] && m[2]) {
+            epN = parseInt(m[1], 10) || 1;
+            rawP = m[2].toLowerCase();
+          } else if (m[1]) {
+            rawP = m[1].toLowerCase();
+          }
+          const pCnt = wordToNumMap[rawP] || parseInt(rawP, 10) || 2;
+          episodePartsMap[epN] = pCnt;
+        }
+      });
+
+      // Per-Episode Skip Markers: e.g. "episode 1 intro 0 to 90", "episode 2 me intro skip 15s se 95s aur outro 1320 se 1400"
+      const episodeSkipMarkersMap: Record<number, { intro?: { start: number; end: number }; outro?: { start: number; end: number }; credits?: { start: number; end: number } }> = {};
+      
+      const epIntroRegex = /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:intro|opening|op)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/gi;
+      let eim: RegExpExecArray | null;
+      while ((eim = epIntroRegex.exec(prompt)) !== null) {
+        const epN = eim[1] ? parseInt(eim[1], 10) : 1;
+        const s = parseInt(eim[2], 10);
+        const e = parseInt(eim[3], 10);
+        if (!isNaN(s) && !isNaN(e)) {
+          if (!episodeSkipMarkersMap[epN]) episodeSkipMarkersMap[epN] = {};
+          episodeSkipMarkersMap[epN].intro = { start: s, end: e };
+        }
+      }
+
+      const epOutroRegex = /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:outro|ending|ed)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/gi;
+      let eom: RegExpExecArray | null;
+      while ((eom = epOutroRegex.exec(prompt)) !== null) {
+        const epN = eom[1] ? parseInt(eom[1], 10) : 1;
+        const s = parseInt(eom[2], 10);
+        const e = parseInt(eom[3], 10);
+        if (!isNaN(s) && !isNaN(e)) {
+          if (!episodeSkipMarkersMap[epN]) episodeSkipMarkersMap[epN] = {};
+          episodeSkipMarkersMap[epN].outro = { start: s, end: e };
+        }
+      }
+
+      const epCreditsRegex = /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:credits)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/gi;
+      let ecm: RegExpExecArray | null;
+      while ((ecm = epCreditsRegex.exec(prompt)) !== null) {
+        const epN = ecm[1] ? parseInt(ecm[1], 10) : 1;
+        const s = parseInt(ecm[2], 10);
+        const e = parseInt(ecm[3], 10);
+        if (!isNaN(s) && !isNaN(e)) {
+          if (!episodeSkipMarkersMap[epN]) episodeSkipMarkersMap[epN] = {};
+          episodeSkipMarkersMap[epN].credits = { start: s, end: e };
+        }
+      }
+
+      // Check if any episode specifically says "no intro skip" / "intro skip nahi hai"
+      const noIntroRegex = /(?:(?:use\s*episode|iss?\s*episode|is\s*(?:wale)?\s*episode|episode|ep)\s*(\d+)?)[^.\n,]*?(?:intro\s*(?:skip)?\s*(?:nahi|hata|mat|no))/gi;
+      let nim: RegExpExecArray | null;
+      while ((nim = noIntroRegex.exec(prompt)) !== null) {
+        const epN = nim[1] ? parseInt(nim[1], 10) : 1;
+        if (!episodeSkipMarkersMap[epN]) episodeSkipMarkersMap[epN] = {};
+        delete episodeSkipMarkersMap[epN].intro;
+      }
+
+      // All active qualities across the show
+      const allActiveQualities = Array.from(new Set([
+        ...targetQualities,
+        ...Object.values(episodeQualitiesMap).flat()
+      ]));
+
+      // 1.B Target Audio Languages ("anime Hindi language ko hi select karna hai")
       const targetLanguages: string[] = [];
-      if (/\b(dual\s*audio)\b/i.test(prompt)) {
-        targetLanguages.push("Hindi", "English");
+      const hasStrictHindi = /(?:sirf\s*hindi|hindi\s*(?:language\s*)?(?:ko\s*hi\s*select|only|hi\s*rakhna|hi\s*chahiye|hi\s*rakho)|hindi\s*audio\s*only)/i.test(prompt);
+      if (hasStrictHindi) {
+        targetLanguages.push("Hindi");
+      } else if (/\b(dual\s*audio)\b/i.test(prompt)) {
+        targetLanguages.push("Hindi", "Japanese");
       } else {
         if (/\b(hindi|hind)\b/i.test(prompt)) targetLanguages.push("Hindi");
         if (/\b(japanese|jap|japani)\b/i.test(prompt)) targetLanguages.push("Japanese");
@@ -393,31 +571,184 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         targetLanguages.push("Hindi");
       }
 
+      // 1.C In-Place Draft Modification Intent (e.g. "720p hata Do 1080p is episode mein laga do", "Episode 2 me intro skip 15 se 95 kar do")
+      const hasModificationAction = /\b(hata\s*do|hatao|hata|remove|delete|mita\s*do|replace|badal\s*do|badlo|swap|change|laga\s*do|lagao|add\s*karo|set\s*karo|rakh\s*do|daal\s*do|dal\s*do)\b/i.test(prompt);
+      const hasQualityToken = /\b(1080p?|720p?|480p?|360p?|4k|2k|quality|qualities)\b/i.test(prompt);
+      const hasPartToken = /\b(part|parts|bhag)\b/i.test(prompt);
+      const hasSkipToken = /\b(skip|intro|outro|credits)\b/i.test(prompt);
+      const hasTargetEpMention = /\b(is\s*(?:wale)?\s*episode|is\s*episode|iss\s*episode|episode\s*\d+|ep\s*\d+|sabhi\s*episodes?)\b/i.test(prompt);
+
+      const isDraftModification = hasModificationAction && (hasQualityToken || hasPartToken || hasSkipToken) && (hasTargetEpMention || (enhancedContext?.currentDraft && enhancedContext.currentDraft.activeSeasonEpisodesCount > 0));
+
+      if (isDraftModification && !isLoyaltyOrFunRequest) {
+        // Extract target episode numbers
+        const targetEpNums: number[] = [];
+        const epNumMatches = Array.from(prompt.matchAll(/(?:episode|ep)\s*(\d+)/gi));
+        if (epNumMatches.length > 0) {
+          epNumMatches.forEach(m => targetEpNums.push(parseInt(m[1], 10)));
+        } else if (!/\b(sabhi|sab|all)\s*episodes?\b/i.test(prompt)) {
+          const activeEp = enhancedContext?.currentSeasonIdx !== undefined ? (enhancedContext.currentSeasonIdx + 1) : 1;
+          targetEpNums.push(activeEp);
+        }
+
+        // Extract qualities to remove and add using clause segmentation
+        const removeQualities: string[] = [];
+        const addQualities: string[] = [];
+
+        const clauses = prompt.split(/\b(?:aur|and|lekin|but|fir|then|waise|,|;)\b/i);
+        clauses.forEach(clause => {
+          const hasRemove = /\b(hata\s*do|hatao|remove|delete|hata|mita\s*do)\b/i.test(clause);
+          const hasAdd = /\b(laga\s*do|lagao|add|set|rakh\s*do|daal\s*do|dal\s*do)\b/i.test(clause);
+          const qMatches = Array.from(clause.matchAll(/\b(1080p?|720p?|480p?|360p?|4k)\b/gi)).map(m => m[1].toLowerCase().replace(/(\d+)$/, '$1p'));
+
+          if (hasRemove && !hasAdd) {
+            qMatches.forEach(q => { if (!removeQualities.includes(q)) removeQualities.push(q); });
+          } else if (hasAdd && !hasRemove) {
+            qMatches.forEach(q => { if (!addQualities.includes(q)) addQualities.push(q); });
+          } else if (hasRemove && hasAdd) {
+            qMatches.forEach(q => {
+              const qIdx = clause.toLowerCase().indexOf(q.toLowerCase());
+              const remIdx = clause.toLowerCase().search(/\b(hata\s*do|hatao|remove|delete|hata|mita\s*do)\b/);
+              const addIdx = clause.toLowerCase().search(/\b(laga\s*do|lagao|add|set|rakh\s*do|daal\s*do|dal\s*do)\b/);
+              const distToRem = remIdx !== -1 ? Math.abs(qIdx - remIdx) : Infinity;
+              const distToAdd = addIdx !== -1 ? Math.abs(qIdx - addIdx) : Infinity;
+              if (distToRem < distToAdd) {
+                if (!removeQualities.includes(q)) removeQualities.push(q);
+              } else {
+                if (!addQualities.includes(q)) addQualities.push(q);
+              }
+            });
+          }
+        });
+
+        // Extract parts count adjustment
+        const partsMatch = prompt.match(/(?:(\d+|ek|do|teen|chaar|two|three|four)\s*parts?)/i);
+        const draftPartsCount = partsMatch ? (wordToNumMap[partsMatch[1].toLowerCase()] || parseInt(partsMatch[1], 10)) : undefined;
+
+        // Extract skip markers adjustment
+        const draftSkipMarkers: any = {};
+        const dIntro = prompt.match(/(?:intro|opening|op)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+        if (dIntro) {
+          draftSkipMarkers.intro = { start: parseInt(dIntro[1], 10), end: parseInt(dIntro[2], 10) };
+        }
+        const dOutro = prompt.match(/(?:outro|ending|ed)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+        if (dOutro) {
+          draftSkipMarkers.outro = { start: parseInt(dOutro[1], 10), end: parseInt(dOutro[2], 10) };
+        }
+        const dCredits = prompt.match(/(?:credits)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+        if (dCredits) {
+          draftSkipMarkers.credits = { start: parseInt(dCredits[1], 10), end: parseInt(dCredits[2], 10) };
+        }
+        if (/\b(?:intro\s*(?:skip)?\s*(?:hata\s*do|remove|delete|mat|nahi))\b/i.test(prompt)) {
+          draftSkipMarkers.removeIntro = true;
+        }
+        if (/\b(?:outro\s*(?:skip)?\s*(?:hata\s*do|remove|delete|mat|nahi))\b/i.test(prompt)) {
+          draftSkipMarkers.removeOutro = true;
+        }
+
+        const epStr = targetEpNums.length > 0 ? `Episode ${targetEpNums.join(', ')}` : "sabhi episodes";
+        let modReply = `Haan Boss! Maine ${epStr} me aapke aadesh ke anusar modifications kar diye hain:\n`;
+        if (removeQualities.length > 0) modReply += `• [${removeQualities.join(', ')}] quality hata di hai.\n`;
+        if (addQualities.length > 0) modReply += `• [${addQualities.join(', ')}] quality laga di hai.\n`;
+        if (draftPartsCount) modReply += `• Total ${draftPartsCount} parts configure kar diye hain.\n`;
+        if (draftSkipMarkers.intro) modReply += `• Intro skip [${draftSkipMarkers.intro.start}s - ${draftSkipMarkers.intro.end}s] set kar diya hai.\n`;
+        if (draftSkipMarkers.outro) modReply += `• Outro skip [${draftSkipMarkers.outro.start}s - ${draftSkipMarkers.outro.end}s] set kar diya hai.\n`;
+        modReply += `Upload form live sync ho chuka hai Boss!`;
+
+        return res.json({
+          thought: "Detected in-place draft modification command for existing episode specification.",
+          intent: "series_upload",
+          reply: modReply,
+          voiceUsed: selectedVoice,
+          summary: [
+            `Updated specifications for ${epStr}`,
+            removeQualities.length > 0 ? `Removed quality: ${removeQualities.join(', ')}` : null,
+            addQualities.length > 0 ? `Added quality: ${addQualities.join(', ')}` : null,
+            draftPartsCount ? `Set parts count to ${draftPartsCount}` : null,
+            draftSkipMarkers.intro ? `Set intro skip: ${draftSkipMarkers.intro.start}s - ${draftSkipMarkers.intro.end}s` : null,
+            draftSkipMarkers.outro ? `Set outro skip: ${draftSkipMarkers.outro.start}s - ${draftSkipMarkers.outro.end}s` : null
+          ].filter(Boolean),
+          actions: [
+            {
+              type: "UPDATE_EPISODES_SPEC",
+              data: {
+                episodeNumbers: targetEpNums.length > 0 ? targetEpNums : undefined,
+                applyToAll: targetEpNums.length === 0,
+                removeQualities,
+                addQualities,
+                setQualities: (removeQualities.length > 0 && addQualities.length > 0) ? addQualities : undefined,
+                partsCount: draftPartsCount,
+                skipMarkers: Object.keys(draftSkipMarkers).length > 0 ? draftSkipMarkers : undefined
+              }
+            }
+          ]
+        });
+      }
+
+      // 1. Inventory Query (e.g. "Kitne anime upload hai?", "Uploaded content dikhao", "MaxPlay me kya kya upload hai?")
+      const isInventoryQuery = !isLoyaltyOrFunRequest && 
+        (/\b(kitne|kitna|kitni|kaun|kaunse|kaunsi|kya\s*kya|total|list|show|batao|dikhao|check|inventory|kya\s*upload|kya\s*hai)\b/i.test(prompt) &&
+         /\b(upload|uploaded|anime|animes|series|movie|movies|content|titles|database|library)\b/i.test(prompt) &&
+         !/\b(karo|kar\s*do|banao|upload\s*karna|laga\s*do|upload\s*karo|chada\s*do)\b/i.test(prompt));
+
+      // 2. Edit Inquiry or Existing Content Inspection
+      const library = Array.isArray(enhancedContext?.contentLibrary) ? enhancedContext.contentLibrary : [];
+      let matchedContent: any = null;
+      if (library.length > 0) {
+        const lowerPrompt = prompt.toLowerCase();
+        for (const item of library) {
+          if (item && item.title && lowerPrompt.includes(item.title.toLowerCase())) {
+            matchedContent = item;
+            break;
+          }
+        }
+      }
+
+      const isGeneralEditIntent = !isInventoryQuery && !isLoyaltyOrFunRequest &&
+        /\b(edit|change|badalna|update|sudharna)\b/i.test(prompt) &&
+        /\b(karna\s*hai|karna\s*chahta|karni\s*hai|karo|chahiye|hai)\b/i.test(prompt) &&
+        !/\b(720p|1080p|part|intro|outro|skip|stream|https?:\/\/)\b/i.test(prompt) &&
+        !matchedContent;
+
+      const isSpecificEditIntent = matchedContent !== null && !isInventoryQuery && !isLoyaltyOrFunRequest &&
+        /\b(edit|change|badalna|update|detail|details|info|kya\s*hai|check|dekho|karo|karna)\b/i.test(prompt) &&
+        !/\b(naya|new|create|generate)\b/i.test(prompt);
+
+      // 3. Casual Greetings & Normal Conversational Questions
+      const isCasualGreeting = !isLoyaltyOrFunRequest && !isInventoryQuery && !isGeneralEditIntent && !isSpecificEditIntent &&
+        /^(hi|hello|hey|kaise\s*ho|kya\s*haal|good\s*(morning|evening|afternoon|night)|namaste|pranam|kya\s*chal\s*raha\s*hai|help|shukriya|thanks|thank\s*you|bhai|bro)\b/i.test(prompt.trim());
+
+      const isConversationalQuestion = !isLoyaltyOrFunRequest && !isInventoryQuery && !isGeneralEditIntent && !isSpecificEditIntent && !isCasualGreeting &&
+        (/\b(kaise|kya|kyun|kab|kahan|kaun|who|what|why|how|when|where|explain|batao|suggest|fark|difference|kaunsa|konsa|kaisi|kaisa)\b/i.test(prompt) ||
+         /\b(karein|kare|karta|hoti|hota|rahega|rakhein|best|bitrate|resolution|hls|m3u8|mp4|fps|audio|video|stream|server|cdn|database|guide|tips|rules|feature|features)\b/i.test(prompt)) &&
+        !/\b(upload\s*karo|upload\s*karna|banao|chada\s*do|link\s*lagao|daal\s*do)\b/i.test(prompt) &&
+        urlMatches.length === 0;
+
+      // 4. Explicit Upload Order (Only triggers when admin truly orders an upload or provides links)
+      const hasUploadAction = /\b(upload\s*karo|upload\s*karna|naya\s*upload|upload\s*kar\s*do|upload\s*kijiye|add\s*karo|draft\s*banao|publish\s*karo|insert\s*karo|daal\s*do|dal\s*do|chada\s*do|chadhado|link\s*lagao|link\s*dalo|form\s*bharo|save\s*content|banao|banana|bana\s*do)\b/i.test(prompt);
+      const hasEpisodePattern = (/\b\d+\s*(?:episodes?|eps?|ep|bhag)\b/i.test(prompt) || /\b(?:episode|ep)\s*\d+/i.test(prompt)) && /\b(upload|banao|bana\s*do|rakho|set\s*karo)\b/i.test(prompt);
+
+      const isExplicitUploadOrder = !isLoyaltyOrFunRequest && 
+        !isInventoryQuery && 
+        !isGeneralEditIntent && 
+        !isSpecificEditIntent && 
+        !isCasualGreeting && 
+        !isConversationalQuestion &&
+        (hasUploadAction || urlMatches.length > 0 || hasEpisodePattern);
+
+      const isMediaInquiry = !isExplicitUploadOrder && !isCasualGreeting && !isConversationalQuestion && !isLoyaltyOrFunRequest && !isInventoryQuery && !isGeneralEditIntent && !isSpecificEditIntent && /\b(movie|series|anime|season|film|show|kaisa|kaisi|story|plot|review|recommend|suggest|release|actor|cast)\b/i.test(prompt);
+
       // Season Number detection
       const seasonMatch = prompt.match(/(?:season|s)\s*(\d+)/i);
       const targetSeasonNumber = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
 
       // Episode Count detection ("kitne episode banana hai", "do episode upload karna hai")
-      // Remove URLs first so numbers inside URLs (like tg62t9.mp4) don't confuse count regex!
       const promptWithoutUrls = prompt.replace(/https?:\/\/[^\s"'<>)\]]+/g, " [STREAM_LINK] ");
 
       let requestedEpisodeCount: number | null = null;
-      const wordToNumMap: Record<string, number> = {
-        ek: 1, one: 1,
-        do: 2, dono: 2, donon: 2, two: 2,
-        teen: 3, teeno: 3, three: 3,
-        char: 4, chaar: 4, four: 4,
-        paanch: 5, panch: 5, five: 5,
-        che: 6, chhah: 6, six: 6,
-        saat: 7, seven: 7,
-        aath: 8, eight: 8,
-        nau: 9, nine: 9,
-        das: 10, ten: 10
-      };
-
-      const countMatch = promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|\d+)\s*(?:episodes?|eps?|ep|bhag|kist)\b/i) ||
+      const countMatch = promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episodes?|eps?|ep|bhag|kist)\b/i) ||
                          promptWithoutUrls.match(/(?:episodes?|eps?|ep)\s*(?:count|total|ki\s*sankhya)?\s*[:=-]?\s*(\d+)/i) ||
-                         promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|\d+)\s*(?:episode|episodes)\s*(?:banana|banao|rakhna|upload|add|create|generate)/i);
+                         promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episode|episodes)\s*(?:banana|banao|rakhna|upload|add|create|generate)/i);
       if (countMatch) {
         const rawVal = countMatch[1].toLowerCase();
         const num = wordToNumMap[rawVal] || parseInt(rawVal, 10);
@@ -500,7 +831,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       // Clean search title for TMDB (removes procedural instruction words cleanly)
       let searchTitle = prompt
         .replace(/(https?:\/\/[^\s]+)/gi, " ")
-        .replace(/\b(upload|add|draft|publish|stream|link|links|episode|episodes|ep|eps|season|seasons|s\d+|part|parts|skip|intro|outro|credits|movie|anime|series|web\s*series|urdu|hindi|english|japanese|korean|tamil|telugu|1080p|720p|480p|360p|with|and|for|in|to|batao|kaisa|kaisi|story|plot|review|banana|banao|bana\s*do|rakhna|rakho|target|karna|hai|karo|ke|ka|ki|ko|me|mein|audio|track|quality|qualities|kitne|total|count|number)\b/gi, " ")
+        .replace(/\b(upload|add|draft|publish|stream|link|links|episode|episodes|ep|eps|season|seasons|s\d+|part|parts|skip|intro|outro|credits|movie|anime|series|web\s*series|urdu|hindi|english|japanese|korean|tamil|telugu|1080p|720p|480p|360p|4k|2k|with|and|for|in|to|batao|kaisa|kaisi|story|plot|review|banana|banao|bana\s*do|banane|banani|rakhna|rakho|rakhe|target|karna|kar|karo|hai|hain|ke|ka|ki|ko|me|mein|par|pe|audio|track|quality|qualities|kitne|total|count|number|hata|hatao|hata\s*do|laga|lagao|lagana|laga\s*do|sirf|baki|sab|saari|select|selected|selection|chahiye|honge|hoga|hogi|suggest|specification|badal\s*do|badlo|lekin|wale|wali|wala|iss|is|us|language|languages|hi|bhi)\b/gi, " ")
         .replace(/[\d]+s\b/gi, " ")
         .replace(/[0-9]+-[0-9]+s?/gi, " ")
         .replace(/\b\d+\b/g, " ")
@@ -508,12 +839,37 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         .replace(/\s+/g, " ")
         .trim();
 
+      // Detect known canonical media titles
+      const knownMediaTitles = [
+        { pattern: /\b(naruto\s*shippuden)\b/i, title: "Naruto Shippuden" },
+        { pattern: /\b(naruto)\b/i, title: "Naruto" },
+        { pattern: /\b(solo\s*leveling)\b/i, title: "Solo Leveling" },
+        { pattern: /\b(death\s*note)\b/i, title: "Death Note" },
+        { pattern: /\b(jujutsu\s*kaisen)\b/i, title: "Jujutsu Kaisen" },
+        { pattern: /\b(demon\s*slayer|kimetsu\s*no\s*yaiba)\b/i, title: "Demon Slayer: Kimetsu no Yaiba" },
+        { pattern: /\b(one\s*piece)\b/i, title: "One Piece" },
+        { pattern: /\b(bleach(?:\s*thousand\s*year\s*blood\s*war)?)\b/i, title: "Bleach" },
+        { pattern: /\b(attack\s*on\s*titan|shingeki\s*no\s*kyojin)\b/i, title: "Attack on Titan" },
+        { pattern: /\b(chainsaw\s*man)\b/i, title: "Chainsaw Man" },
+        { pattern: /\b(dragon\s*ball(?:\s*z|\s*super)?)\b/i, title: "Dragon Ball Z" },
+        { pattern: /\b(my\s*hero\s*academia|boku\s*no\s*hero)\b/i, title: "My Hero Academia" },
+        { pattern: /\b(tokyo\s*revengers)\b/i, title: "Tokyo Revengers" },
+        { pattern: /\b(hunter\s*x\s*hunter)\b/i, title: "Hunter x Hunter" },
+        { pattern: /\b(fullmetal\s*alchemist)\b/i, title: "Fullmetal Alchemist: Brotherhood" }
+      ];
+
+      for (const k of knownMediaTitles) {
+        if (k.pattern.test(prompt)) {
+          searchTitle = k.title;
+          break;
+        }
+      }
+
       if (!searchTitle || searchTitle.length < 2) {
         searchTitle = prompt.split(" ").slice(0, 3).join(" ").trim();
       }
 
       // 2. Playful Loyalty Commands (e.g. "meow meow bolo", "loyalty test", "tareef karo")
-      const selectedVoice = voice || req.body.voice || "Kore";
       if (isLoyaltyOrFunRequest) {
         const isMeow = /meow|meao|mew|billi/i.test(prompt);
         const reply = isMeow
@@ -529,26 +885,217 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         });
       }
 
-      // 3. Casual Greetings (When NOT an explicit upload order)
-      if (isCasualGreeting && !isExplicitUploadOrder) {
+      // 3. INVENTORY QUERIES (Checking current uploaded content in MaxPlay)
+      if (isInventoryQuery) {
+        const totalCount = library.length;
+        const animes = library.filter((c: any) => c.type === 'anime');
+        const movies = library.filter((c: any) => c.type === 'movie');
+        const series = library.filter((c: any) => c.type === 'series');
+
+        const isAnimeSpecific = /\b(anime|animes)\b/i.test(prompt) && !/\b(movie|series)\b/i.test(prompt);
+        const isMovieSpecific = /\b(movie|movies|film)\b/i.test(prompt) && !/\b(anime|series)\b/i.test(prompt);
+
+        let invReply = "";
+        const suggestionChips: { label: string; prompt: string }[] = [];
+
+        if (totalCount === 0) {
+          invReply = `Boss, abhi MaxPlay library me koi content upload nahi mila (ya library load ho rahi hai).\n\nAap chahein toh abhi naya anime ya movie upload kar sakte hain! Bas boliye: *"Solo Leveling anime upload karo"* ya *"Jawan movie upload karo"*.`;
+          suggestionChips.push(
+            { label: "📺 Naya Anime Upload", prompt: "Naya anime upload karna hai" },
+            { label: "🎬 Nayi Movie Upload", prompt: "Nayi movie upload karna hai" }
+          );
+        } else if (isAnimeSpecific) {
+          const animeListText = animes.length > 0 
+            ? animes.map((a: any, idx: number) => `${idx + 1}. **${a.title}** (${a.year || '2024'}) — ${a.seasonsCount || 1} Season, ${a.episodesCount || 12} Episodes [${(a.languages || ['Hindi']).join(', ')}]`).join('\n')
+            : "Abhi koi anime upload nahi hai.";
+          invReply = `Boss, MaxPlay me abhi kul **${animes.length} Anime** upload ho chuke hain:\n\n${animeListText}\n\nAap inme se kisi bhi anime ko edit kar sakte hain ya usme naye episodes add kar sakte hain. Bas chat me boliye: *"[Anime Name] edit karna hai"*!`;
+          animes.slice(0, 4).forEach((a: any) => {
+            suggestionChips.push({ label: `✏️ Edit ${a.title}`, prompt: `${a.title} edit karna hai` });
+          });
+        } else if (isMovieSpecific) {
+          const movieListText = movies.length > 0 
+            ? movies.map((m: any, idx: number) => `${idx + 1}. **${m.title}** (${m.year || '2024'}) — Rating: ⭐${m.rating || '8.5'} [${(m.qualities || ['1080p']).join(', ')}]`).join('\n')
+            : "Abhi koi movie upload nahi hai.";
+          invReply = `Boss, MaxPlay me abhi kul **${movies.length} Movies** upload ho chuki hain:\n\n${movieListText}\n\nKisi bhi movie ki links ya qualities edit karne ke liye chat me boliye: *"[Movie Name] edit karna hai"*!`;
+          movies.slice(0, 4).forEach((m: any) => {
+            suggestionChips.push({ label: `✏️ Edit ${m.title}`, prompt: `${m.title} edit karna hai` });
+          });
+        } else {
+          invReply = `Boss, MaxPlay library me abhi kul **${totalCount} Titles** uploaded hain:\n\n` +
+            `• 📺 **Anime (${animes.length})**: ${animes.length > 0 ? animes.slice(0, 5).map((a: any) => a.title).join(', ') + (animes.length > 5 ? ` (+${animes.length - 5} more)` : '') : 'None'}\n` +
+            `• 🎬 **Movies (${movies.length})**: ${movies.length > 0 ? movies.slice(0, 5).map((m: any) => m.title).join(', ') + (movies.length > 5 ? ` (+${movies.length - 5} more)` : '') : 'None'}\n` +
+            `• 📽️ **Web Series (${series.length})**: ${series.length > 0 ? series.slice(0, 5).map((s: any) => s.title).join(', ') + (series.length > 5 ? ` (+${series.length - 5} more)` : '') : 'None'}\n\n` +
+            `Aapko kisi title ki details dekhni ho ya use edit karna ho, chat me bas naam batayein!`;
+
+          library.slice(0, 4).forEach((item: any) => {
+            suggestionChips.push({ label: `✏️ Edit ${item.title}`, prompt: `${item.title} edit karna hai` });
+          });
+        }
+
+        return res.json({
+          thought: "Retrieved current library inventory and answered directly in chat.",
+          intent: "inventory_query",
+          reply: invReply,
+          voiceUsed: selectedVoice,
+          suggestionChips,
+          summary: [
+            `Total Uploads: ${totalCount}`,
+            `Anime: ${animes.length} | Movies: ${movies.length} | Series: ${series.length}`
+          ],
+          actions: [] // NO page redirects!
+        });
+      }
+
+      // 4. SPECIFIC EDIT INQUIRY (Title matched in database)
+      if (isSpecificEditIntent && matchedContent) {
+        const c = matchedContent;
+        const typeStr = c.type === 'anime' ? 'Anime Series' : (c.type === 'movie' ? 'Movie' : 'Web Series');
+        const langStr = Array.isArray(c.languages) && c.languages.length > 0 ? c.languages.join(', ') : 'Hindi';
+        const qualStr = Array.isArray(c.qualities) && c.qualities.length > 0 ? c.qualities.join(', ') : '1080p, 720p';
+        const genreStr = Array.isArray(c.genres) && c.genres.length > 0 ? c.genres.join(', ') : 'Action, Adventure';
+        
+        let epInfoStr = "";
+        if (c.type !== 'movie') {
+          epInfoStr = `• **Episodes & Seasons**: ${c.seasonsCount || 1} Season, ${c.episodesCount || 12} Total Episodes\n`;
+        }
+
+        let skipStr = "";
+        if (c.skipMarkers && c.skipMarkers.intro) {
+          skipStr = `• **Skip Markers**: Intro [${c.skipMarkers.intro.start || 0}s - ${c.skipMarkers.intro.end || 90}s]\n`;
+        }
+
+        const wantsToOpenForm = /\b(load|open|kholo|khool\s*do|le\s*jao|form\s*me\s*kholo)\b/i.test(prompt);
+
+        const editReply = `Haan Boss! **"${c.title}"** (${typeStr}) ka record mil gaya hai. Abhi isme ye details maujud hain:\n\n` +
+          `• **Title**: ${c.title} (${c.year || '2024'})\n` +
+          `• **Type**: ${typeStr} | Rating: ⭐ ${c.rating || '8.8'}\n` +
+          `• **Genres**: ${genreStr}\n` +
+          `• **Audio Languages**: ${langStr}\n` +
+          `• **Active Qualities**: ${qualStr}\n` +
+          epInfoStr +
+          skipStr +
+          `\n**Aap isme kya edit karwana chahte hain?**\n` +
+          `1. Naye episodes ya stream links add karna?\n` +
+          `2. Quality update karna (jaise 720p se 1080p)?\n` +
+          `3. Skip markers (intro / outro) badalna?\n` +
+          `4. Ya direct upload form me load karna?`;
+
+        return res.json({
+          thought: `Inspected ${c.title} from uploaded library and presented full configuration in chat.`,
+          intent: "edit_inquiry",
+          reply: editReply,
+          voiceUsed: selectedVoice,
+          suggestionChips: [
+            { label: "📝 Open in Edit Form", prompt: `Load ${c.title} in edit form` },
+            { label: "🎬 Set 1080p Quality", prompt: `${c.title} me 1080p quality set karo` },
+            { label: "⏩ Intro Skip 0-90s", prompt: `${c.title} me intro skip 0 to 90s set karo` }
+          ],
+          actions: wantsToOpenForm ? [{ type: "LOAD_FOR_EDIT", data: { contentId: c.id, title: c.title } }] : [],
+          summary: [
+            `Inspected "${c.title}" (${typeStr})`,
+            `Languages: ${langStr}`,
+            `Qualities: ${qualStr}`
+          ]
+        });
+      }
+
+      // 5. GENERAL EDIT INQUIRY (Title not specified yet)
+      if (isGeneralEditIntent) {
+        const topTitles = library.slice(0, 4).map((c: any) => c.title).filter(Boolean);
+        const topChips = topTitles.map((t: string) => ({ label: `✏️ ${t}`, prompt: `${t} edit karna hai` }));
+
+        const generalEditReply = `Haan Boss! Aapko kaun sa content edit karna hai?\n\n` +
+          `Kripya title ka naam batayein (jaise kisi movie ya anime ka title). Main turant uski saari maujuda details nikaal kar chat me present kar dunga aur aap jo chahein modify kar sakte hain!`;
+
+        return res.json({
+          thought: "Politely asked admin which title to edit and offered quick options in chat.",
+          intent: "edit_inquiry",
+          reply: generalEditReply,
+          voiceUsed: selectedVoice,
+          suggestionChips: topChips.length > 0 ? topChips : [
+            { label: "📊 Inventory Check Karo", prompt: "Kitne anime upload hai?" }
+          ],
+          summary: ["Awaiting content title for editing"],
+          actions: [] // Stay in chat!
+        });
+      }
+
+      // 6. CASUAL GREETINGS (When NOT an explicit upload order)
+      if (isCasualGreeting) {
         const casualReplies = [
-          `Haan Boss! Main bilkul badiya hoon. Aapka wafadar AI Co-Pilot haazir hai, batayein aaj kya hukum hai?`,
-          `Namaste Boss! MaxPlay AI Co-Pilot haazir hai. Aap batayein aaj kaunsi nayi movie ya series upload karni hai ya system ka koi kaam karna hai?`,
-          `Hello Boss! Main hamesha ready hoon. Bataiye aaj kya upload karna hai ya kaunsi announcement broadcast karni hai?`
+          `Haan Boss! Main bilkul badiya hoon. Aapka MaxPlay AI Copilot haazir hai! Bataiye aaj kya kaam karna hai?`,
+          `Namaste Boss! MaxPlay AI Copilot online hai. Aap batayein aaj kaunsi movie/anime check karni hai, upload karni hai ya edit karni hai?`,
+          `Hello Boss! Main ready hoon. Koi sawaal poochhna ho ya content manage karna ho, bas hukum kijiye!`
         ];
         const fallbackReply = casualReplies[Math.floor(Math.random() * casualReplies.length)];
         return res.json({
-          thought: "Handled general conversational query respectfully without forcing upload actions.",
+          thought: "Responded warmly and respectfully to casual greeting.",
           intent: "general_query",
           reply: fallbackReply,
           voiceUsed: selectedVoice,
-          summary: ["Responded to general query in conversational Hinglish"],
+          suggestionChips: [
+            { label: "📊 Inventory Overview", prompt: "Kitne anime aur content upload hai?" },
+            { label: "🎬 Naya Upload", prompt: "Naya anime upload karna hai" },
+            { label: "✏️ Edit Content", prompt: "Mujhe uploaded content edit karna hai" }
+          ],
+          summary: ["Responded to greeting in polite Hinglish"],
           actions: []
         });
       }
 
-      // 4. TMDB Search (ONLY for explicit upload orders or media inquiries)
-      const shouldSearchTmdb = (isExplicitUploadOrder || isMediaInquiry) && !isCasualGreeting && !isLoyaltyOrFunRequest;
+      // 7. CONVERSATIONAL QUESTIONS & TECHNICAL ADVICE (No TMDB search, pure chat answer!)
+      if (isConversationalQuestion) {
+        let conversationalReply = "";
+        try {
+          const chatModel = "gemini-3.6-flash";
+          const chatPrompt = `The Super Admin of MaxPlay streaming platform asked: "${prompt.trim()}".
+You are the MaxPlay AI Copilot. Answer the admin directly, politely, and intelligently in fluent Hinglish.
+Address them respectfully as "Boss".
+Provide clear, expert, practical advice or explanations about streaming, video formats, bitrate, anime, platform management, or whatever they asked.
+DO NOT generate upload actions or step transitions. Keep the answer concise and friendly.
+Respond strictly in valid JSON format:
+{
+  "thought": "Reasoning about answer",
+  "reply": "Your Hinglish response to Boss",
+  "summary": ["Key point 1", "Key point 2"]
+}`;
+          const chatRes = await ai.models.generateContent({
+            model: chatModel,
+            contents: chatPrompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.3
+            }
+          });
+          const parsedChat = JSON.parse(chatRes.text || "{}");
+          if (parsedChat.reply) {
+            return res.json({
+              thought: parsedChat.thought || "Answered admin's question conversationally.",
+              intent: "general_query",
+              reply: parsedChat.reply,
+              voiceUsed: selectedVoice,
+              summary: parsedChat.summary || ["Answered question conversationally"],
+              actions: []
+            });
+          }
+        } catch (_) {}
+
+        // Deterministic conversational fallback
+        conversationalReply = `Haan Boss! Aapne poocha: "${prompt.trim()}".\n\n` +
+          `MaxPlay streaming platform par sabhi streams HLS (.m3u8) aur standard MP4 formats me optimized hain. Video resolutions 1080p (approx 4-6 Mbps) aur 720p (approx 2-3 Mbps) best balance deti hain high quality aur zero buffer streaming ke liye.\n\nAapko platform me kisi specific feature ya content ke baare me detail chahiye ho toh batayein!`;
+
+        return res.json({
+          thought: "Answered admin's question conversationally via deterministic engine.",
+          intent: "general_query",
+          reply: conversationalReply,
+          voiceUsed: selectedVoice,
+          summary: ["Answered technical/streaming query in chat"],
+          actions: []
+        });
+      }
+
+      // 8. TMDB Search (STRICTLY for explicit upload orders)
+      const shouldSearchTmdb = isExplicitUploadOrder && !isCasualGreeting && !isLoyaltyOrFunRequest && !isInventoryQuery && !isConversationalQuestion;
       if (shouldSearchTmdb && TMDB_API_KEY && TMDB_API_KEY !== "paste_your_api_key_here") {
         try {
           if (searchTitle) {
@@ -668,26 +1215,33 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 - MEDIA TYPE: "${mediaType}"
 - SEASON NUMBER: ${targetSeasonNumber}
 - TARGET EPISODE COUNT: Exactly ${finalEpCount} episodes MUST be in the "BUILD_SERIES_EPISODES" episodes array (epNum: 1 to ${finalEpCount}). NEVER output fewer episodes!
-- TARGET QUALITIES: [${targetQualities.map(q => `"${q}"`).join(", ")}] in "FILL_UPLOAD_METADATA.data.qualities".
+- ALL TARGET QUALITIES: [${allActiveQualities.map(q => `"${q}"`).join(", ")}] in "FILL_UPLOAD_METADATA.data.qualities".
 - TARGET LANGUAGES: [${targetLanguages.map(l => `"${l}"`).join(", ")}] in "FILL_UPLOAD_METADATA.data.languages".
+- SPECIFIC EPISODE OVERRIDES:
+  ${Object.keys(episodeQualitiesMap).length > 0 
+    ? `Specific episode quality overrides: ${Object.entries(episodeQualitiesMap).map(([ep, qs]) => `Episode ${ep} -> [${qs.join(', ')}]`).join('; ')} (All other episodes use base quality [${targetQualities.join(', ')}])`
+    : `All episodes use base quality [${targetQualities.join(', ')}]`}
+  ${Object.keys(episodePartsMap).length > 0 
+    ? `Specific episode parts: ${Object.entries(episodePartsMap).map(([ep, cnt]) => `Episode ${ep} has ${cnt} parts`).join('; ')}`
+    : 'Single part default per episode.'}
 - LINK MAPPING MANDATE:
   ${mappedLinks.length > 0 
-    ? `Boss provided ${mappedLinks.length} stream links: ${JSON.stringify(mappedLinks.map(l => ({ epNum: l.epNum, partNum: l.partNum, url: l.url })))}. Paste these into their exact episodes under "${primaryLang}" and "${primaryQual}".` 
+    ? `Boss provided ${mappedLinks.length} stream links: ${JSON.stringify(mappedLinks.map(l => ({ epNum: l.epNum, partNum: l.partNum, url: l.url })))}. Paste these into their exact episodes.` 
     : 'Boss provided NO stream links in this message.'}
-  CRITICAL: For all episodes where NO link was provided, leave "links: []" completely empty! Do NOT invent fake URLs (no example.com, no test.mp4, no duplicates)!
+  CRITICAL: For all episodes where NO link was provided, keep input boxes clean and empty with NO fake URLs (no example.com, no test.mp4, no duplicates)!
 - DURATION: Include CALCULATE_DURATION action.
 - NAVIGATION: End with GO_TO_STEP 2 action.`;
 
       const userMessage = `Admin Command: ${prompt.trim()}\nCurrent Admin Context: ${JSON.stringify(enhancedContext)}${taskDirective}\nPlease analyze the admin's command and output the structured operational plan.`;
 
-      const candidateModels = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-1.5-flash", "gemini-3.1-pro-preview"];
+      const candidateModels = ["gemini-3.6-flash", "gemini-2.5-pro"];
       let lastErr = null;
       let response = null;
 
       for (const modelName of candidateModels) {
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
-            response = await ai.models.generateContent({
+            const generatePromise = ai.models.generateContent({
               model: modelName,
               contents: userMessage,
               config: {
@@ -696,6 +1250,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                 temperature: 0.2,
               },
             });
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error("Gemini call timed out after 7s")), 7000)
+            );
+            response = await Promise.race([generatePromise, timeoutPromise]) as any;
             if (response && response.text) break;
           } catch (err: any) {
             lastErr = err;
@@ -713,12 +1271,20 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         if (lastErr && (lastErr?.status === 429 || lastErr?.message?.includes("429") || lastErr?.message?.includes("Quota exceeded"))) break;
       }
 
-      // Build flawless episodes structure helper
+      // Build flawless episodes structure helper supporting per-episode qualities and parts
       const buildVerifiedEpisodes = () => {
         const episodesList: any[] = [];
         for (let epI = 1; epI <= finalEpCount; epI++) {
           const linksForThisEp = mappedLinks.filter(l => l.epNum === epI).sort((a, b) => a.partNum - b.partNum);
           
+          // Determine qualities for this specific episode
+          const epQualities = (episodeQualitiesMap[epI] && episodeQualitiesMap[epI].length > 0)
+            ? episodeQualitiesMap[epI]
+            : targetQualities;
+
+          // Determine parts count for this specific episode
+          const customPartsCount = episodePartsMap[epI] || (linksForThisEp.length > 0 ? linksForThisEp.length : 1);
+
           if (linksForThisEp.length > 0) {
             let epDurationSum = 0;
             const builtLinks = linksForThisEp.map(l => {
@@ -727,7 +1293,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               const vSources: Record<string, Record<string, string>> = {};
               targetLanguages.forEach(lng => {
                 vSources[lng] = {};
-                targetQualities.forEach(ql => {
+                epQualities.forEach(ql => {
                   vSources[lng][ql] = l.url;
                 });
               });
@@ -738,21 +1304,64 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               };
             });
 
+            // If custom parts count is greater than links provided, add remaining empty parts
+            while (builtLinks.length < customPartsCount) {
+              const nextPartNum = builtLinks.length + 1;
+              const emptySources: Record<string, Record<string, string>> = {};
+              targetLanguages.forEach(lng => {
+                emptySources[lng] = {};
+                epQualities.forEach(ql => {
+                  emptySources[lng][ql] = "";
+                });
+              });
+              builtLinks.push({
+                partNum: nextPartNum,
+                duration: "",
+                videoSources: emptySources
+              });
+            }
+
+            // Skip markers for this specific episode
+            const epSkipMarkers = episodeSkipMarkersMap[epI] || { intro: { start: 0, end: 90 } };
+
             episodesList.push({
               epNum: epI,
               title: `${tmdb?.title || searchTitle || 'Content'} - Episode ${epI}`,
               duration: formatDurationSec(epDurationSum),
+              qualities: epQualities,
+              partsCount: customPartsCount,
               links: builtLinks,
-              skipMarkers: { intro: { start: 0, end: 90 } }
+              skipMarkers: epSkipMarkers
             });
           } else {
-            // Unprovided links: keep links empty so input box stays completely clean!
+            // Unprovided links: build Part 1 (+ Extra parts if customPartsCount > 1) with clean empty sources!
+            const builtLinks: any[] = [];
+            for (let pNum = 1; pNum <= customPartsCount; pNum++) {
+              const emptySources: Record<string, Record<string, string>> = {};
+              targetLanguages.forEach(lng => {
+                emptySources[lng] = {};
+                epQualities.forEach(ql => {
+                  emptySources[lng][ql] = "";
+                });
+              });
+              builtLinks.push({
+                partNum: pNum,
+                duration: "",
+                videoSources: emptySources
+              });
+            }
+
+            // Skip markers for this specific episode
+            const epSkipMarkers = episodeSkipMarkersMap[epI] || { intro: { start: 0, end: 90 } };
+
             episodesList.push({
               epNum: epI,
               title: `${tmdb?.title || searchTitle || 'Content'} - Episode ${epI}`,
               duration: "",
-              links: [],
-              skipMarkers: { intro: { start: 0, end: 90 } }
+              qualities: epQualities,
+              partsCount: customPartsCount,
+              links: builtLinks,
+              skipMarkers: epSkipMarkers
             });
           }
         }
@@ -787,7 +1396,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             backdropUrl: tmdb?.backdropUrl || "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1280",
             rating: tmdb?.rating || "8.8",
             year: tmdb?.year || "2024",
-            genres: tmdb?.genres || ["Action", "Adventure", "Fantasy"],
+            genres: tmdb?.genres || (mediaType === "anime" ? ["Anime", "Action", "Fantasy"] : ["Action", "Adventure", "Drama"]),
             languages: targetLanguages,
             qualities: targetQualities
           }
@@ -855,15 +1464,38 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           }
         }
 
-        const fallbackReply = `Haan Boss! Aapke aadesh ke anusar maine **${tmdb?.title || searchTitle || 'content'}** (Season ${targetSeasonNumber}) ready kar diya hai:\n` +
+        let overridesSummary = "";
+        if (Object.keys(episodeQualitiesMap).length > 0) {
+          overridesSummary += `• Specific Quality Overrides: ${Object.entries(episodeQualitiesMap).map(([ep, qs]) => `Episode ${ep} -> [${qs.join(', ')}]`).join(', ')} (Baki sab [${targetQualities.join(', ')}]).\n`;
+        }
+        if (Object.keys(episodePartsMap).length > 0) {
+          overridesSummary += `• Multi-Part Configuration: ${Object.entries(episodePartsMap).map(([ep, cnt]) => `Episode ${ep} me ${cnt} parts honge`).join(', ')}.\n`;
+        }
+        if (Object.keys(episodeSkipMarkersMap).length > 0) {
+          overridesSummary += `• Isolated Skip Markers: ${Object.entries(episodeSkipMarkersMap).map(([ep, sm]) => `Episode ${ep} (Intro: ${sm.intro ? `${sm.intro.start}s-${sm.intro.end}s` : 'None'})`).join(', ')}.\n`;
+        }
+
+        const fallbackReply = `Haan Boss! Aapke aadesh ke mutabiq maine **${tmdb?.title || searchTitle || 'content'}** (${mediaType === 'anime' ? 'Anime Series' : 'Series'}, Season ${targetSeasonNumber}) prepare kar diya hai:\n` +
           `• Total Episodes: Exactly ${finalEpCount} episodes banaye hain.\n` +
-          `• Target Quality: ${targetQualities.join(', ')} set kiya hai.\n` +
-          `• Audio Language: ${targetLanguages.join(', ')} set kiya hai.\n` +
+          `• Global Selected Quality: [${targetQualities.join(', ')}] select kiya hai.\n` +
+          `• Audio Language: Sirf [${targetLanguages.join(', ')}] language select ki gayi hai.\n` +
+          overridesSummary +
           (linkedCount > 0 
             ? `• Links & Duration Breakdown:${epBreakdown}\n` +
               `• **Total Season Calculated Duration**: **${formatHumanDuration(totalSeasonSeconds)}**!\n`
-            : `• Stream Links: Koi link message me nahi tha, isliye sabhi ${finalEpCount} episodes ke input boxes bilkul khali (empty) chhod diye hain!\n`) +
+            : `• Stream Links: Koi link message me nahi tha, isliye sabhi ${finalEpCount} episodes ke input boxes bilkul clean aur empty chhod diye hain!\n`) +
           `Step 2 upload form open kar diya hai Boss!`;
+
+        const summaryBullets = [
+          `Built ${finalEpCount} episode(s) for ${tmdb?.title || searchTitle}`,
+          `Audio language set to ${targetLanguages.join(', ')}`,
+          `Global selected quality: ${targetQualities.join(', ')}`,
+          Object.keys(episodeQualitiesMap).length > 0 ? `Per-episode quality overrides: ${Object.entries(episodeQualitiesMap).map(([ep, qs]) => `Ep ${ep} [${qs.join(', ')}]`).join(', ')}` : null,
+          Object.keys(episodePartsMap).length > 0 ? `Multi-part episodes: ${Object.entries(episodePartsMap).map(([ep, p]) => `Ep ${ep} (${p} parts)`).join(', ')}` : null,
+          Object.keys(episodeSkipMarkersMap).length > 0 ? `Episode-specific skip markers configured` : null,
+          linkedCount > 0 ? `Pasted provided links and probed duration` : `Input boxes kept clean & empty for unprovided links`,
+          `Navigated to Step 2 upload form`
+        ].filter(Boolean) as string[];
 
         return res.json({
           thought: "Configured media upload adhering strictly to Boss's episode count, quality, language, and link pasting instructions.",
@@ -871,13 +1503,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           reply: fallbackReply,
           voiceUsed: selectedVoice,
           tmdbMetadata: tmdb || null,
-          summary: [
-            `Built ${finalEpCount} episode(s) for ${tmdb?.title || searchTitle}`,
-            `Target quality set to ${targetQualities.join(', ')}`,
-            `Audio language set to ${targetLanguages.join(', ')}`,
-            linkedCount > 0 ? `Pasted provided links and probed duration` : `Input boxes kept clean & empty for unprovided links`,
-            `Navigated to Step 2 upload form`
-          ],
+          summary: summaryBullets,
           actions: fallbackActions
         });
       }
@@ -903,6 +1529,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               act.data = act.data || {};
               act.data.qualities = targetQualities;
               act.data.languages = targetLanguages;
+              if (mediaType === "anime") {
+                act.data.type = "anime";
+                if (!act.data.genres || !act.data.genres.includes("Anime")) {
+                  act.data.genres = ["Anime", ...(act.data.genres || ["Action", "Fantasy"])];
+                }
+              }
               if (tmdb) {
                 if (!act.data.posterUrl) act.data.posterUrl = tmdb.posterUrl;
                 if (!act.data.backdropUrl) act.data.backdropUrl = tmdb.backdropUrl;
@@ -912,7 +1544,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             if (act.type === "BUILD_SERIES_EPISODES") {
               hasEpisodes = true;
               act.data = act.data || {};
-              // Enforce exact requested episode count and verified link assignment
+              // Enforce exact requested episode count, overrides and parts
               act.data.episodes = buildVerifiedEpisodes();
             }
             if (act.type === "CALCULATE_DURATION") hasCalc = true;
@@ -930,7 +1562,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                 backdropUrl: tmdb.backdropUrl,
                 rating: tmdb.rating,
                 year: tmdb.year,
-                genres: tmdb.genres,
+                genres: mediaType === "anime" ? ["Anime", ...tmdb.genres] : tmdb.genres,
                 qualities: targetQualities,
                 languages: targetLanguages
               }
@@ -965,7 +1597,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         let inlineAudio: { audio: string; format: string } | null = null;
         if (parsed.reply) {
           try {
-            inlineAudio = await generateInlineTts(ai, parsed.reply, selectedVoice, elevenlabsApiKey, elevenlabsVoiceId);
+            inlineAudio = await Promise.race([
+              generateInlineTts(ai, parsed.reply, selectedVoice, elevenlabsApiKey, elevenlabsVoiceId),
+              new Promise<null>((r) => setTimeout(() => r(null), 3000))
+            ]);
           } catch(e){}
         }
 

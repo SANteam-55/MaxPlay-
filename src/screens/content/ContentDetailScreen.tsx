@@ -475,7 +475,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   onSelectContent, 
   onStartDownload 
 }) => {
-  const { user } = useAuthContext();
+  const { user, isLoading: isAuthLoading } = useAuthContext();
   const [activeTab, setActiveTab] = useState<'forYou' | 'comments'>('forYou');
   
   // Content type evaluation - Precise Movie vs Series / Anime
@@ -498,6 +498,22 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const initialSavedData = useMemo(() => {
     if (!content?.id) return null;
     try {
+      // Direct history navigation hint (Ultra Pro Max instant restore)
+      if ((content as any)?._historyResume) {
+        const hr = (content as any)._historyResume;
+        return {
+          episodeIndex: hr.episodeIndex !== undefined ? hr.episodeIndex : (hr.currentEpisode ? hr.currentEpisode - 1 : (hr.episodeNum ? hr.episodeNum - 1 : 0)),
+          seasonIndex: hr.seasonIndex ?? 0,
+          partIndex: hr.partIndex ?? 0,
+          currentTime: hr.watchedSeconds || hr.currentTime || 0,
+          watchedSeconds: hr.watchedSeconds || hr.currentTime || 0,
+          activeLanguage: hr.activeLanguage || '',
+          activeQuality: hr.activeQuality || 'auto',
+          partProgressMap: hr.partProgressMap || {},
+          seasonEpisodeMap: hr.seasonEpisodeMap || {}
+        };
+      }
+
       const userKey = user?.uid ? `maxplay_progress_${user.uid}_${content.id}` : null;
       const userSeriesKey = user?.uid ? `maxplay_series_progress_${user.uid}_${content.id}` : null;
       const globalKey = `maxplay_progress_${content.id}`;
@@ -519,7 +535,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         if (Array.isArray(histList)) {
           const match = histList.find((h: any) => h.contentId === content.id || h.id === content.id);
           if (match) {
-            return match;
+            return {
+              ...match,
+              episodeIndex: match.episodeIndex !== undefined ? match.episodeIndex : (match.currentEpisode ? match.currentEpisode - 1 : (match.episodeNum ? match.episodeNum - 1 : 0))
+            };
           }
         }
       }
@@ -527,7 +546,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       console.warn('Initial storage load error:', e);
     }
     return null;
-  }, [content?.id, user?.uid]);
+  }, [content, user?.uid]);
 
   // Multi-part, Episode, and Season State
   const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(() => (initialSavedData?.seasonIndex !== undefined && !isMovie) ? initialSavedData.seasonIndex : 0);
@@ -564,7 +583,23 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const userExplicitlyChoseEpisodeRef = useRef<boolean>(false);
   const maxWatchedEpisodeRef = useRef<number>(initialSavedData?.episodeIndex ?? 0);
   
-  const [episodeViewMode, setEpisodeViewMode] = useState<'list' | 'grid'>('list');
+  const [episodeViewMode, setEpisodeViewMode] = useState<'list' | 'grid'>(() => {
+    try {
+      const saved = localStorage.getItem('maxplay_ep_view_mode');
+      return saved === 'grid' ? 'grid' : 'list';
+    } catch (e) {
+      return 'list';
+    }
+  });
+
+  const handleSetEpisodeViewMode = (mode: 'list' | 'grid') => {
+    setEpisodeViewMode(mode);
+    try {
+      localStorage.setItem('maxplay_ep_view_mode', mode);
+    } catch (e) {
+      console.warn('Unable to persist episode view mode:', e);
+    }
+  };
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
   const [showDetails, setShowDetails] = useState(false);
   const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
@@ -682,14 +717,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     // ANTI-OVERWRITE PROTECTION (Ultra Pro Max Safe Guard):
     // 1. If cloud resume check is pending, and user has NOT explicitly chosen this episode,
-    //    suppress cloud sync to prevent zero pulses or default Episode 1 from wiping cloud history
-    if (!isCloudResumeResolvedRef.current && curState.selectedEpisodeIndex === 0 && !userExplicitlyChoseEpisodeRef.current) {
-      shouldSyncCloud = false;
+    //    suppress ALL saving (both cloud and local) to prevent default Episode 1 from wiping cloud history
+    if (!isCloudResumeResolvedRef.current && !userExplicitlyChoseEpisodeRef.current) {
+      console.log('[ResumeGuard] Save suppressed: cloud resume is still pending');
+      return;
     }
 
     // 2. If user previously reached a higher episode (e.g. Episode 27) and current episode is lower,
-    //    and watch time on this lower episode is under 15 seconds, and user did NOT explicitly select it:
-    if (!curState.isMovie && maxWatchedEpisodeRef.current > curState.selectedEpisodeIndex && actualTime < 15 && !userExplicitlyChoseEpisodeRef.current) {
+    //    and watch time on this lower episode is under 30 seconds, and user did NOT explicitly select it:
+    if (!curState.isMovie && maxWatchedEpisodeRef.current > curState.selectedEpisodeIndex && actualTime < 30 && !userExplicitlyChoseEpisodeRef.current) {
       console.log('[ResumeGuard] Shielded higher episode', maxWatchedEpisodeRef.current, 'from being overwritten by episode', curState.selectedEpisodeIndex);
       return;
     }
@@ -758,20 +794,26 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     let isMounted = true;
 
-    // Safety timeout to guarantee player is never blocked for more than 1.2s
+    // Generous safety timeout: 6 seconds to ensure mobile / cold network has plenty of time
     const timeoutId = setTimeout(() => {
       if (isMounted) {
         setIsCloudResumeChecking(false);
         isCloudResumeResolvedRef.current = true;
       }
-    }, 1200);
+    }, 6000);
+
+    // If auth is still initializing, wait for it before evaluating user state
+    if (isAuthLoading && !user) {
+      return () => {
+        isMounted = false;
+        clearTimeout(timeoutId);
+      };
+    }
 
     // Fetch latest from Firestore for current User Account
     if (user?.uid) {
       getUserProgress(user.uid, content.id).then((cloud) => {
         if (!isMounted) return;
-        isCloudResumeResolvedRef.current = true;
-        setIsCloudResumeChecking(false);
 
         if (cloud) {
           if (cloud.episodeIndex !== undefined) {
@@ -785,9 +827,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             setSeasonEpisodeMap(prev => ({ ...prev, ...cloud.seasonEpisodeMap }));
           }
 
-          if (cloud.lastWatchedAt || cloud.episodeIndex !== undefined) {
+          if (cloud.lastWatchedAt || cloud.episodeIndex !== undefined || cloud.currentEpisode !== undefined) {
             let targetSeason = cloud.seasonIndex ?? 0;
-            let targetEpisode = cloud.episodeIndex ?? 0;
+            let targetEpisode = cloud.episodeIndex !== undefined ? cloud.episodeIndex : (cloud.currentEpisode ? cloud.currentEpisode - 1 : 0);
             let targetPart = cloud.partIndex ?? 0;
             let targetTime = cloud.currentTime || cloud.watchedSeconds || 0;
 
@@ -852,6 +894,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         }
       }).catch((err) => {
         console.warn('Cloud progress fetch warning:', err);
+      }).finally(() => {
         if (isMounted) {
           isCloudResumeResolvedRef.current = true;
           setIsCloudResumeChecking(false);
@@ -889,7 +932,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       window.removeEventListener('pagehide', handleExitSave);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [content?.id, user?.uid, isMovie]);
+  }, [content?.id, user?.uid, isAuthLoading, isMovie]);
 
   // Subscribe to all content to enrich recommendations
   useEffect(() => {
@@ -1790,6 +1833,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         )}
         
         {(() => {
+          if (isCloudResumeChecking && !initialSavedData) {
+            return null;
+          }
+
           const currentPlayerSkipMarkers = isMovie 
             ? (activeMoviePart?.skipMarkers || (activeMoviePart as any)?.skip_markers || content.skipMarkers || (content as any).skip_markers || {
                 introStart: (content as any).introStart || (content as any).intro_start,
@@ -2056,7 +2103,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         )}
 
         {/* OTT INTERACTIVE STUDIO GENRES STRIP */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar scrollbar-none py-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           <span className="text-xs font-bold text-white/50 shrink-0">Genres:</span>
           <div className="flex items-center gap-1.5 shrink-0">
             {genreList.map((genre, idx) => (
@@ -2233,7 +2280,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 {!isMovie && (
                   <div className="flex items-center p-0.5 bg-[#1a1a22] border border-white/10 rounded-xl">
                     <button
-                      onClick={() => setEpisodeViewMode('list')}
+                      onClick={() => handleSetEpisodeViewMode('list')}
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                         episodeViewMode === 'list' 
                           ? 'bg-[#8B5CF6] text-white shadow-sm' 
@@ -2245,7 +2292,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <span>List</span>
                     </button>
                     <button
-                      onClick={() => setEpisodeViewMode('grid')}
+                      onClick={() => handleSetEpisodeViewMode('grid')}
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                         episodeViewMode === 'grid' 
                           ? 'bg-[#8B5CF6] text-white shadow-sm' 
@@ -2409,7 +2456,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       </div>
                     ) : (
                       /* 2. GRID VIEW MODE (Horizontal Scrollable Shelf) */
-                      <div className="flex items-center gap-2 overflow-x-auto py-1.5 px-0.5 scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent">
+                      <div className="flex items-center gap-2 overflow-x-auto py-1.5 px-0.5 no-scrollbar scrollbar-none" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
                         {(activeSeasonEpisodes.length > 0 ? activeSeasonEpisodes : [{ id: '1', title: 'Episode 1' }]).map((ep, idx) => {
                             const isCurrent = selectedEpisodeIndex === idx;
                             return (

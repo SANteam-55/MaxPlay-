@@ -33,7 +33,7 @@ interface MeScreenProps {
   onOpenMyComments?: () => void;
   onOpenFeedback?: () => void;
   onLogout?: () => void;
-  onPlayContent?: (contentId: string) => void;
+  onPlayContent?: (contentId: string, historyMeta?: any) => void;
 }
 
 export const MeScreen: React.FC<MeScreenProps> = ({

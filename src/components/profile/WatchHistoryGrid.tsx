@@ -5,7 +5,7 @@ import { ChevronRight, PlayCircle } from 'lucide-react';
 
 interface WatchHistoryGridProps {
   onOpenHistory?: () => void;
-  onPlayContent?: (contentId: string) => void;
+  onPlayContent?: (contentId: string, historyMeta?: any) => void;
 }
 
 export const WatchHistoryGrid: React.FC<WatchHistoryGridProps> = ({ onOpenHistory, onPlayContent }) => {
@@ -24,9 +24,9 @@ export const WatchHistoryGrid: React.FC<WatchHistoryGridProps> = ({ onOpenHistor
 
   if (historyItems.length === 0) return null;
 
-  const handleCardClick = (contentId: string) => {
+  const handleCardClick = (contentId: string, item: any) => {
     if (onPlayContent) {
-      onPlayContent(contentId);
+      onPlayContent(contentId, item);
     }
   };
 
@@ -58,7 +58,7 @@ export const WatchHistoryGrid: React.FC<WatchHistoryGridProps> = ({ onOpenHistor
           return (
             <button
               key={item.contentId || index}
-              onClick={() => handleCardClick(item.contentId)}
+              onClick={() => handleCardClick(item.contentId, item)}
               className="relative flex-none w-[180px] h-[100px] sm:w-[220px] sm:h-[124px] rounded-xl overflow-hidden group snap-start cursor-pointer border border-[#27272A] hover:border-[#3F3F46] transition-all bg-[#141416]"
             >
               <img 

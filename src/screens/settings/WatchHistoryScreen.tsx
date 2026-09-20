@@ -9,7 +9,7 @@ import { NativeBanner } from '../../components/ads/NativeBanner';
 
 interface WatchHistoryScreenProps {
   onBack: () => void;
-  onPlayContent?: (contentId: string) => void;
+  onPlayContent?: (contentId: string, historyMeta?: any) => void;
 }
 
 export const WatchHistoryScreen: React.FC<WatchHistoryScreenProps> = ({
@@ -125,7 +125,7 @@ export const WatchHistoryScreen: React.FC<WatchHistoryScreenProps> = ({
                   <HistoryItemComponent
                     key={`${item.id}-${index}`}
                     item={item}
-                    onPlay={(i: any) => onPlayContent && onPlayContent(i.contentId)}
+                    onPlay={(i: any) => onPlayContent && onPlayContent(i.contentId, i)}
                     onDelete={handleDeleteItem}
                   />
                 ))}
