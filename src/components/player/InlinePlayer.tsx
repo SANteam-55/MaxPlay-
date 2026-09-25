@@ -546,6 +546,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       setCurrentTime(initialTime);
       targetSeekTimeRef.current = initialTime;
       isInitialSeekDoneRef.current = initialTime <= 0;
+      setAutoShowSkip(false);
+      if (lastActiveMarkerKeyRef.current !== null) {
+        lastActiveMarkerKeyRef.current = null;
+      }
       if (videoRef.current) {
         try {
           videoRef.current.currentTime = initialTime;
@@ -568,7 +572,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (!video || !activeVideoUrl) return;
 
     // Check if this is a quality/language switch on the same streamKey
-    const isSameStreamSwitch = lastActiveUrlRef.current && lastActiveUrlRef.current !== activeVideoUrl;
+    const isSameStreamSwitch = (prevStreamKeyRef.current === streamKey) && !!lastActiveUrlRef.current && lastActiveUrlRef.current !== activeVideoUrl;
     lastActiveUrlRef.current = activeVideoUrl;
 
     let targetStartTime = initialTime;
@@ -679,19 +683,32 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      }
     };
-  }, [activeVideoUrl]); 
+  }, [activeVideoUrl, streamKey]); 
 
-  // Fullscreen listener
+  // Fullscreen listener with cross-browser / mobile vendor support
   useEffect(() => {
-    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    const handleFsChange = () => {
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+      );
+      setIsFullscreen(isFs);
+    };
+
     document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+    document.addEventListener('MSFullscreenChange', handleFsChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('MSFullscreenChange', handleFsChange);
+    };
   }, []);
 
   // Picture in Picture listeners to keep exact playback state synchronized without resetting
@@ -798,9 +815,27 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const container = playerContainerRef.current;
     if (!container) return;
 
-    if (!document.fullscreenElement) {
+    const isCurrentlyFs = !!(
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement
+    );
+
+    if (!isCurrentlyFs) {
       try {
-        await container.requestFullscreen();
+        if (container.requestFullscreen) {
+          await container.requestFullscreen();
+        } else if ((container as any).webkitRequestFullscreen) {
+          await (container as any).webkitRequestFullscreen();
+        } else if ((container as any).mozRequestFullScreen) {
+          await (container as any).mozRequestFullScreen();
+        } else if ((container as any).msRequestFullscreen) {
+          await (container as any).msRequestFullscreen();
+        } else if (videoRef.current && (videoRef.current as any).webkitEnterFullscreen) {
+          (videoRef.current as any).webkitEnterFullscreen();
+        }
+
         if (screen.orientation && (screen.orientation as any).lock) {
           ((screen.orientation as any).lock as any)('landscape').catch(() => {});
         } else if ((screen as any).lockOrientation) {
@@ -815,7 +850,16 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       }
     } else {
       try {
-        await document.exitFullscreen();
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        } else if ((document as any).mozCancelFullScreen) {
+          await (document as any).mozCancelFullScreen();
+        } else if ((document as any).msExitFullscreen) {
+          await (document as any).msExitFullscreen();
+        }
+
         if (screen.orientation && screen.orientation.unlock) {
           ((screen.orientation as any).unlock as any)();
         } else if ((screen as any).unlockOrientation) {

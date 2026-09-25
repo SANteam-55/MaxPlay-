@@ -43,6 +43,7 @@ export interface ContentItem {
   duration?: number; // seconds
   seasons?: number;
   episodes?: number;
+  hasExternalSeasons?: boolean;
   seasonsData?: SeasonData[];
   episodesList?: Episode[];
   language?: string;

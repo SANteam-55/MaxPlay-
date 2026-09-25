@@ -31,7 +31,7 @@ import {
   ShieldAlert,
   Loader2
 } from 'lucide-react';
-import { ContentItem, CommentItem, CommentReplyItem } from '../../types';
+import { ContentItem, CommentItem, CommentReplyItem, SeasonData } from '../../types';
 import { InlinePlayer } from '../../components/player/InlinePlayer';
 import { useAuthContext } from '../../context/AuthContext';
 import { 
@@ -470,11 +470,39 @@ const CURATED_RECOMMENDATIONS: Partial<ContentItem>[] = [
 ];
 
 export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({ 
-  content, 
+  content: rawContent, 
   onBack, 
   onSelectContent, 
   onStartDownload 
 }) => {
+  const [externalSeasons, setExternalSeasons] = useState<SeasonData[] | null>(null);
+
+  useEffect(() => {
+    if (rawContent?.id && (rawContent as any)?.hasExternalSeasons) {
+      import('../../services/contentService').then(({ fetchExternalSeasons }) => {
+        fetchExternalSeasons(rawContent.id).then(seasons => {
+          if (seasons && seasons.length > 0) {
+            setExternalSeasons(seasons);
+          }
+        });
+      });
+    }
+  }, [rawContent?.id, (rawContent as any)?.hasExternalSeasons]);
+
+  const content = useMemo(() => {
+    if (!rawContent) return rawContent;
+    const sData = (externalSeasons && externalSeasons.length > 0) ? externalSeasons : rawContent.seasonsData;
+    let epList = rawContent.episodesList;
+    if ((!epList || epList.length === 0) && sData && sData.length > 0) {
+      epList = sData.flatMap((s: any) => s.episodes || []);
+    }
+    return {
+      ...rawContent,
+      seasonsData: sData,
+      episodesList: epList
+    };
+  }, [rawContent, externalSeasons]);
+
   const { user, isLoading: isAuthLoading } = useAuthContext();
   const [activeTab, setActiveTab] = useState<'forYou' | 'comments'>('forYou');
   
@@ -1855,7 +1883,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
           return (
             <InlinePlayer
-              key={`${content.id}-${currentPartKey}`}
+              key={content.id}
               streamKey={`${content.id}-${currentPartKey}`}
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}

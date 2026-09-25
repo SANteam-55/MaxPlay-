@@ -16,7 +16,7 @@ import {
   Timestamp, collectionGroup 
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { ContentItem, EpisodeItem, CommentItem, CommentReplyItem } from '../types';
+import { ContentItem, EpisodeItem, CommentItem, CommentReplyItem, SeasonData } from '../types';
 
 export const CONTENT_COLLECTION = 'content';
 export const MESSAGES_COLLECTION = 'messages';
@@ -278,8 +278,11 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
         duration: data.duration || 1400,
         seasons: data.seasons || 1,
         episodes: data.episodes || 12,
+        hasExternalSeasons: data.hasExternalSeasons || false,
         seasonsData: data.seasonsData || null,
-        episodesList: data.episodesList || null,
+        episodesList: (data.episodesList && data.episodesList.length > 0)
+          ? data.episodesList
+          : (data.seasonsData && data.seasonsData.length > 0 ? data.seasonsData.flatMap((s: any) => s.episodes || []) : null),
         videoUrl: data.videoUrl || null,
         videoLinks: data.videoLinks || null,
         uploader: data.uploader || { name: 'MaxPlay Admin', verified: true },
@@ -309,12 +312,43 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
   });
 };
 
+// Fetch External Partitioned Seasons if present
+export const fetchExternalSeasons = async (contentId: string): Promise<SeasonData[] | null> => {
+  try {
+    const snap = await getDoc(doc(db, 'content_seasons', contentId));
+    if (snap.exists() && snap.data()?.seasonsData) {
+      return snap.data().seasonsData as SeasonData[];
+    }
+    return null;
+  } catch (err) {
+    console.warn('Error fetching external seasons:', err);
+    return null;
+  }
+};
+
 // Fetch Content Detail by ID
 export const fetchContentById = async (id: string): Promise<ContentItem | null> => {
   try {
     const docSnap = await getDoc(doc(db, CONTENT_COLLECTION, id));
     if (docSnap.exists()) {
-      return { id: docSnap.id, ...docSnap.data() } as ContentItem;
+      const data = docSnap.data();
+      let seasonsData = data.seasonsData || null;
+      if (data.hasExternalSeasons) {
+        const extSeasons = await fetchExternalSeasons(id);
+        if (extSeasons && extSeasons.length > 0) {
+          seasonsData = extSeasons;
+        }
+      }
+      const episodesList = (data.episodesList && data.episodesList.length > 0)
+        ? data.episodesList
+        : (seasonsData && seasonsData.length > 0 ? seasonsData.flatMap((s: any) => s.episodes || []) : null);
+
+      return {
+        id: docSnap.id,
+        ...data,
+        seasonsData,
+        episodesList
+      } as ContentItem;
     }
     return null;
   } catch (err) {

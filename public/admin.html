@@ -5139,6 +5139,17 @@
         }
       } else {
         switchUploadMode('series');
+        if (item.hasExternalSeasons) {
+          try {
+            getDoc(doc(db, 'content_seasons', item.id)).then(extSnap => {
+              if (extSnap && extSnap.exists() && extSnap.data() && extSnap.data().seasonsData) {
+                window.seasonsData = JSON.parse(JSON.stringify(extSnap.data().seasonsData));
+                window.currentSeasonIdx = 0;
+                if (typeof renderSeasonsUI === 'function') renderSeasonsUI();
+              }
+            }).catch(err => console.warn('Could not load external seasons:', err));
+          } catch(e) {}
+        }
         if (item.seasonsData && Array.isArray(item.seasonsData) && item.seasonsData.length > 0) {
           window.seasonsData = JSON.parse(JSON.stringify(item.seasonsData));
         } else if (item.episodesList && Array.isArray(item.episodesList) && item.episodesList.length > 0) {
@@ -5190,8 +5201,11 @@
 
     window.deleteContent = async function(id) {
       if (!id) return;
+      const confirmed = await window.showCustomConfirm('Delete Content', 'Are you sure you want to delete this content item? This action cannot be undone.', { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         await deleteDoc(doc(db, 'content', id));
+        deleteDoc(doc(db, 'content_seasons', id)).catch(() => {});
         showToast('Content deleted successfully!');
         if (window.loadContent) window.loadContent();
         if (window.loadDashboardStats) window.loadDashboardStats();
@@ -5563,7 +5577,7 @@
                 <i class="fa-solid fa-film"></i> Part ${i + 1}
               </span>
               ${i > 0 ? `
-              <button type="button" class="btn-danger" style="height:28px; padding:0 10px; font-size:11px;" onclick="this.closest('.movie-part-card').remove()">
+              <button type="button" class="btn-danger" style="height:28px; padding:0 10px; font-size:11px;" onclick="window.removeMoviePartCard(this)">
                 <i class="fa-solid fa-trash"></i> Remove Part
               </button>` : `<span style="font-size:10px; color:var(--text-tertiary);">Main Movie Stream</span>`}
             </div>
@@ -5818,6 +5832,14 @@
       renderSeasonsUI();
     };
 
+    window.removeMoviePartCard = async function(btn) {
+      const confirmed = await window.showCustomConfirm('Remove Part', 'Are you sure you want to remove this movie part?', { okText: 'Remove', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (confirmed && btn) {
+        const card = btn.closest('.movie-part-card');
+        if (card) card.remove();
+      }
+    };
+
     window.deleteActiveSeason = async function() {
       if (window.seasonsData.length <= 1) {
         showToast('At least one season must remain.');
@@ -5825,6 +5847,8 @@
       }
       const s = window.seasonsData[window.currentSeasonIdx];
       const sName = s?.seasonTitle || ('Season ' + (window.currentSeasonIdx + 1));
+      const confirmed = await window.showCustomConfirm('Delete Season', `Are you sure you want to delete ${sName}?`, { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       window.seasonsData.splice(window.currentSeasonIdx, 1);
       window.currentSeasonIdx = Math.max(0, window.currentSeasonIdx - 1);
       renderSeasonsUI();
@@ -6238,7 +6262,9 @@
       }
     };
 
-    window.removeEpisodeExtraPart = function(epIdx, extraIdx) {
+    window.removeEpisodeExtraPart = async function(epIdx, extraIdx) {
+      const confirmed = await window.showCustomConfirm('Remove Part', 'Are you sure you want to remove this extra video link?', { okText: 'Remove', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       syncEpisodesFromDOM();
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
@@ -6294,7 +6320,9 @@
       renderEpisodesList();
     };
 
-    window.deleteEpisodeCard = function(epIdx) {
+    window.deleteEpisodeCard = async function(epIdx) {
+      const confirmed = await window.showCustomConfirm('Delete Episode', `Are you sure you want to delete Episode ${epIdx + 1}?`, { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       syncEpisodesFromDOM();
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes) {
@@ -6371,6 +6399,86 @@
       }
     };
 
+    // Helper to safely optimize Base64 data URIs so documents never exceed Firestore's 1MB limit
+    window.optimizeImageString = async function(urlOrDataUri, maxDim = 800, quality = 0.7) {
+      if (!urlOrDataUri || typeof urlOrDataUri !== 'string') return '';
+      const trimmed = urlOrDataUri.trim();
+      if (!trimmed.startsWith('data:image/')) {
+        return trimmed;
+      }
+      return new Promise((resolve) => {
+        try {
+          const img = new Image();
+          img.onload = () => {
+            let w = img.width || maxDim;
+            let h = img.height || maxDim;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) {
+                h = Math.round((h * maxDim) / w);
+                w = maxDim;
+              } else {
+                w = Math.round((w * maxDim) / h);
+                h = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, w);
+            canvas.height = Math.max(1, h);
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'medium';
+            ctx.drawImage(img, 0, 0, w, h);
+
+            let compressed = canvas.toDataURL('image/webp', quality);
+            if (!compressed || compressed.length > trimmed.length) {
+              compressed = canvas.toDataURL('image/jpeg', quality);
+            }
+            if (compressed.length > 120000) {
+              compressed = canvas.toDataURL('image/jpeg', 0.5);
+            }
+            resolve(compressed);
+          };
+          img.onerror = () => resolve(trimmed);
+          img.src = trimmed;
+        } catch(e) {
+          console.warn('Canvas optimization error:', e);
+          resolve(trimmed);
+        }
+      });
+    };
+
+    // Helper to deep prune empty strings, null, undefined, empty objects, and empty arrays
+    window.pruneEmptyPayload = function(obj) {
+      if (obj === null || obj === undefined) return undefined;
+      if (typeof obj !== 'object') {
+        if (typeof obj === 'string') {
+          return obj.trim();
+        }
+        return obj;
+      }
+      if (Array.isArray(obj)) {
+        const cleanedArr = obj
+          .map(item => window.pruneEmptyPayload(item))
+          .filter(item => item !== undefined && item !== null && (typeof item !== 'string' || item !== ''));
+        return cleanedArr;
+      }
+      const cleanedObj = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (value === false || value === 0) {
+          cleanedObj[key] = value;
+          continue;
+        }
+        const cleanedVal = window.pruneEmptyPayload(value);
+        if (cleanedVal !== undefined && cleanedVal !== null && cleanedVal !== '') {
+          if (typeof cleanedVal === 'object' && !Array.isArray(cleanedVal) && Object.keys(cleanedVal).length === 0) {
+            continue;
+          }
+          cleanedObj[key] = cleanedVal;
+        }
+      }
+      return cleanedObj;
+    };
+
     window.publishMedia = async function() {
       const btn = document.getElementById('btn-publish-live');
       if (btn) {
@@ -6399,8 +6507,13 @@
         const seasons = parseInt(document.getElementById('up-seasons')?.value || '1');
         const genreStr = document.getElementById('up-genre')?.value || 'Action, Anime';
         const desc = document.getElementById('up-desc')?.value || 'Watch high quality content on MaxPlay.';
-        const posterUrl = document.getElementById('up-poster')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800';
-        const backdropUrl = document.getElementById('up-backdrop')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200';
+        
+        // Optimize poster and backdrop (safely handles any base64 inputs to stay lightweight)
+        const rawPoster = document.getElementById('up-poster')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800';
+        const rawBackdrop = document.getElementById('up-backdrop')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200';
+        const posterUrl = await window.optimizeImageString(rawPoster, 600, 0.7);
+        const backdropUrl = await window.optimizeImageString(rawBackdrop, 800, 0.7);
+
         const searchHotSection = document.getElementById('up-search-hot-section')?.value || null;
         const searchHotPosition = parseInt(document.getElementById('up-search-hot-position')?.value || '0');
 
@@ -6476,12 +6589,11 @@
                      if (xpu) {
                         const xDur = await window.getVideoDuration(xpu);
                         ep.duration += xDur;
-                        await new Promise(r => setTimeout(r, 500)); // Small delay for extra parts
+                        await new Promise(r => setTimeout(r, 200));
                      }
                    }
                  }
               }
-              // Even if ep.duration was already set, we might need xp.duration for individual part info (optional)
               if (ep.videoLinks && Array.isArray(ep.videoLinks)) {
                 for (let xp of ep.videoLinks) {
                   let xpu = '';
@@ -6500,10 +6612,28 @@
             }
           }
 
-          // Backend Safety: Prune blank/empty quality entries so Firestore database stays completely clean
-          activeSeasons.forEach(s => {
+          // Backend Safety: Prune blank/empty quality entries and sanitize episode thumbnails
+          for (let s of activeSeasons) {
             if (s && s.episodes) {
-              s.episodes.forEach(ep => {
+              for (let ep of s.episodes) {
+                // If thumbnail is identical to poster or default, eliminate it to save payload
+                if (!ep.thumbnailUrl || ep.thumbnailUrl === posterUrl || ep.thumbnailUrl === rawPoster || ep.thumbnailUrl.includes('images.unsplash.com/photo-1578632767115-351597cf2477')) {
+                  delete ep.thumbnailUrl;
+                } else if (typeof ep.thumbnailUrl === 'string' && ep.thumbnailUrl.startsWith('data:image/')) {
+                  ep.thumbnailUrl = await window.optimizeImageString(ep.thumbnailUrl, 320, 0.6);
+                }
+                if (ep.videoLinks && Array.isArray(ep.videoLinks) && ep.videoLinks.length === 0) {
+                  delete ep.videoLinks;
+                }
+                if (ep.skipMarkers && Object.keys(ep.skipMarkers).length === 0) {
+                  delete ep.skipMarkers;
+                }
+                if (ep.subtitleSources && Object.keys(ep.subtitleSources).length === 0) {
+                  delete ep.subtitleSources;
+                }
+                if (ep.downloadUrl && !ep.downloadUrl.trim()) {
+                  delete ep.downloadUrl;
+                }
                 if (ep && ep.videoSources) {
                   for (let l in ep.videoSources) {
                     for (let q in ep.videoSources[l]) {
@@ -6532,9 +6662,9 @@
                     }
                   });
                 }
-              });
+              }
             }
-          });
+          }
 
           if (movieParts && movieParts.length > 0) {
             movieParts.forEach(p => {
@@ -6590,7 +6720,16 @@
         }
 
         const contentId = window.editingContentId || ('content-' + Date.now());
-        const contentDoc = {
+
+        // Lightweight episode references for backward compatibility (saving hundreds of KB)
+        const lightweightEpisodes = activeEpisodesList.map(ep => ({
+          id: ep.id,
+          episodeNumber: ep.episodeNumber,
+          title: ep.title || ('Episode ' + ep.episodeNumber),
+          duration: ep.duration || 1420
+        }));
+
+        const rawDoc = {
           id: contentId,
           title,
           type,
@@ -6613,13 +6752,49 @@
           availableLanguages: window.activeLanguages || ['Hindi', 'English'],
           videoLinks: movieParts.length > 0 ? movieParts : (firstVideoUrl ? [firstVideoUrl] : []),
           seasonsData: activeSeasons,
-          episodesList: activeEpisodesList,
+          episodesList: lightweightEpisodes,
           trending: selectedRows.length > 0,
           createdAt: new Date().toISOString()
         };
 
         if (movieSkipMarkers !== undefined) {
-          contentDoc.skipMarkers = movieSkipMarkers;
+          rawDoc.skipMarkers = movieSkipMarkers;
+        }
+
+        // Deep-prune payload to remove empty and unused structures
+        let contentDoc = window.pruneEmptyPayload(rawDoc);
+
+        // Pre-flight byte size validation
+        let docBytes = new Blob([JSON.stringify(contentDoc)]).size;
+        console.log(`[MaxPlay Publish] Content size: ${(docBytes / 1024).toFixed(1)} KB`);
+
+        // FIRESTORE 1MB DOCUMENT SIZE LIMIT PROTECTION
+        // If the document exceeds 650 KB (well within the 1,048,576 byte limit),
+        // automatically activate the Auto-Partition Engine to save seasonsData into linked content_seasons document.
+        if (docBytes > 650000 && !isMovieUpload) {
+          console.warn(`[MaxPlay Publish] Document size ${(docBytes / 1024).toFixed(1)} KB exceeds 650 KB threshold. Partitioning seasonsData...`);
+          await setDoc(doc(db, 'content_seasons', contentId), {
+            contentId: contentId,
+            seasonsData: activeSeasons,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+
+          contentDoc.hasExternalSeasons = true;
+          // Keep a lightweight preview in main doc
+          contentDoc.seasonsData = activeSeasons.map(s => ({
+            seasonNumber: s.seasonNumber,
+            seasonTitle: s.seasonTitle,
+            episodes: (s.episodes || []).slice(0, 3).map(ep => ({
+              id: ep.id,
+              episodeNumber: ep.episodeNumber,
+              title: ep.title,
+              duration: ep.duration
+            }))
+          }));
+          delete contentDoc.episodesList;
+
+          docBytes = new Blob([JSON.stringify(contentDoc)]).size;
+          console.log(`[MaxPlay Publish] Successfully partitioned! Main doc size reduced to: ${(docBytes / 1024).toFixed(1)} KB`);
         }
 
         await setDoc(doc(db, 'content', contentId), contentDoc, { merge: true });
@@ -6725,6 +6900,9 @@
     };
 
     window.deleteCategory = async function(idx) {
+      const catName = window.categoriesData[idx]?.name || 'category';
+      const confirmed = await window.showCustomConfirm('Delete Category', `Are you sure you want to delete "${catName}"?`, { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         window.syncCategoriesFromDOM();
         window.categoriesData.splice(idx, 1);
@@ -7062,6 +7240,9 @@
     };
 
     window.deleteHomeRow = async function(idx) {
+      const rowTitle = window.homeRowsData[idx]?.title || 'row section';
+      const confirmed = await window.showCustomConfirm('Delete Home Row', `Are you sure you want to delete "${rowTitle}"?`, { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         window.syncHomeRowsFromDOM();
         window.homeRowsData.splice(idx, 1);
@@ -7210,6 +7391,8 @@
     };
 
     window.deleteHeroBanner = async function(bId) {
+      const confirmed = await window.showCustomConfirm('Delete Hero Banner', 'Are you sure you want to delete this hero banner?', { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         await deleteDoc(doc(db, 'heroBanners', bId));
         showToast('Banner deleted');
@@ -8410,6 +8593,8 @@
 
     window.deleteUserAccount = async function(uid) {
       if (!uid) return;
+      const confirmed = await window.showCustomConfirm('Delete User Account', 'Are you sure you want to delete this user account? This cannot be undone.', { okText: 'Delete User', cancelText: 'Cancel', icon: 'fa-solid fa-user-slash' });
+      if (!confirmed) return;
       try {
         await deleteDoc(doc(db, 'users', uid));
         showToast('User account deleted from Firestore!');
@@ -10664,6 +10849,8 @@ docs.forEach(docItem => {
     };
     
     window.deleteHotBanner = async function(id) {
+      const confirmed = await window.showCustomConfirm('Delete Banner', 'Are you sure you want to delete this banner?', { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         if (window.hotScreensBanners && window.hotScreensBanners[window.activeHotScreen]) {
           window.hotScreensBanners[window.activeHotScreen] = window.hotScreensBanners[window.activeHotScreen].filter(b => b.id !== id);
@@ -10721,6 +10908,8 @@ docs.forEach(docItem => {
     };
     
     window.deleteHotCategory = async function(id) {
+      const confirmed = await window.showCustomConfirm('Delete Category', 'Are you sure you want to delete this category?', { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         if (window.hotScreensCategories && window.hotScreensCategories[window.activeHotScreen]) {
           window.hotScreensCategories[window.activeHotScreen] = window.hotScreensCategories[window.activeHotScreen].filter(c => c.id !== id);
@@ -11216,6 +11405,8 @@ docs.forEach(docItem => {
     };
     
     window.deleteHotRow = async function(id) {
+      const confirmed = await window.showCustomConfirm('Delete Row', 'Are you sure you want to delete this row section?', { okText: 'Delete', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         if (!window.hotScreensData || !window.hotScreensData[window.activeHotScreen]) return;
         window.hotScreensData[window.activeHotScreen] = window.hotScreensData[window.activeHotScreen].filter(r => r.id !== id);
@@ -11950,6 +12141,8 @@ docs.forEach(docItem => {
     };
 
     window.removeHotRowItem = async function(rowId, itemRef) {
+      const confirmed = await window.showCustomConfirm('Remove Item', 'Are you sure you want to remove this item from the row?', { okText: 'Remove', cancelText: 'Cancel', icon: 'fa-solid fa-trash' });
+      if (!confirmed) return;
       try {
         const rows = window.hotScreensData ? window.hotScreensData[window.activeHotScreen] : [];
         const row = rows ? rows.find(r => r.id === rowId) : null;
@@ -13514,6 +13707,7 @@ docs.forEach(docItem => {
           return false;
         }
         isDragging = true;
+        drawer.dataset.userDragged = 'true';
         startX = clientX;
         startY = clientY;
 
@@ -13588,19 +13782,182 @@ docs.forEach(docItem => {
       document.addEventListener('touchend', onEnd);
     };
 
+    // AI Co-Pilot Floating Trigger (Pill) Draggable Engine
+    window.initAiCopilotTriggerDraggable = function() {
+      const trigger = document.getElementById('ai-copilot-trigger');
+      if (!trigger || trigger.dataset.pillDragInitialized) return;
+      trigger.dataset.pillDragInitialized = 'true';
+
+      let isDraggingPill = false;
+      let hasDraggedPill = false;
+      let startX = 0, startY = 0;
+      let initialLeft = 0, initialTop = 0;
+
+      // Restore saved position if available
+      try {
+        const savedPos = localStorage.getItem('maxplay_ai_pill_pos');
+        if (savedPos) {
+          const pos = JSON.parse(savedPos);
+          if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+            const maxX = Math.max(10, window.innerWidth - (trigger.offsetWidth || 180));
+            const maxY = Math.max(10, window.innerHeight - (trigger.offsetHeight || 50));
+            const safeLeft = Math.max(10, Math.min(pos.left, maxX - 10));
+            const safeTop = Math.max(10, Math.min(pos.top, maxY - 10));
+            trigger.style.bottom = 'auto';
+            trigger.style.right = 'auto';
+            trigger.style.left = safeLeft + 'px';
+            trigger.style.top = safeTop + 'px';
+          }
+        }
+      } catch(e) {}
+
+      const onStartPill = (clientX, clientY) => {
+        isDraggingPill = true;
+        hasDraggedPill = false;
+        startX = clientX;
+        startY = clientY;
+
+        const rect = trigger.getBoundingClientRect();
+        trigger.style.bottom = 'auto';
+        trigger.style.right = 'auto';
+        trigger.style.left = rect.left + 'px';
+        trigger.style.top = rect.top + 'px';
+        trigger.style.margin = '0';
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        trigger.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+      };
+
+      const onMovePill = (clientX, clientY) => {
+        if (!isDraggingPill) return;
+        const dx = clientX - startX;
+        const dy = clientY - startY;
+
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          hasDraggedPill = true;
+        }
+
+        let newLeft = initialLeft + dx;
+        let newTop = initialTop + dy;
+
+        const maxX = window.innerWidth - trigger.offsetWidth;
+        const maxY = window.innerHeight - trigger.offsetHeight;
+
+        newLeft = Math.max(10, Math.min(newLeft, Math.max(10, maxX - 10)));
+        newTop = Math.max(10, Math.min(newTop, Math.max(10, maxY - 10)));
+
+        trigger.style.left = newLeft + 'px';
+        trigger.style.top = newTop + 'px';
+      };
+
+      const onEndPill = () => {
+        if (isDraggingPill) {
+          isDraggingPill = false;
+          trigger.style.cursor = 'grab';
+          document.body.style.userSelect = '';
+
+          if (hasDraggedPill) {
+            const rect = trigger.getBoundingClientRect();
+            try {
+              localStorage.setItem('maxplay_ai_pill_pos', JSON.stringify({ left: rect.left, top: rect.top }));
+            } catch(e) {}
+          }
+        }
+      };
+
+      trigger.addEventListener('mousedown', (e) => {
+        onStartPill(e.clientX, e.clientY);
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (isDraggingPill) {
+          onMovePill(e.clientX, e.clientY);
+        }
+      });
+
+      document.addEventListener('mouseup', () => {
+        onEndPill();
+      });
+
+      trigger.addEventListener('touchstart', (e) => {
+        if (e.touches && e.touches.length > 0) {
+          onStartPill(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      document.addEventListener('touchmove', (e) => {
+        if (isDraggingPill && e.touches && e.touches.length > 0) {
+          onMovePill(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      document.addEventListener('touchend', () => {
+        onEndPill();
+      });
+
+      trigger.addEventListener('click', (e) => {
+        if (hasDraggedPill) {
+          e.preventDefault();
+          e.stopPropagation();
+          hasDraggedPill = false;
+        }
+      }, true);
+    };
+
     window.toggleAiCopilotDrawer = function() {
       const drawer = document.getElementById('ai-copilot-drawer');
+      const trigger = document.getElementById('ai-copilot-trigger');
       if (!drawer) return;
       window.initAiCopilotDraggable();
+      window.initAiCopilotTriggerDraggable();
+
       const isHidden = drawer.style.display === 'none' || !drawer.style.display;
       drawer.style.display = isHidden ? 'flex' : 'none';
       if (isHidden) {
         if (window.syncAiVoiceRadio) window.syncAiVoiceRadio();
+
+        // Position drawer near trigger pill if drawer has not been manually dragged
+        if (!drawer.dataset.userDragged && trigger) {
+          const tRect = trigger.getBoundingClientRect();
+          const dWidth = Math.min(480, window.innerWidth - 32);
+          const dHeight = Math.min(620, window.innerHeight - 110);
+
+          let dLeft = tRect.right - dWidth;
+          if (dLeft < 16) dLeft = 16;
+          if (dLeft + dWidth > window.innerWidth - 16) dLeft = window.innerWidth - dWidth - 16;
+
+          let dTop = tRect.top - dHeight - 12;
+          if (dTop < 16) {
+            dTop = tRect.bottom + 12;
+          }
+          if (dTop + dHeight > window.innerHeight - 16) {
+            dTop = Math.max(16, window.innerHeight - dHeight - 16);
+          }
+
+          drawer.style.bottom = 'auto';
+          drawer.style.right = 'auto';
+          drawer.style.left = dLeft + 'px';
+          drawer.style.top = dTop + 'px';
+        }
+
         setTimeout(() => {
           document.getElementById('ai-prompt-input')?.focus();
         }, 150);
       }
     };
+
+    // Auto-init pill draggable
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() {
+        if (window.initAiCopilotTriggerDraggable) window.initAiCopilotTriggerDraggable();
+      });
+    } else {
+      setTimeout(() => {
+        if (window.initAiCopilotTriggerDraggable) window.initAiCopilotTriggerDraggable();
+      }, 100);
+    }
 
     window.toggleAiSpeechReplies = function() {
       aiSpeechEnabled = !aiSpeechEnabled;
@@ -15768,7 +16125,8 @@ docs.forEach(docItem => {
   </style>
 
   <!-- AI Co-Pilot Floating Trigger Button -->
-  <div id="ai-copilot-trigger" onclick="toggleAiCopilotDrawer()" style="position:fixed; bottom:24px; right:24px; z-index:99990; display:flex; align-items:center; gap:10px; background:linear-gradient(135deg, #161026, #2a1645); border:1px solid rgba(168,85,247,0.5); padding:8px 16px; border-radius:50px; cursor:pointer; user-select:none; animation:aiPulseGlow 3s infinite; transition:transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);">
+  <div id="ai-copilot-trigger" onclick="toggleAiCopilotDrawer()" title="Click to open or Drag to move" style="position:fixed; bottom:24px; right:24px; z-index:99990; display:flex; align-items:center; gap:10px; background:linear-gradient(135deg, #161026, #2a1645); border:1px solid rgba(168,85,247,0.5); padding:8px 16px; border-radius:50px; cursor:grab; user-select:none; animation:aiPulseGlow 3s infinite; transition:transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); touch-action:none;">
+    <i class="fa-solid fa-grip-vertical" style="color:rgba(168,85,247,0.6); font-size:12px; margin-right:-2px; cursor:grab;"></i>
     <div style="position:relative; display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg, #9333EA, #EC4899); box-shadow:0 0 16px rgba(236,72,153,0.5); flex-shrink:0;">
       <i class="fa-solid fa-wand-magic-sparkles" style="color:#FFF; font-size:14px;"></i>
       <span style="position:absolute; top:-1px; right:-1px; width:9px; height:9px; background:#10B981; border-radius:50%; border:2px solid #161026;"></span>

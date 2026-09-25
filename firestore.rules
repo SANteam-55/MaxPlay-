@@ -25,6 +25,12 @@ service cloud.firestore {
       }
     }
 
+    // Partitioned large content seasons
+    match /content_seasons/{contentId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // User progress - private
     match /userProgress/{userId} {
       allow read, write: if true;
