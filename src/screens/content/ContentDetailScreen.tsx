@@ -1005,6 +1005,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   let activeSeasonEpisodes: any[] = [];
   let totalEpisodes = 0;
   let currentEpisodePartsCount = 1;
+  let currentEpisode: any = null;
 
   if (isSeries && !isMovie) {
     const seasonsList = (content.seasonsData && content.seasonsData.length > 0) 
@@ -1016,6 +1017,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     totalEpisodes = activeSeasonEpisodes.length;
 
     const currentEp = activeSeasonEpisodes[selectedEpisodeIndex] || activeSeasonEpisodes[0];
+    currentEpisode = currentEp;
 
     if (currentEp) {
       const epExtraParts = Array.isArray(currentEp.videoLinks) ? currentEp.videoLinks : [];
@@ -1890,6 +1892,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               videoSources={playerVideoSources}
               chunks={playerChunks}
               skipMarkers={currentPlayerSkipMarkers}
+              isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls)}
               posterUrl={posterOrBackdrop}
               title={playerTitle || 'Video'}
               initialTime={playbackPosition}

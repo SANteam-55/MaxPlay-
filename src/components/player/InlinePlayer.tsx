@@ -22,6 +22,7 @@ import { AudioLangDrawer } from './AudioLangDrawer';
 import { SpeedCapsuleHUD } from './SpeedCapsuleHUD';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../context/AuthContext';
+import { SmartStreamService } from '../../services/smartStreamService';
 
 interface InlinePlayerProps {
   videoUrl?: string;
@@ -47,6 +48,7 @@ interface InlinePlayerProps {
   globalDuration?: number;
   onGlobalSeek?: (targetTime: number) => void;
   skipMarkers?: any;
+  isSmartHls?: boolean;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -72,6 +74,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   globalDuration,
   onGlobalSeek,
   skipMarkers,
+  isSmartHls,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -105,6 +108,15 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [currentLanguage, setCurrentLanguage] = useState<string>(activeLanguage || '');
   const [currentQuality, setCurrentQuality] = useState<string>(activeQuality || 'auto');
+
+  // Smart Stream & Dynamic HLS states
+  const [resolvedStreamUrl, setResolvedStreamUrl] = useState<string>('');
+  const [isResolvingStream, setIsResolvingStream] = useState<boolean>(false);
+  const [hlsQualities, setHlsQualities] = useState<string[]>([]);
+  const [hlsAudioTracks, setHlsAudioTracks] = useState<{ id: number; name: string; lang: string }[]>([]);
+  const [actualQuality, setActualQuality] = useState<string>('');
+  const isHlsStreamRef = useRef<boolean>(false);
+  const streamRetryAttemptedRef = useRef<boolean>(false);
   
   // Menu drawers state
   const [activeMenu, setActiveMenu] = useState<'language' | 'quality' | 'speed' | null>(null);
@@ -398,14 +410,18 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     setShowControls((prev) => !prev);
   }, [activeMenu, isLocked]);
 
-  // Derive available languages for current videoSources
+  // Derive available languages for current videoSources or dynamic HLS audio tracks
   const availableLanguages = useMemo(() => {
     if (videoSources && typeof videoSources === 'object') {
       const keys = Object.keys(videoSources).filter(k => videoSources[k] && Object.keys(videoSources[k]).length > 0);
       if (keys.length > 0) return keys;
     }
+    // Dynamic HLS audio tracks from master playlist
+    if (hlsAudioTracks.length > 1) {
+      return hlsAudioTracks.map(t => t.name || t.lang || `Track ${t.id + 1}`);
+    }
     return [];
-  }, [videoSources]);
+  }, [videoSources, hlsAudioTracks]);
 
   // Keep currentLanguage in sync with activeLanguage prop and available languages
   useEffect(() => {
@@ -428,7 +444,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
   }, [activeQuality]);
 
-  // Derive available qualities based on selected language
+  // Derive available qualities based on selected language and dynamic HLS levels
   const availableQualities = useMemo(() => {
     let links: Record<string, string> | null = null;
     
@@ -453,8 +469,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       const validQualities = Object.keys(links).filter(q => Boolean(links![q]));
       return ['auto', ...validQualities];
     }
+
+    // Dynamic HLS qualities extracted from master .m3u8 playlist
+    if (hlsQualities.length > 0) {
+      return ['auto', ...hlsQualities];
+    }
+
     return ['auto'];
-  }, [videoSources, qualityLinks, currentLanguage, availableLanguages]);
+  }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities]);
 
   // Pick the best video URL based on language and quality
   const activeVideoUrl = useMemo(() => {
@@ -537,6 +559,51 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const targetSeekTimeRef = useRef<number>(initialTime);
   const isInitialSeekDoneRef = useRef<boolean>(initialTime <= 0);
 
+  // Resolve Smart Stream URL (VOE / external hosters via backend proxy with 3-hour cache)
+  useEffect(() => {
+    if (!activeVideoUrl) {
+      setResolvedStreamUrl('');
+      setIsResolvingStream(false);
+      return;
+    }
+
+    streamRetryAttemptedRef.current = false;
+
+    if (isIframe) {
+      setResolvedStreamUrl(activeVideoUrl);
+      setIsResolvingStream(false);
+      return;
+    }
+
+    if (!SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls)) {
+      setResolvedStreamUrl(activeVideoUrl);
+      setIsResolvingStream(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsResolvingStream(true);
+    setIsLoading(true);
+
+    SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: false })
+      .then((res) => {
+        if (!isMounted) return;
+        setResolvedStreamUrl(res.streamUrl);
+        setIsResolvingStream(false);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        console.error('Smart stream extraction error:', err);
+        setIsResolvingStream(false);
+        setIsLoading(false);
+        setPlaybackError(err.message || 'Failed to extract video stream. Please try again.');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeVideoUrl, isIframe, isSmartHls]);
+
   // Handle streamKey changes: When switching between Episode Parts or Episodes,
   // do NOT retain previous part timestamp; start from initialTime!
   useEffect(() => {
@@ -569,11 +636,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return;
     }
     const video = videoRef.current;
-    if (!video || !activeVideoUrl) return;
+    if (!video || !resolvedStreamUrl) return;
 
     // Check if this is a quality/language switch on the same streamKey
-    const isSameStreamSwitch = (prevStreamKeyRef.current === streamKey) && !!lastActiveUrlRef.current && lastActiveUrlRef.current !== activeVideoUrl;
-    lastActiveUrlRef.current = activeVideoUrl;
+    const isSameStreamSwitch = (prevStreamKeyRef.current === streamKey) && !!lastActiveUrlRef.current && lastActiveUrlRef.current !== resolvedStreamUrl;
+    lastActiveUrlRef.current = resolvedStreamUrl;
 
     let targetStartTime = initialTime;
     if (isSameStreamSwitch && video.currentTime > 0) {
@@ -594,17 +661,42 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       hlsRef.current = null;
     }
 
-    const isHls = activeVideoUrl.toLowerCase().includes('.m3u8');
+    const isHls = resolvedStreamUrl.toLowerCase().includes('.m3u8');
+    isHlsStreamRef.current = isHls;
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({ startPosition: targetStartTime });
       hlsRef.current = hls;
-      hls.loadSource(activeVideoUrl);
+      hls.loadSource(resolvedStreamUrl);
       hls.attachMedia(video);
       
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
         setIsLoading(false);
         video.playbackRate = playbackRate;
+
+        // Auto-detect available qualities from HLS master manifest
+        if (data && data.levels && data.levels.length > 0) {
+          const heights = data.levels
+            .map((lvl) => lvl.height)
+            .filter((h) => typeof h === 'number' && h > 0);
+          const uniqueQualities = Array.from(new Set(heights))
+            .sort((a, b) => b - a)
+            .map((h) => `${h}p`);
+          if (uniqueQualities.length > 0) {
+            setHlsQualities(uniqueQualities);
+          }
+        }
+
+        // Auto-detect audio tracks from HLS
+        if (hls.audioTracks && hls.audioTracks.length > 0) {
+          const parsedAudio = hls.audioTracks.map((t, idx) => ({
+            id: idx,
+            name: t.name || (t.lang ? t.lang.toUpperCase() : `Audio ${idx + 1}`),
+            lang: t.lang || ''
+          }));
+          setHlsAudioTracks(parsedAudio);
+        }
+
         setTimeout(() => {
           isInitialSeekDoneRef.current = true;
           isSwitchingSourceRef.current = false;
@@ -615,10 +707,50 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           video.play().catch(e => console.warn('Autoplay blocked:', e));
         }
       });
-      hls.on(Hls.Events.ERROR, (event, data) => {
+
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_event, data) => {
+        if (data.audioTracks && data.audioTracks.length > 0) {
+          const parsedAudio = data.audioTracks.map((t: any, idx: number) => ({
+            id: idx,
+            name: t.name || (t.lang ? t.lang.toUpperCase() : `Audio ${idx + 1}`),
+            lang: t.lang || ''
+          }));
+          setHlsAudioTracks(parsedAudio);
+        }
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (hls.levels && hls.levels[data.level]) {
+          const lvl = hls.levels[data.level];
+          if (lvl.height) {
+            setActualQuality(`${lvl.height}p`);
+          }
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
+              // Smart retry if 3-hour stream token expired
+              if (
+                SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls) &&
+                !streamRetryAttemptedRef.current
+              ) {
+                streamRetryAttemptedRef.current = true;
+                console.warn('HLS token expired or network rejected. Auto-renewing stream link...');
+                setIsLoading(true);
+                SmartStreamService.clearClientCache(activeVideoUrl);
+                SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true })
+                  .then((res) => {
+                    setResolvedStreamUrl(res.streamUrl);
+                  })
+                  .catch((e) => {
+                    setIsLoading(false);
+                    setPlaybackError('Stream token expired. Renewal failed: ' + e.message);
+                  });
+                return;
+              }
               console.warn("fatal network error encountered, try to recover");
               hls.startLoad();
               break;
@@ -644,7 +776,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       });
     } else {
       // Native HTML5 playback
-      video.src = activeVideoUrl;
+      video.src = resolvedStreamUrl;
       video.playbackRate = playbackRate;
 
       const performNativeSeek = () => {
@@ -684,7 +816,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [activeVideoUrl, streamKey]); 
+  }, [resolvedStreamUrl, streamKey]); 
 
   // Fullscreen listener with cross-browser / mobile vendor support
   useEffect(() => {
@@ -896,6 +1028,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     setCurrentLanguage(lang);
     setCurrentQuality('auto');
     if (onLanguageChange) onLanguageChange(lang);
+
+    // If HLS stream has internal audio tracks, switch audio track immediately
+    if (hlsRef.current && isHlsStreamRef.current && hlsAudioTracks.length > 0) {
+      const trackIdx = hlsAudioTracks.findIndex(
+        (t) => t.name.toLowerCase() === lang.toLowerCase() || t.lang.toLowerCase() === lang.toLowerCase()
+      );
+      if (trackIdx !== -1) {
+        hlsRef.current.audioTrack = trackIdx;
+      }
+    }
+
     setActiveMenu(null);
     handleControlInteraction();
   };
@@ -903,6 +1046,22 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const changeQuality = (qual: string) => {
     setCurrentQuality(qual);
     if (onQualityChange) onQualityChange(qual);
+
+    // If HLS stream has internal multi-quality levels, switch level seamlessly
+    if (hlsRef.current && isHlsStreamRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
+      if (qual === 'auto') {
+        hlsRef.current.currentLevel = -1;
+      } else {
+        const targetHeight = parseInt(qual);
+        if (!isNaN(targetHeight)) {
+          const levelIdx = hlsRef.current.levels.findIndex((lvl) => lvl.height === targetHeight);
+          if (levelIdx !== -1) {
+            hlsRef.current.currentLevel = levelIdx;
+          }
+        }
+      }
+    }
+
     setActiveMenu(null);
     handleControlInteraction();
   };
@@ -1074,9 +1233,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           </div>
         )}
 
-        {!isIframe && isLoading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 pointer-events-none">
+        {!isIframe && (isLoading || isResolvingStream) && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50 pointer-events-none gap-2">
             <Loader2 className="w-12 h-12 text-[#8B5CF6] animate-spin" />
+            {isResolvingStream && (
+              <span className="text-xs font-medium text-white/80 tracking-wide bg-black/60 px-3 py-1 rounded-full border border-white/10 backdrop-blur-md">
+                Securing stream link...
+              </span>
+            )}
           </div>
         )}
 
@@ -1312,6 +1476,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           currentQuality={currentQuality}
           availableQualities={availableQualities.filter(q => q !== 'auto')}
           isAutoMode={currentQuality === 'auto'}
+          actualQuality={actualQuality}
           onSelectQuality={changeQuality}
           onClose={() => setActiveMenu(null)}
         />

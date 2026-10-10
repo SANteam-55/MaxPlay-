@@ -1,6 +1,7 @@
 import Hls from "hls.js";
 import React, { useRef, useEffect } from 'react';
 import { VideoChunk } from '../../services/ChunkEngine';
+import { SmartStreamService } from '../../services/smartStreamService';
 
 interface VideoChunkPlayerProps {
   currentChunk: VideoChunk | null;
@@ -68,75 +69,93 @@ export const VideoChunkPlayer: React.FC<VideoChunkPlayerProps> = ({
   useEffect(() => {
     if (!currentChunk?.url || !primaryVideoRef.current) return;
 
+    let isCancelled = false;
+
     if (initializedChunkUrlRef.current !== currentChunk.url) {
       initializedChunkUrlRef.current = currentChunk.url;
       onBuffering(true);
 
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
+      const setupPlayback = (playUrl: string) => {
+        if (isCancelled || !primaryVideoRef.current) return;
 
-      const attemptPlay = () => {
-        if (isPlaying && primaryVideoRef.current) {
-          const promise = primaryVideoRef.current.play();
-          if (promise !== undefined) {
-            promise.catch((err) => {
-              if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
-                onError('Failed to start playback');
-              }
-            });
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+
+        const attemptPlay = () => {
+          if (isPlaying && primaryVideoRef.current) {
+            const promise = primaryVideoRef.current.play();
+            if (promise !== undefined) {
+              promise.catch((err) => {
+                if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+                  onError('Failed to start playback');
+                }
+              });
+            }
           }
+        };
+
+        const isHls = playUrl.toLowerCase().includes('.m3u8');
+
+        if (isHls && Hls.isSupported()) {
+          primaryVideoRef.current.removeAttribute('src');
+          primaryVideoRef.current.load();
+
+          const hls = new Hls({
+            startPosition: seekOffsetInChunk !== null ? seekOffsetInChunk : (initialOffsetInChunk > 0 ? initialOffsetInChunk : -1),
+            maxBufferLength: 30,
+            enableWorker: true,
+          });
+          hlsRef.current = hls;
+
+          hls.loadSource(playUrl);
+          hls.attachMedia(primaryVideoRef.current);
+
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            attemptPlay();
+          });
+
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) {
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR:
+                  hls.startLoad();
+                  break;
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                  hls.recoverMediaError();
+                  break;
+                default:
+                  hls.destroy();
+                  onError('Fatal media streaming error occurred.');
+                  break;
+              }
+            }
+          });
+        } else if (isHls && primaryVideoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+          primaryVideoRef.current.src = playUrl;
+          primaryVideoRef.current.load();
+          attemptPlay();
+        } else {
+          // Direct MP4 / WebM video stream
+          primaryVideoRef.current.src = playUrl;
+          primaryVideoRef.current.load();
+          attemptPlay();
         }
       };
 
-      const isHls = currentChunk.url.toLowerCase().includes('.m3u8');
-
-      if (isHls && Hls.isSupported()) {
-        primaryVideoRef.current.removeAttribute('src');
-        primaryVideoRef.current.load();
-
-        const hls = new Hls({
-          startPosition: seekOffsetInChunk !== null ? seekOffsetInChunk : (initialOffsetInChunk > 0 ? initialOffsetInChunk : -1),
-          maxBufferLength: 30,
-          enableWorker: true,
-        });
-        hlsRef.current = hls;
-
-        hls.loadSource(currentChunk.url);
-        hls.attachMedia(primaryVideoRef.current);
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          attemptPlay();
-        });
-
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                hls.destroy();
-                onError('Fatal media streaming error occurred.');
-                break;
-            }
-          }
-        });
-      } else if (isHls && primaryVideoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        primaryVideoRef.current.src = currentChunk.url;
-        primaryVideoRef.current.load();
-        attemptPlay();
+      if (SmartStreamService.isExtractableSource(currentChunk.url)) {
+        SmartStreamService.resolveStream(currentChunk.url)
+          .then((res) => setupPlayback(res.streamUrl))
+          .catch((err) => onError(err.message || 'Stream extraction failed'));
       } else {
-        // Direct MP4 / WebM video stream
-        primaryVideoRef.current.src = currentChunk.url;
-        primaryVideoRef.current.load();
-        attemptPlay();
+        setupPlayback(currentChunk.url);
       }
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [currentChunk?.url]);
 
   // Handle explicit user seeking

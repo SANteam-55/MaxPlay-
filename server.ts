@@ -95,6 +95,13 @@ CORE AUTOMATION RULES FOR MOVIES, SERIES & ANIME:
 - EXACT EPISODE COUNT & NUMBERING ("kitne episode banana hai"):
   - When Boss specifies an episode count (e.g. "12 episode banane hain", "24 episodes banao", "5 episodes"):
     - In \`BUILD_SERIES_EPISODES.data.episodes\`, you MUST generate EXACTLY that many episode objects (epNum: 1, 2, ... N).
+- MULTIPLE SEASONS SUPPORT ("season 1 me 12 episode aur season 2 me 23 episode"):
+  - When Boss specifies multiple seasons in a single command (e.g. "season 1 me 12 episode boxes bnao or issi series ke season 2 me 23 episode boxes bnao", "s1 me 10 eps aur s2 me 20 eps"):
+    - You MUST output a separate \`BUILD_SERIES_EPISODES\` action for EACH requested season:
+      - Action for Season 1: \`{ "type": "BUILD_SERIES_EPISODES", "data": { "seasonNumber": 1, "seasonTitle": "Season 1", "episodes": [12 episode objects] } }\`
+      - Action for Season 2: \`{ "type": "BUILD_SERIES_EPISODES", "data": { "seasonNumber": 2, "seasonTitle": "Season 2", "episodes": [23 episode objects] } }\`
+    - NEVER skip or ignore any requested season! All requested seasons must be generated in the actions array.
+    - In your Hinglish \`reply\` and \`summary\`, explicitly detail all seasons created (e.g. Season 1 with 12 episodes, Season 2 with 23 episodes).
 - SPECIFIC EPISODE MULTI-PARTS ("is wale episode mein Do parts honge", "episode 1 me 2 part hai"):
   - Different episodes can have different parts! (e.g. Episode 1 has 2 parts, Episode 2 has 1 part, Episode 3 has 3 parts):
     - For an episode with multiple parts, set \`partsCount: X\` and generate X link objects in \`links\` (Part 1, Part 2... Part X).
@@ -135,6 +142,28 @@ When Boss asks to modify qualities, parts, or skip markers of an existing episod
 When Master wants to send an announcement or alert:
 - Populate \`FILL_ANNOUNCEMENT\` action with title, body, priority, senderName ("MaxPlay Admin").
 
+4. CONTENT EDITING & SKIP MARKERS REMOVAL ("skip markers jitne bhi set kiye hai sab ko hata do", "is anime series mese skip markers hata do"):
+- When Boss asks to remove or clear skip markers from a series, anime, or movie:
+  - If Boss says "jitne bhi set kiye hai sab ko hata do" / "saare skip markers hata do" / "clear all skip markers" / "hota do":
+    - Generate an \`UPDATE_EPISODES_SPEC\` action with:
+      {
+        "type": "UPDATE_EPISODES_SPEC",
+        "data": {
+          "applyToAll": true,
+          "applyToAllSeasons": true,
+          "skipMarkers": {
+            "removeAll": true,
+            "removeIntro": true,
+            "removeOutro": true,
+            "removeCredits": true
+          }
+        }
+      }
+  - If the content is an existing title from library not currently open in form, prepend \`LOAD_FOR_EDIT\` action:
+    { "type": "LOAD_FOR_EDIT", "data": { "contentId": contentId, "title": title } }
+  - Follow with \`GO_TO_STEP\`: 2 so Boss can inspect the updated episodes in Step 2.
+  - If Boss asks to save or publish live, add \`SAVE_EDITED_CONTENT\` action.
+
 JSON RESPONSE FORMAT:
 Always respond strictly with a valid JSON object matching this schema (do NOT wrap in markdown fences):
 {
@@ -154,6 +183,35 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     if (!videoUrl || typeof videoUrl !== "string") return 0;
     const cleanUrl = videoUrl.trim();
     if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) return 0;
+
+    // Check if source is an extractable stream (e.g. voe.sx) before probing
+    const isVoeOrExtractable = cleanUrl.includes("voe.sx") || cleanUrl.includes("voe.") || cleanUrl.includes("voe-network");
+    if (isVoeOrExtractable) {
+      try {
+        const extractorKey = (process.env.VOE_EXTRACTOR_KEY || "MaxPlayMasterPass777!").trim();
+        let rawBaseUrl = (process.env.VOE_EXTRACTOR_URL || "").trim();
+        if (!rawBaseUrl || rawBaseUrl.includes("ltargeturl") || rawBaseUrl.includes("voe.sx")) {
+          rawBaseUrl = "https://nawazkhan001-mw-hub-master.hf.space/api/extract";
+        }
+        if (rawBaseUrl.includes("?")) {
+          rawBaseUrl = rawBaseUrl.split("?")[0].trim();
+        }
+        const extractorBaseUrl = rawBaseUrl;
+        const apiUrl = `${extractorBaseUrl}?url=${encodeURIComponent(cleanUrl)}&key=${encodeURIComponent(extractorKey)}`;
+
+        const extRes = await fetch(apiUrl, { headers: { "Accept": "application/json" } });
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          const targetM3u8 = extData.m3u8Url || extData.url || extData.streamUrl;
+          if (targetM3u8 && typeof targetM3u8 === "string") {
+            const resolvedDur = await probeVideoDuration(targetM3u8);
+            if (resolvedDur > 0) return resolvedDur;
+          }
+        }
+      } catch (extErr) {
+        console.warn("Probe VOE auto-extraction error:", extErr);
+      }
+    }
 
     // 1. Primary Engine: ffprobe (Exact duration for MP4, MKV, M3U8, WEBM, TS, MOV, etc.)
     try {
@@ -289,6 +347,138 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       res.status(500).json({ error: err.message || "Failed to probe video", duration: 0 });
     }
   });
+
+  // ==========================================
+  // SMART HLS / VOE EXTRACTOR PROXY ENDPOINT
+  // Keeps secret key hidden, performs on-demand extraction, and caches tokens for 2h 50m
+  // ==========================================
+  interface CachedStreamInfo {
+    m3u8Url: string;
+    expiresAt: number;
+    cachedAt: number;
+  }
+  const streamExtractionCache = new Map<string, CachedStreamInfo>();
+
+  const handleExtractStream = async (req: any, res: any) => {
+    try {
+      const sourceUrl = (req.body?.url || req.query?.url) as string;
+      const forceRefresh = req.body?.forceRefresh === true || req.query?.forceRefresh === "true";
+
+      if (!sourceUrl || typeof sourceUrl !== "string" || !sourceUrl.trim()) {
+        res.status(400).json({ ok: false, error: "Source video URL is required" });
+        return;
+      }
+
+      const trimmedUrl = sourceUrl.trim();
+      const now = Date.now();
+
+      // Return server-side cached link if valid
+      if (!forceRefresh) {
+        const cached = streamExtractionCache.get(trimmedUrl);
+        if (cached && cached.expiresAt > now) {
+          res.json({
+            ok: true,
+            m3u8Url: cached.m3u8Url,
+            cached: true,
+            expiresAt: cached.expiresAt,
+            remainingSeconds: Math.max(0, Math.round((cached.expiresAt - now) / 1000))
+          });
+          return;
+        }
+      }
+
+      const extractorKey = (process.env.VOE_EXTRACTOR_KEY || "MaxPlayMasterPass777!").trim();
+      let rawBaseUrl = (process.env.VOE_EXTRACTOR_URL || "").trim();
+      if (!rawBaseUrl || rawBaseUrl.includes("ltargeturl") || rawBaseUrl.includes("voe.sx")) {
+        rawBaseUrl = "https://nawazkhan001-mw-hub-master.hf.space/api/extract";
+      }
+      if (rawBaseUrl.includes("?")) {
+        rawBaseUrl = rawBaseUrl.split("?")[0].trim();
+      }
+      const extractorBaseUrl = rawBaseUrl;
+      const apiUrl = `${extractorBaseUrl}?url=${encodeURIComponent(trimmedUrl)}&key=${encodeURIComponent(extractorKey)}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s timeout for HF space cold starts
+
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "Accept": "application/json"
+        }
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        let errMsg = `Extractor service error (${response.status})`;
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed.error || parsed.message) {
+            errMsg = parsed.error || parsed.message;
+          }
+        } catch {
+          if (errText && errText.length < 200) errMsg = errText;
+        }
+        res.status(response.status >= 400 && response.status < 500 ? 400 : 502).json({
+          ok: false,
+          error: errMsg
+        });
+        return;
+      }
+
+      const data = await response.json();
+      const resolvedM3u8 = data?.m3u8Url || data?.url || data?.streamUrl || data?.rawVoeUrl;
+
+      if (!data || !resolvedM3u8) {
+        res.status(502).json({
+          ok: false,
+          error: "Stream extraction failed: Master m3u8Url not provided by extractor service"
+        });
+        return;
+      }
+
+      // 170 minutes TTL (2 hours 50 minutes) ensures token refreshed before 3h expiry
+      const ttlMs = 170 * 60 * 1000;
+      const expiresAt = now + ttlMs;
+
+      streamExtractionCache.set(trimmedUrl, {
+        m3u8Url: resolvedM3u8,
+        expiresAt,
+        cachedAt: now
+      });
+
+      // Periodic garbage collection for memory hygiene
+      if (streamExtractionCache.size > 200) {
+        for (const [key, val] of streamExtractionCache.entries()) {
+          if (val.expiresAt <= now) {
+            streamExtractionCache.delete(key);
+          }
+        }
+      }
+
+      res.json({
+        ok: true,
+        m3u8Url: resolvedM3u8,
+        rawVoeUrl: data.rawVoeUrl,
+        headers: data.headers,
+        cached: false,
+        expiresAt,
+        remainingSeconds: Math.round(ttlMs / 1000)
+      });
+    } catch (err: any) {
+      console.error("[StreamExtractor] Extraction error:", err);
+      const isAbort = err.name === "AbortError";
+      res.status(500).json({
+        ok: false,
+        error: isAbort ? "Extraction service timed out (20s)" : (err.message || "Stream extraction failed")
+      });
+    }
+  };
+
+  app.post("/api/extract-stream", handleExtractStream);
+  app.get("/api/extract-stream", handleExtractStream);
 
   // TMDB Key Verification & Search Endpoints
   app.post("/api/tmdb/verify", async (req, res) => {
@@ -571,117 +761,539 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         targetLanguages.push("Hindi");
       }
 
-      // 1.C In-Place Draft Modification Intent (e.g. "720p hata Do 1080p is episode mein laga do", "Episode 2 me intro skip 15 se 95 kar do")
-      const hasModificationAction = /\b(hata\s*do|hatao|hata|remove|delete|mita\s*do|replace|badal\s*do|badlo|swap|change|laga\s*do|lagao|add\s*karo|set\s*karo|rakh\s*do|daal\s*do|dal\s*do)\b/i.test(prompt);
-      const hasQualityToken = /\b(1080p?|720p?|480p?|360p?|4k|2k|quality|qualities)\b/i.test(prompt);
-      const hasPartToken = /\b(part|parts|bhag)\b/i.test(prompt);
-      const hasSkipToken = /\b(skip|intro|outro|credits)\b/i.test(prompt);
-      const hasTargetEpMention = /\b(is\s*(?:wale)?\s*episode|is\s*episode|iss\s*episode|episode\s*\d+|ep\s*\d+|sabhi\s*episodes?)\b/i.test(prompt);
+      // 1.C Helper for Text Normalization
+      const normalizeText = (str: string): string => {
+        if (!str) return "";
+        return str.toLowerCase().replace(/[^a-z0-9\s]/gi, " ").replace(/\s+/g, " ").trim();
+      };
 
-      const isDraftModification = hasModificationAction && (hasQualityToken || hasPartToken || hasSkipToken) && (hasTargetEpMention || (enhancedContext?.currentDraft && enhancedContext.currentDraft.activeSeasonEpisodesCount > 0));
+      // 1.D Advanced Target Content Pinpointing Engine
+      const library = Array.isArray(enhancedContext?.contentLibrary) ? enhancedContext.contentLibrary : [];
+      const currentDraft = enhancedContext?.currentDraft;
+      const editingId = enhancedContext?.editingContentId || currentDraft?.id;
 
-      if (isDraftModification && !isLoyaltyOrFunRequest) {
-        // Extract target episode numbers
-        const targetEpNums: number[] = [];
-        const epNumMatches = Array.from(prompt.matchAll(/(?:episode|ep)\s*(\d+)/gi));
-        if (epNumMatches.length > 0) {
-          epNumMatches.forEach(m => targetEpNums.push(parseInt(m[1], 10)));
-        } else if (!/\b(sabhi|sab|all)\s*episodes?\b/i.test(prompt)) {
-          const activeEp = enhancedContext?.currentSeasonIdx !== undefined ? (enhancedContext.currentSeasonIdx + 1) : 1;
-          targetEpNums.push(activeEp);
-        }
+      const findTargetContent = (p: string): { target: any; isCurrentDraft: boolean; matchType: string } | null => {
+        const normPrompt = normalizeText(p);
 
-        // Extract qualities to remove and add using clause segmentation
-        const removeQualities: string[] = [];
-        const addQualities: string[] = [];
+        // Deictic indicators in Hindi & English
+        const isDeictic = /\b(ye|is|iss|yahi|yehi|isme|is\s*me|in\s*me|ye\s*anime|is\s*anime|iss\s*anime|ye\s*series|is\s*series|iss\s*series|ye\s*show|is\s*show|ye\s*movie|is\s*movie|ye\s*content|is\s*content|current|active|open|khula|jo\s*chal\s*raha|jo\s*load\s*hai|form\s*wala|upload\s*wala|this\s*anime|this\s*series|this\s*movie|this\s*show|this\s*content)\b/i.test(p);
 
-        const clauses = prompt.split(/\b(?:aur|and|lekin|but|fir|then|waise|,|;)\b/i);
-        clauses.forEach(clause => {
-          const hasRemove = /\b(hata\s*do|hatao|remove|delete|hata|mita\s*do)\b/i.test(clause);
-          const hasAdd = /\b(laga\s*do|lagao|add|set|rakh\s*do|daal\s*do|dal\s*do)\b/i.test(clause);
-          const qMatches = Array.from(clause.matchAll(/\b(1080p?|720p?|480p?|360p?|4k)\b/gi)).map(m => m[1].toLowerCase().replace(/(\d+)$/, '$1p'));
-
-          if (hasRemove && !hasAdd) {
-            qMatches.forEach(q => { if (!removeQualities.includes(q)) removeQualities.push(q); });
-          } else if (hasAdd && !hasRemove) {
-            qMatches.forEach(q => { if (!addQualities.includes(q)) addQualities.push(q); });
-          } else if (hasRemove && hasAdd) {
-            qMatches.forEach(q => {
-              const qIdx = clause.toLowerCase().indexOf(q.toLowerCase());
-              const remIdx = clause.toLowerCase().search(/\b(hata\s*do|hatao|remove|delete|hata|mita\s*do)\b/);
-              const addIdx = clause.toLowerCase().search(/\b(laga\s*do|lagao|add|set|rakh\s*do|daal\s*do|dal\s*do)\b/);
-              const distToRem = remIdx !== -1 ? Math.abs(qIdx - remIdx) : Infinity;
-              const distToAdd = addIdx !== -1 ? Math.abs(qIdx - addIdx) : Infinity;
-              if (distToRem < distToAdd) {
-                if (!removeQualities.includes(q)) removeQualities.push(q);
-              } else {
-                if (!addQualities.includes(q)) addQualities.push(q);
-              }
-            });
+        // 1. If deictic, prioritize currently active / editing draft
+        if (isDeictic) {
+          if (editingId && library.length > 0) {
+            const match = library.find((item: any) => item.id === editingId);
+            if (match) return { target: match, isCurrentDraft: true, matchType: 'active_editing_id' };
           }
-        });
-
-        // Extract parts count adjustment
-        const partsMatch = prompt.match(/(?:(\d+|ek|do|teen|chaar|two|three|four)\s*parts?)/i);
-        const draftPartsCount = partsMatch ? (wordToNumMap[partsMatch[1].toLowerCase()] || parseInt(partsMatch[1], 10)) : undefined;
-
-        // Extract skip markers adjustment
-        const draftSkipMarkers: any = {};
-        const dIntro = prompt.match(/(?:intro|opening|op)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
-        if (dIntro) {
-          draftSkipMarkers.intro = { start: parseInt(dIntro[1], 10), end: parseInt(dIntro[2], 10) };
-        }
-        const dOutro = prompt.match(/(?:outro|ending|ed)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
-        if (dOutro) {
-          draftSkipMarkers.outro = { start: parseInt(dOutro[1], 10), end: parseInt(dOutro[2], 10) };
-        }
-        const dCredits = prompt.match(/(?:credits)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
-        if (dCredits) {
-          draftSkipMarkers.credits = { start: parseInt(dCredits[1], 10), end: parseInt(dCredits[2], 10) };
-        }
-        if (/\b(?:intro\s*(?:skip)?\s*(?:hata\s*do|remove|delete|mat|nahi))\b/i.test(prompt)) {
-          draftSkipMarkers.removeIntro = true;
-        }
-        if (/\b(?:outro\s*(?:skip)?\s*(?:hata\s*do|remove|delete|mat|nahi))\b/i.test(prompt)) {
-          draftSkipMarkers.removeOutro = true;
+          if (currentDraft && currentDraft.title && currentDraft.title.trim()) {
+            return {
+              target: {
+                id: editingId || 'current-draft',
+                title: currentDraft.title,
+                type: currentDraft.type || (enhancedContext?.uploadMode || 'anime'),
+                seasonsCount: currentDraft.seasonsCount || 1,
+                episodesCount: currentDraft.totalEpisodesCount || currentDraft.activeSeasonEpisodesCount || 12,
+                languages: currentDraft.activeLanguages || ['Hindi'],
+                qualities: currentDraft.activeQualities || ['1080p', '720p']
+              },
+              isCurrentDraft: true,
+              matchType: 'current_draft_in_form'
+            };
+          }
         }
 
-        const epStr = targetEpNums.length > 0 ? `Episode ${targetEpNums.join(', ')}` : "sabhi episodes";
-        let modReply = `Haan Boss! Maine ${epStr} me aapke aadesh ke anusar modifications kar diye hain:\n`;
-        if (removeQualities.length > 0) modReply += `• [${removeQualities.join(', ')}] quality hata di hai.\n`;
-        if (addQualities.length > 0) modReply += `• [${addQualities.join(', ')}] quality laga di hai.\n`;
-        if (draftPartsCount) modReply += `• Total ${draftPartsCount} parts configure kar diye hain.\n`;
-        if (draftSkipMarkers.intro) modReply += `• Intro skip [${draftSkipMarkers.intro.start}s - ${draftSkipMarkers.intro.end}s] set kar diya hai.\n`;
-        if (draftSkipMarkers.outro) modReply += `• Outro skip [${draftSkipMarkers.outro.start}s - ${draftSkipMarkers.outro.end}s] set kar diya hai.\n`;
-        modReply += `Upload form live sync ho chuka hai Boss!`;
+        // 2. Search Database Library for exact, base, or token overlap
+        if (library.length > 0) {
+          // A. Exact normalized title match
+          for (const item of library) {
+            if (!item || !item.title) continue;
+            const normTitle = normalizeText(item.title);
+            if (normTitle && normPrompt.includes(normTitle)) {
+              return { target: item, isCurrentDraft: (editingId === item.id), matchType: 'exact_title' };
+            }
+          }
 
-        return res.json({
-          thought: "Detected in-place draft modification command for existing episode specification.",
-          intent: "series_upload",
-          reply: modReply,
-          voiceUsed: selectedVoice,
-          summary: [
-            `Updated specifications for ${epStr}`,
-            removeQualities.length > 0 ? `Removed quality: ${removeQualities.join(', ')}` : null,
-            addQualities.length > 0 ? `Added quality: ${addQualities.join(', ')}` : null,
-            draftPartsCount ? `Set parts count to ${draftPartsCount}` : null,
-            draftSkipMarkers.intro ? `Set intro skip: ${draftSkipMarkers.intro.start}s - ${draftSkipMarkers.intro.end}s` : null,
-            draftSkipMarkers.outro ? `Set outro skip: ${draftSkipMarkers.outro.start}s - ${draftSkipMarkers.outro.end}s` : null
-          ].filter(Boolean),
-          actions: [
-            {
-              type: "UPDATE_EPISODES_SPEC",
-              data: {
-                episodeNumbers: targetEpNums.length > 0 ? targetEpNums : undefined,
-                applyToAll: targetEpNums.length === 0,
-                removeQualities,
-                addQualities,
-                setQualities: (removeQualities.length > 0 && addQualities.length > 0) ? addQualities : undefined,
-                partsCount: draftPartsCount,
-                skipMarkers: Object.keys(draftSkipMarkers).length > 0 ? draftSkipMarkers : undefined
+          // B. Base title match (without Season/Part suffix)
+          for (const item of library) {
+            if (!item || !item.title) continue;
+            const baseTitle = item.title.replace(/\b(season\s*\d+|s\d+|part\s*\d+)\b/gi, "").trim();
+            const normBase = normalizeText(baseTitle);
+            if (normBase.length >= 3 && normPrompt.includes(normBase)) {
+              return { target: item, isCurrentDraft: (editingId === item.id), matchType: 'base_title' };
+            }
+          }
+
+          // C. Token overlap
+          let bestScore = 0;
+          let bestMatch: any = null;
+          const promptWords = normPrompt.split(/\s+/).filter((w: string) => w.length > 2);
+
+          for (const item of library) {
+            if (!item || !item.title) continue;
+            const titleWords = normalizeText(item.title).split(/\s+/).filter((w: string) => w.length > 2);
+            if (titleWords.length === 0) continue;
+
+            let matchCount = 0;
+            for (const tw of titleWords) {
+              if (promptWords.includes(tw)) matchCount++;
+            }
+
+            let score = matchCount / titleWords.length;
+            if (/\banime\b/i.test(p) && item.type === 'anime') score += 0.25;
+            if (/\bmovie\b/i.test(p) && item.type === 'movie') score += 0.25;
+            if (/\bseries\b/i.test(p) && (item.type === 'tv' || item.type === 'anime')) score += 0.15;
+
+            if (matchCount >= 2 || (titleWords.length === 1 && matchCount === 1)) {
+              if (score > bestScore) {
+                bestScore = score;
+                bestMatch = item;
               }
             }
+          }
+
+          if (bestMatch && bestScore >= 0.5) {
+            return { target: bestMatch, isCurrentDraft: (editingId === bestMatch.id), matchType: 'token_overlap' };
+          }
+
+          // D. Deictic fallback to sole or first anime / library item
+          if (isDeictic) {
+            const animes = library.filter((i: any) => i.type === 'anime');
+            if (animes.length === 1 && /\banime\b/i.test(p)) {
+              return { target: animes[0], isCurrentDraft: (editingId === animes[0].id), matchType: 'sole_anime_in_library' };
+            }
+            if (library.length === 1) {
+              return { target: library[0], isCurrentDraft: (editingId === library[0].id), matchType: 'sole_item_in_library' };
+            }
+            if (animes.length > 0 && /\banime\b/i.test(p)) {
+              return { target: animes[0], isCurrentDraft: (editingId === animes[0].id), matchType: 'first_anime_in_library' };
+            }
+          }
+        }
+
+        // 3. Fallback to active draft in form if upload screen has active title or episodes
+        if (currentDraft && (currentDraft.title || (enhancedContext?.activeTab === 'upload' && currentDraft.activeSeasonEpisodesCount > 0))) {
+          return {
+            target: {
+              id: editingId || 'current-draft',
+              title: currentDraft.title || 'Current Media',
+              type: currentDraft.type || (enhancedContext?.uploadMode || 'anime'),
+              seasonsCount: currentDraft.seasonsCount || 1,
+              episodesCount: currentDraft.totalEpisodesCount || currentDraft.activeSeasonEpisodesCount || 12,
+              languages: currentDraft.activeLanguages || ['Hindi'],
+              qualities: currentDraft.activeQualities || ['1080p', '720p']
+            },
+            isCurrentDraft: true,
+            matchType: 'fallback_active_draft'
+          };
+        }
+
+        return null;
+      };
+
+      const matchedTarget = findTargetContent(prompt);
+      let matchedContent: any = matchedTarget ? matchedTarget.target : null;
+
+      // 1.E Advanced Content Edit Intent & Operation Detection (Supporting Multi-Season, Specific Seasons & All Edits)
+      const hasModificationAction = /\b(hata\s*do|hota\s*do|hataa\s*do|hatao|hata|remove|delete|mita\s*do|nikal\s*do|clear|clear\s*karo|erase|saaf\s*karo|nahi\s*chahiye|mat\s*lagao|mat\s*rakho|nahi\s*rakhna|replace|badal\s*do|badlo|swap|change|laga\s*do|lagao|add\s*karo|add|set\s*karo|set|rakh\s*do|daal\s*do|dal\s*do|kar\s*dena|kar\s*do|karna)\b/i.test(prompt);
+      const hasQualityToken = /\b(1080p?|720p?|480p?|360p?|4k|2k|quality|qualities)\b/i.test(prompt);
+      const hasPartToken = /\b(part|parts|bhag)\b/i.test(prompt);
+      const hasSkipToken = /\b(skip\s*markers?|skip\s*marker|skip|intro|outro|credits)\b/i.test(prompt);
+      const hasMetadataToken = /\b(rating|year|country|genre|genres|title|naam|description)\b/i.test(prompt);
+      const hasSeasonToken = /\b(season|seasons)\b/i.test(prompt);
+      const wantsToSaveLive = /\b(save|publish|live|update\s*karo|save\s*kar\s*do|publish\s*kar\s*do|save\s*karo|live\s*karo)\b/i.test(prompt);
+
+      const isAddSeasonIntent = /\b(naya\s*season|add\s*season|create\s*season|season\s*\d+\s*(?:add|create|banao)|aur\s*ek\s*season)\b/i.test(prompt);
+      const isSwitchSeasonOnly = /\b(?:season|s)\s*(\d+)\s*(?:dikhao|kholo|open|le\s*jao|switch|par\s*jao|pe\s*jao)\b/i.test(prompt) && !hasModificationAction && !hasQualityToken && !hasSkipToken;
+
+      // Handle pure season switch view requests
+      if (isSwitchSeasonOnly) {
+        const sNumMatch = prompt.match(/(?:season|s)\s*(\d+)/i);
+        const sNum = sNumMatch ? parseInt(sNumMatch[1], 10) : 1;
+        return res.json({
+          thought: `Switched active view to Season ${sNum}.`,
+          intent: "content_edit",
+          reply: `Haan Boss! Maine view **Season ${sNum}** par switch kar diya hai. Step 2 me Season ${sNum} ke saare episodes inspect kar sakte hain!`,
+          voiceUsed: selectedVoice,
+          suggestionChips: [
+            { label: `⏩ Season ${sNum} Skip Markers Hatao`, prompt: `Season ${sNum} me skip markers hata do` },
+            { label: `🎬 Season ${sNum} 1080p Set Karo`, prompt: `Season ${sNum} me 1080p lagao` },
+            { label: `📋 Step 3: Review Summary`, prompt: `Review summary open karo` }
+          ],
+          summary: [`Switched active view to Season ${sNum}`],
+          actions: [
+            { type: "SWITCH_SEASON", data: { seasonNumber: sNum } },
+            { type: "GO_TO_STEP", step: 2 }
           ]
+        });
+      }
+
+      const isContentEditCommand = !isLoyaltyOrFunRequest && 
+        (hasModificationAction || isAddSeasonIntent) && 
+        (hasSkipToken || hasQualityToken || hasPartToken || hasMetadataToken || hasSeasonToken || isAddSeasonIntent) && 
+        (matchedTarget !== null || (enhancedContext?.currentDraft && (enhancedContext.currentDraft.activeSeasonEpisodesCount > 0 || enhancedContext.currentDraft.seasonsCount > 0)));
+
+      if (isContentEditCommand) {
+        const targetObj = matchedTarget ? matchedTarget.target : { title: "Current Media", type: "anime" };
+        const targetTitle = targetObj.title || "Current Media";
+        const targetType = targetObj.type === "movie" ? "Movie" : (targetObj.type === "anime" ? "Anime Series" : "Web Series");
+
+        // Helper to parse specifications from a specific text clause
+        const parseClauseSpecs = (clauseText: string) => {
+          let skipMarkers: any = undefined;
+          const isRemoveAllSkip = /\b(jitne\s*(?:bhi)?(?:\s*set)?|saare|sabhi|sab\s*ko|sab|all|total|poore|pure|har\s*ek|koi\s*bhi|sabko)\b/i.test(clauseText) &&
+            /\b(hata\s*do|hota\s*do|hataa\s*do|hatao|hata|remove|delete|mita\s*do|nikal\s*do|clear|clear\s*karo|erase|saaf\s*karo)\b/i.test(clauseText);
+
+          const clauseHasSkip = /\b(skip\s*markers?|skip\s*marker|skip|intro|outro|credits)\b/i.test(clauseText);
+          const clauseHasMod = /\b(hata\s*do|hota\s*do|hataa\s*do|hatao|hata|remove|delete|mita\s*do|nikal\s*do|clear|clear\s*karo|erase|saaf\s*karo|nahi\s*chahiye|mat\s*lagao|mat\s*rakho|nahi\s*rakhna|replace|badal\s*do|badlo|swap|change|laga\s*do|lagao|add\s*karo|add|set\s*karo|set|rakh\s*do|daal\s*do|dal\s*do|kar\s*dena|kar\s*do)\b/i.test(clauseText);
+
+          if (clauseHasSkip) {
+            if (isRemoveAllSkip || /\b(clear\s*all|remove\s*all|delete\s*all)\b/i.test(clauseText) || (clauseHasMod && !/\b(intro|outro|credits)\b/i.test(clauseText))) {
+              skipMarkers = { removeAll: true, removeIntro: true, removeOutro: true, removeCredits: true };
+            } else {
+              skipMarkers = {};
+              const dIntro = clauseText.match(/(?:intro|opening|op)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+              if (dIntro) {
+                skipMarkers.intro = { start: parseInt(dIntro[1], 10), end: parseInt(dIntro[2], 10) };
+              }
+              const dOutro = clauseText.match(/(?:outro|ending|ed)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+              if (dOutro) {
+                skipMarkers.outro = { start: parseInt(dOutro[1], 10), end: parseInt(dOutro[2], 10) };
+              }
+              const dCredits = clauseText.match(/(?:credits)\s*(?:skip)?\s*[:=-]?\s*(\d+)\s*(?:s|sec|seconds?)?\s*(?:se|to|-)\s*(\d+)\s*(?:s|sec|seconds?)?/i);
+              if (dCredits) {
+                skipMarkers.credits = { start: parseInt(dCredits[1], 10), end: parseInt(dCredits[2], 10) };
+              }
+              if (/\b(?:intro\s*(?:skip)?\s*(?:hata\s*do|hota\s*do|hataa\s*do|remove|delete|mat|nahi|clear))\b/i.test(clauseText)) {
+                skipMarkers.removeIntro = true;
+              }
+              if (/\b(?:outro\s*(?:skip)?\s*(?:hata\s*do|hota\s*do|hataa\s*do|remove|delete|mat|nahi|clear))\b/i.test(clauseText)) {
+                skipMarkers.removeOutro = true;
+              }
+              if (/\b(?:credits\s*(?:skip)?\s*(?:hata\s*do|hota\s*do|hataa\s*do|remove|delete|mat|nahi|clear))\b/i.test(clauseText)) {
+                skipMarkers.removeCredits = true;
+              }
+              if (Object.keys(skipMarkers).length === 0) skipMarkers = undefined;
+            }
+          }
+
+          const removeQualities: string[] = [];
+          const addQualities: string[] = [];
+          const setQualities: string[] = [];
+
+          const subClauses = clauseText.split(/\b(?:aur|and|lekin|but|fir|then|waise|,|;)\b/i);
+          subClauses.forEach(sub => {
+            const hasRemove = /\b(hata\s*do|hota\s*do|hataa\s*do|hatao|remove|delete|hata|mita\s*do|nikal\s*do)\b/i.test(sub);
+            const hasAdd = /\b(laga\s*do|lagao|add|set|rakh\s*do|daal\s*do|dal\s*do|kar\s*dena)\b/i.test(sub);
+            const qMatches = Array.from(sub.matchAll(/\b(1080p?|720p?|480p?|360p?|4k)\b/gi)).map(m => m[1].toLowerCase().replace(/(\d+)$/, '$1p'));
+
+            if (hasRemove && !hasAdd) {
+              qMatches.forEach(q => { if (!removeQualities.includes(q)) removeQualities.push(q); });
+            } else if (hasAdd && !hasRemove) {
+              qMatches.forEach(q => { if (!addQualities.includes(q)) addQualities.push(q); });
+            }
+          });
+
+          const targetEpNums: number[] = [];
+          const epNumMatches = Array.from(clauseText.matchAll(/(?:episode|ep)\s*(\d+)/gi));
+          if (epNumMatches.length > 0) {
+            epNumMatches.forEach(m => targetEpNums.push(parseInt(m[1], 10)));
+          }
+          const rangeMatch = clauseText.match(/(?:episode|ep)\s*(\d+)\s*(?:se|to|-)\s*(\d+)/i);
+          if (rangeMatch) {
+            const st = parseInt(rangeMatch[1], 10);
+            const en = parseInt(rangeMatch[2], 10);
+            if (st <= en && en - st < 100) {
+              for (let i = st; i <= en; i++) {
+                if (!targetEpNums.includes(i)) targetEpNums.push(i);
+              }
+            }
+          }
+
+          const isAllEps = targetEpNums.length === 0 || /\b(sabhi|sab|all|poore|pure|puri|poori|jitne\s*bhi|sab\s*ko|saare)\b/i.test(clauseText);
+          const partsMatch = clauseText.match(/(?:(\d+|ek|do|teen|chaar|two|three|four)\s*parts?)/i);
+          const partsCount = partsMatch ? (wordToNumMap[partsMatch[1].toLowerCase()] || parseInt(partsMatch[1], 10)) : undefined;
+
+          return {
+            skipMarkers,
+            removeQualities,
+            addQualities,
+            setQualities,
+            targetEpNums,
+            isAllEps,
+            partsCount
+          };
+        };
+
+        const actions: any[] = [];
+
+        // If target is in database library and not currently loaded in the form, load it first
+        if (matchedTarget && !matchedTarget.isCurrentDraft && targetObj.id && targetObj.id !== 'current-draft') {
+          actions.push({
+            type: "LOAD_FOR_EDIT",
+            data: { contentId: targetObj.id, title: targetTitle }
+          });
+        }
+
+        // Handle Add Season intent
+        let addedSeasonDesc = "";
+        if (isAddSeasonIntent) {
+          const sNumMatch = prompt.match(/(?:season|s)\s*(\d+)/i);
+          const epCountMatch = prompt.match(/(\d+)\s*(?:episodes?|eps?)/i);
+          const targetSeasonNum = sNumMatch ? parseInt(sNumMatch[1], 10) : ((enhancedContext?.currentDraft?.seasonsCount || 1) + 1);
+          const epCount = epCountMatch ? parseInt(epCountMatch[1], 10) : 12;
+          actions.push({
+            type: "ADD_SEASON",
+            data: {
+              seasonNumber: targetSeasonNum,
+              seasonTitle: `Season ${targetSeasonNum}`,
+              episodeCount: epCount
+            }
+          });
+          actions.push({
+            type: "SWITCH_SEASON",
+            data: { seasonNumber: targetSeasonNum }
+          });
+          addedSeasonDesc = `Created Season ${targetSeasonNum} with ${epCount} episodes`;
+        }
+
+        // Metadata Extraction
+        const titleMatch = prompt.match(/(?:title|naam)\s*(?:ko|badal\s*kar|change\s*to|set\s*to)?\s*[:=-]?\s*["']([^"'\n]+)["']/i) ||
+          prompt.match(/(?:title|naam)\s*(?:ko|badal\s*kar|change\s*to|set\s*to)?\s*[:=-]?\s*([A-Za-z0-9][A-Za-z0-9\s:_-]{2,35}?)(?:\s*(?:kar\s*dena|kar\s*do|karo|rakho|set|$))/i);
+        const ratingMatch = prompt.match(/(?:rating|stars?)\s*[:=-]?\s*(\d+(?:\.\d+)?)/i);
+        const yearMatch = prompt.match(/(?:year|saal)\s*[:=-]?\s*(20\d\d|19\d\d)/i);
+        const genreMatch = prompt.match(/(?:genre|genres)\s*[:=-]?\s*([A-Za-z\s,]+)(?:\s*(?:add|kar\s*do|set|$))/i);
+
+        const metaDataObj: any = {};
+        if (titleMatch && titleMatch[1]) {
+          const tClean = titleMatch[1].trim();
+          if (!/^(hata|hota|remove|delete|laga|add|set|skip)/i.test(tClean)) {
+            metaDataObj.title = tClean;
+          }
+        }
+        if (ratingMatch) metaDataObj.rating = parseFloat(ratingMatch[1]);
+        if (yearMatch) metaDataObj.year = yearMatch[1];
+        if (genreMatch && genreMatch[1]) {
+          metaDataObj.genres = genreMatch[1].split(',').map((g: string) => g.trim()).filter(Boolean);
+        }
+        if (/\b(japanese|japani|english|hindi|dual\s*audio|tamil|telugu)\b/i.test(prompt) && /\b(audio|language|bhasha|track)\b/i.test(prompt)) {
+          metaDataObj.languages = targetLanguages;
+        }
+        if (Object.keys(metaDataObj).length > 0) {
+          actions.push({
+            type: "FILL_UPLOAD_METADATA",
+            data: metaDataObj
+          });
+        }
+
+        // Season Mentions Detection & Multi-Season Splitting
+        const seasonRegex = /\b(?:season|s)\s*(\d+)\b/gi;
+        const seasonMentions: { seasonNum: number; index: number; text: string }[] = [];
+        let smMatch: RegExpExecArray | null;
+        while ((smMatch = seasonRegex.exec(prompt)) !== null) {
+          seasonMentions.push({
+            seasonNum: parseInt(smMatch[1], 10),
+            index: smMatch.index,
+            text: smMatch[0]
+          });
+        }
+
+        const distinctSeasonNums = Array.from(new Set(seasonMentions.map(s => s.seasonNum)));
+        const operationSummaries: string[] = [];
+
+        if (addedSeasonDesc) operationSummaries.push(addedSeasonDesc);
+        if (metaDataObj.title) operationSummaries.push(`Updated title to "${metaDataObj.title}"`);
+        if (metaDataObj.rating) operationSummaries.push(`Updated rating to ⭐${metaDataObj.rating}`);
+        if (metaDataObj.year) operationSummaries.push(`Updated release year to ${metaDataObj.year}`);
+        if (metaDataObj.genres) operationSummaries.push(`Updated genres to [${metaDataObj.genres.join(', ')}]`);
+        if (metaDataObj.languages) operationSummaries.push(`Updated audio languages to [${metaDataObj.languages.join(', ')}]`);
+
+        const hasEpisodesSpecChanges = hasQualityToken || hasSkipToken || hasPartToken || /\b(1080p|720p|480p|skip|intro|outro|credits|part|parts|hata|hota|remove|delete|laga|add|set)\b/i.test(prompt);
+
+        if (hasEpisodesSpecChanges) {
+          // Check if there are separate clauses for distinct seasons (e.g. "season 1 me X kar dena season 2 me Y kar dena")
+          let isMultiClauseDifferentSeasons = false;
+          if (distinctSeasonNums.length > 1) {
+            const textBetween = prompt.slice(seasonMentions[0].index, seasonMentions[1].index);
+            isMultiClauseDifferentSeasons = /\b(hata|hota|remove|delete|laga|add|set|kar\s*dena|kar\s*do|badal|part|intro|outro|credits|1080p|720p|480p)\b/i.test(textBetween);
+          }
+
+          if (isMultiClauseDifferentSeasons) {
+            // Multiple distinct season clauses
+            for (let i = 0; i < seasonMentions.length; i++) {
+              const currentMention = seasonMentions[i];
+              const nextMention = seasonMentions[i + 1];
+              const sliceStart = currentMention.index;
+              const sliceEnd = nextMention ? nextMention.index : prompt.length;
+              const clauseSlice = prompt.slice(sliceStart, sliceEnd);
+              const specs = parseClauseSpecs(clauseSlice);
+
+              if (specs.skipMarkers || specs.removeQualities.length > 0 || specs.addQualities.length > 0 || specs.partsCount) {
+                actions.push({
+                  type: "UPDATE_EPISODES_SPEC",
+                  data: {
+                    applyToAll: specs.isAllEps,
+                    applyToAllSeasons: false,
+                    seasonNumber: currentMention.seasonNum,
+                    episodeNumbers: specs.targetEpNums.length > 0 ? specs.targetEpNums : undefined,
+                    removeQualities: specs.removeQualities.length > 0 ? specs.removeQualities : undefined,
+                    addQualities: specs.addQualities.length > 0 ? specs.addQualities : undefined,
+                    setQualities: specs.setQualities.length > 0 ? specs.setQualities : undefined,
+                    partsCount: specs.partsCount,
+                    skipMarkers: specs.skipMarkers
+                  }
+                });
+
+                let desc = `Season ${currentMention.seasonNum}: `;
+                if (specs.targetEpNums.length > 0 && !specs.isAllEps) desc += `Episodes [${specs.targetEpNums.join(', ')}]: `;
+                if (specs.skipMarkers?.removeAll) desc += `Removed all skip markers. `;
+                else if (specs.skipMarkers?.removeIntro) desc += `Removed intro skip. `;
+                else if (specs.skipMarkers?.removeOutro) desc += `Removed outro skip. `;
+                if (specs.skipMarkers?.intro) desc += `Set intro skip (${specs.skipMarkers.intro.start}s - ${specs.skipMarkers.intro.end}s). `;
+                if (specs.skipMarkers?.outro) desc += `Set outro skip (${specs.skipMarkers.outro.start}s - ${specs.skipMarkers.outro.end}s). `;
+                if (specs.skipMarkers?.credits) desc += `Set credits skip (${specs.skipMarkers.credits.start}s - ${specs.skipMarkers.credits.end}s). `;
+                if (specs.removeQualities.length > 0) desc += `Removed [${specs.removeQualities.join(', ')}]. `;
+                if (specs.addQualities.length > 0) desc += `Added [${specs.addQualities.join(', ')}]. `;
+                if (specs.partsCount) desc += `Set ${specs.partsCount} parts. `;
+                operationSummaries.push(desc.trim());
+              }
+            }
+            // Default view to the first modified season
+            actions.push({ type: "SWITCH_SEASON", data: { seasonNumber: seasonMentions[0].seasonNum } });
+          } else if (distinctSeasonNums.length > 1) {
+            // Multiple seasons conjoined targeting same changes (e.g. "season 1 aur season 2 dono me...")
+            const specs = parseClauseSpecs(prompt);
+            if (specs.skipMarkers || specs.removeQualities.length > 0 || specs.addQualities.length > 0 || specs.partsCount) {
+              actions.push({
+                type: "UPDATE_EPISODES_SPEC",
+                data: {
+                  applyToAll: specs.isAllEps,
+                  applyToAllSeasons: false,
+                  seasonNumbers: distinctSeasonNums,
+                  episodeNumbers: specs.targetEpNums.length > 0 ? specs.targetEpNums : undefined,
+                  removeQualities: specs.removeQualities.length > 0 ? specs.removeQualities : undefined,
+                  addQualities: specs.addQualities.length > 0 ? specs.addQualities : undefined,
+                  setQualities: specs.setQualities.length > 0 ? specs.setQualities : undefined,
+                  partsCount: specs.partsCount,
+                  skipMarkers: specs.skipMarkers
+                }
+              });
+
+              let desc = `Seasons [${distinctSeasonNums.join(', ')}]: `;
+              if (specs.targetEpNums.length > 0 && !specs.isAllEps) desc += `Episodes [${specs.targetEpNums.join(', ')}]: `;
+              if (specs.skipMarkers?.removeAll) desc += `Removed all skip markers. `;
+              else if (specs.skipMarkers?.removeIntro) desc += `Removed intro skip. `;
+              else if (specs.skipMarkers?.removeOutro) desc += `Removed outro skip. `;
+              if (specs.skipMarkers?.intro) desc += `Set intro skip (${specs.skipMarkers.intro.start}s - ${specs.skipMarkers.intro.end}s). `;
+              if (specs.skipMarkers?.outro) desc += `Set outro skip (${specs.skipMarkers.outro.start}s - ${specs.skipMarkers.outro.end}s). `;
+              if (specs.skipMarkers?.credits) desc += `Set credits skip (${specs.skipMarkers.credits.start}s - ${specs.skipMarkers.credits.end}s). `;
+              if (specs.removeQualities.length > 0) desc += `Removed [${specs.removeQualities.join(', ')}]. `;
+              if (specs.addQualities.length > 0) desc += `Added [${specs.addQualities.join(', ')}]. `;
+              if (specs.partsCount) desc += `Set ${specs.partsCount} parts. `;
+              operationSummaries.push(desc.trim());
+            }
+            actions.push({ type: "SWITCH_SEASON", data: { seasonNumber: distinctSeasonNums[0] } });
+          } else if (distinctSeasonNums.length === 1 && !isAddSeasonIntent) {
+            // Exactly one specific season targeted (e.g. "season 2 me skip markers hata do")
+            const targetSNum = distinctSeasonNums[0];
+            const specs = parseClauseSpecs(prompt);
+            if (specs.skipMarkers || specs.removeQualities.length > 0 || specs.addQualities.length > 0 || specs.partsCount) {
+              actions.push({
+                type: "UPDATE_EPISODES_SPEC",
+                data: {
+                  applyToAll: specs.isAllEps,
+                  applyToAllSeasons: false,
+                  seasonNumber: targetSNum,
+                  episodeNumbers: specs.targetEpNums.length > 0 ? specs.targetEpNums : undefined,
+                  removeQualities: specs.removeQualities.length > 0 ? specs.removeQualities : undefined,
+                  addQualities: specs.addQualities.length > 0 ? specs.addQualities : undefined,
+                  setQualities: specs.setQualities.length > 0 ? specs.setQualities : undefined,
+                  partsCount: specs.partsCount,
+                  skipMarkers: specs.skipMarkers
+                }
+              });
+
+              let desc = `Season ${targetSNum}: `;
+              if (specs.targetEpNums.length > 0 && !specs.isAllEps) desc += `Episodes [${specs.targetEpNums.join(', ')}]: `;
+              if (specs.skipMarkers?.removeAll) desc += `Removed all skip markers across all episodes. `;
+              else if (specs.skipMarkers?.removeIntro) desc += `Removed intro skip. `;
+              else if (specs.skipMarkers?.removeOutro) desc += `Removed outro skip. `;
+              if (specs.skipMarkers?.intro) desc += `Set intro skip (${specs.skipMarkers.intro.start}s - ${specs.skipMarkers.intro.end}s). `;
+              if (specs.skipMarkers?.outro) desc += `Set outro skip (${specs.skipMarkers.outro.start}s - ${specs.skipMarkers.outro.end}s). `;
+              if (specs.skipMarkers?.credits) desc += `Set credits skip (${specs.skipMarkers.credits.start}s - ${specs.skipMarkers.credits.end}s). `;
+              if (specs.removeQualities.length > 0) desc += `Removed [${specs.removeQualities.join(', ')}]. `;
+              if (specs.addQualities.length > 0) desc += `Added [${specs.addQualities.join(', ')}]. `;
+              if (specs.partsCount) desc += `Set ${specs.partsCount} parts. `;
+              operationSummaries.push(desc.trim());
+            }
+            actions.push({ type: "SWITCH_SEASON", data: { seasonNumber: targetSNum } });
+          } else if (!isAddSeasonIntent) {
+            // No specific season mentioned (e.g. "ye anime series mese skip markers jitne bhi set Kiya Hai SAB Ko hata do") -> ALL SEASONS!
+            const specs = parseClauseSpecs(prompt);
+            if (specs.skipMarkers || specs.removeQualities.length > 0 || specs.addQualities.length > 0 || specs.partsCount) {
+              actions.push({
+                type: "UPDATE_EPISODES_SPEC",
+                data: {
+                  applyToAll: specs.isAllEps,
+                  applyToAllSeasons: true,
+                  episodeNumbers: specs.targetEpNums.length > 0 ? specs.targetEpNums : undefined,
+                  removeQualities: specs.removeQualities.length > 0 ? specs.removeQualities : undefined,
+                  addQualities: specs.addQualities.length > 0 ? specs.addQualities : undefined,
+                  setQualities: specs.setQualities.length > 0 ? specs.setQualities : undefined,
+                  partsCount: specs.partsCount,
+                  skipMarkers: specs.skipMarkers
+                }
+              });
+
+              let desc = `All Seasons: `;
+              if (specs.targetEpNums.length > 0 && !specs.isAllEps) desc += `Episodes [${specs.targetEpNums.join(', ')}]: `;
+              if (specs.skipMarkers?.removeAll) desc += `Removed all skip markers across all seasons & episodes. `;
+              else if (specs.skipMarkers?.removeIntro) desc += `Removed intro skip across all seasons. `;
+              else if (specs.skipMarkers?.removeOutro) desc += `Removed outro skip across all seasons. `;
+              if (specs.skipMarkers?.intro) desc += `Set intro skip (${specs.skipMarkers.intro.start}s - ${specs.skipMarkers.intro.end}s) across all seasons. `;
+              if (specs.skipMarkers?.outro) desc += `Set outro skip (${specs.skipMarkers.outro.start}s - ${specs.skipMarkers.outro.end}s) across all seasons. `;
+              if (specs.skipMarkers?.credits) desc += `Set credits skip (${specs.skipMarkers.credits.start}s - ${specs.skipMarkers.credits.end}s) across all seasons. `;
+              if (specs.removeQualities.length > 0) desc += `Removed [${specs.removeQualities.join(', ')}]. `;
+              if (specs.addQualities.length > 0) desc += `Added [${specs.addQualities.join(', ')}]. `;
+              if (specs.partsCount) desc += `Set ${specs.partsCount} parts. `;
+              operationSummaries.push(desc.trim());
+            }
+          }
+        }
+
+        if (wantsToSaveLive) {
+          actions.push({ type: "SAVE_EDITED_CONTENT" });
+          actions.push({ type: "GO_TO_STEP", step: 3 });
+        } else {
+          actions.push({ type: "GO_TO_STEP", step: 2 });
+        }
+
+        // Build Fluent Hinglish Response
+        let editReply = `Haan Boss! Maine **"${targetTitle}"** (${targetType}) `;
+        if (operationSummaries.length > 0) {
+          editReply += `me exact requested modifications apply kar di hain:\n\n` +
+            operationSummaries.map(s => `• **${s}**`).join('\n') + `\n\n`;
+        } else {
+          editReply += `me requested updates apply kar diye hain!\n\n`;
+        }
+        editReply += `Studio me saari modifications live reflect ho chuki hain Boss! Aap Step 2 me season tabs switch karke inspect kar sakte hain ya live publish kar sakte hain.`;
+
+        const summary = [
+          `Target: "${targetTitle}" (${targetType})`,
+          ...operationSummaries,
+          wantsToSaveLive ? `Auto-published changes live to database` : `Live synchronized in Edit Studio (Step 2)`
+        ].filter(Boolean);
+
+        return res.json({
+          thought: `Successfully parsed and executed content edit targeting "${targetTitle}": ${operationSummaries.join(' | ')}`,
+          intent: "content_edit",
+          reply: editReply,
+          voiceUsed: selectedVoice,
+          suggestionChips: [
+            { label: "👁️ Step 2: Episodes Inspect", prompt: "Step 2 me episodes dikhao" },
+            { label: "📋 Step 3: Review Summary", prompt: "Review summary open karo" },
+            { label: "🚀 Publish Changes Live", prompt: "Yeh changes live publish kar do" }
+          ],
+          summary,
+          actions
         });
       }
 
@@ -690,19 +1302,6 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         (/\b(kitne|kitna|kitni|kaun|kaunse|kaunsi|kya\s*kya|total|list|show|batao|dikhao|check|inventory|kya\s*upload|kya\s*hai)\b/i.test(prompt) &&
          /\b(upload|uploaded|anime|animes|series|movie|movies|content|titles|database|library)\b/i.test(prompt) &&
          !/\b(karo|kar\s*do|banao|upload\s*karna|laga\s*do|upload\s*karo|chada\s*do)\b/i.test(prompt));
-
-      // 2. Edit Inquiry or Existing Content Inspection
-      const library = Array.isArray(enhancedContext?.contentLibrary) ? enhancedContext.contentLibrary : [];
-      let matchedContent: any = null;
-      if (library.length > 0) {
-        const lowerPrompt = prompt.toLowerCase();
-        for (const item of library) {
-          if (item && item.title && lowerPrompt.includes(item.title.toLowerCase())) {
-            matchedContent = item;
-            break;
-          }
-        }
-      }
 
       const isGeneralEditIntent = !isInventoryQuery && !isLoyaltyOrFunRequest &&
         /\b(edit|change|badalna|update|sudharna)\b/i.test(prompt) &&
@@ -725,10 +1324,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         urlMatches.length === 0;
 
       // 4. Explicit Upload Order (Only triggers when admin truly orders an upload or provides links)
-      const hasUploadAction = /\b(upload\s*karo|upload\s*karna|naya\s*upload|upload\s*kar\s*do|upload\s*kijiye|add\s*karo|draft\s*banao|publish\s*karo|insert\s*karo|daal\s*do|dal\s*do|chada\s*do|chadhado|link\s*lagao|link\s*dalo|form\s*bharo|save\s*content|banao|banana|bana\s*do)\b/i.test(prompt);
-      const hasEpisodePattern = (/\b\d+\s*(?:episodes?|eps?|ep|bhag)\b/i.test(prompt) || /\b(?:episode|ep)\s*\d+/i.test(prompt)) && /\b(upload|banao|bana\s*do|rakho|set\s*karo)\b/i.test(prompt);
+      const hasUploadAction = /\b(upload\s*karo|upload\s*karna|naya\s*upload|upload\s*kar\s*do|upload\s*kijiye|add\s*karo|draft\s*banao|publish\s*karo|insert\s*karo|daal\s*do|dal\s*do|chada\s*do|chadhado|link\s*lagao|link\s*dalo|form\s*bharo|save\s*content|banao|banana|bana\s*do|bnao|bnado|bna\s*do|bnaaye|banaye|boxes\s*bnao|boxes\s*banao|box\s*bnao|box\s*banao|create|add)\b/i.test(prompt);
+      const hasEpisodePattern = (/\b\d+\s*(?:episodes?|eps?|ep|bhag|boxes?|box)\b/i.test(prompt) || /\b(?:episode|ep)\s*\d+/i.test(prompt) || /\b(?:season|s)\s*\d+/i.test(prompt)) && /\b(upload|banao|bana\s*do|bnao|bnado|bna\s*do|rakho|set\s*karo|chahiye|add|create|banana|bnaaye|banaye)\b/i.test(prompt);
 
-      const isExplicitUploadOrder = !isLoyaltyOrFunRequest && 
+      let isExplicitUploadOrder = !isLoyaltyOrFunRequest && 
         !isInventoryQuery && 
         !isGeneralEditIntent && 
         !isSpecificEditIntent && 
@@ -736,19 +1335,87 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         !isConversationalQuestion &&
         (hasUploadAction || urlMatches.length > 0 || hasEpisodePattern);
 
+      // --- ADVANCED MULTI-SEASON SPECIFICATION PARSER ---
+      interface SeasonSpec {
+        seasonNumber: number;
+        episodeCount: number;
+      }
+
+      const promptWithoutUrls = prompt.replace(/https?:\/\/[^\s"'<>)\]]+/g, " [STREAM_LINK] ");
+      const parsedSeasonsMap = new Map<number, number>();
+
+      const getNumVal = (str: string): number => {
+        if (!str) return 0;
+        const clean = str.trim().toLowerCase();
+        if (wordToNumMap[clean] !== undefined) return wordToNumMap[clean];
+        const parsed = parseInt(clean, 10);
+        return isNaN(parsed) ? 0 : parsed;
+      };
+
+      // Strategy 1: Clause-based segmentation (e.g. "is series ke season 1 me 12 episode boxes bnao or issi series ke season 2 me 23 episode boxes bnao")
+      const clauses = promptWithoutUrls.split(/\b(?:aur|or|and|\+|&|,|;|\n)\b|\b(?:issi\s*series\s*(?:ke|me)?|is\s*series\s*(?:ke|me)?|isike|iske|sath\s*hi|bhi)\b/i);
+      for (const clause of clauses) {
+        const sMatch = clause.match(/(?:season|s)\s*(\d+|ek|one|do|two|teen|three|char|four|paanch|five|che|six|saat|seven|aath|eight|nau|nine|das|ten)/i);
+        if (sMatch) {
+          const sNum = getNumVal(sMatch[1]);
+          const epMatch = clause.match(/(\d+|ek|do|dono|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees)\s*(?:episodes?|eps?|ep|boxes?|box|bhag|kist)/i) ||
+                          clause.match(/(?:episodes?|eps?|ep|boxes?|box)\s*[:=-]?\s*(\d+)/i);
+          if (epMatch) {
+            const epCnt = getNumVal(epMatch[1]);
+            if (sNum > 0 && epCnt > 0) {
+              parsedSeasonsMap.set(sNum, epCnt);
+            }
+          }
+        }
+      }
+
+      // Strategy 2: Direct pattern matching across whole prompt
+      // Pattern A: "season 1 me 12 episode boxes bnao... season 2 me 23 episode boxes bnao"
+      const sEpPattern1 = /(?:season|s)\s*(\d+|ek|one|do|two|teen|three|char|four|paanch|five)[^.\n,;]*?(?:me|mein|par|ke\s*liye|ke|ko|has|have|with|me\s*bhi)?\s*[:=-]?\s*(\d+|ek|do|dono|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees)\s*(?:episodes?|eps?|ep|boxes?|box|bhag|kist)/gi;
+      let sepM: RegExpExecArray | null;
+      while ((sepM = sEpPattern1.exec(promptWithoutUrls)) !== null) {
+        const sNum = getNumVal(sepM[1]);
+        const epCnt = getNumVal(sepM[2]);
+        if (sNum > 0 && epCnt > 0) {
+          parsedSeasonsMap.set(sNum, epCnt);
+        }
+      }
+
+      // Pattern B: Reverse order: "12 episode boxes season 1 me or 23 episode boxes season 2 me"
+      const sEpPattern2 = /(\d+|ek|do|dono|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees)\s*(?:episodes?|eps?|ep|boxes?|box|bhag|kist)[^.\n,;]*?(?:ke\s*liye|in|me|mein|for)?\s*(?:season|s)\s*(\d+|ek|one|do|two|teen|three|char|four|paanch|five)/gi;
+      let sepM2: RegExpExecArray | null;
+      while ((sepM2 = sEpPattern2.exec(promptWithoutUrls)) !== null) {
+        const epCnt = getNumVal(sepM2[1]);
+        const sNum = getNumVal(sepM2[2]);
+        if (sNum > 0 && epCnt > 0 && !parsedSeasonsMap.has(sNum)) {
+          parsedSeasonsMap.set(sNum, epCnt);
+        }
+      }
+
+      // Pattern C: "N seasons banao har season me M episodes" (e.g. "2 seasons banao har season me 12 episodes")
+      if (parsedSeasonsMap.size === 0) {
+        const uniformMatch = promptWithoutUrls.match(/(\d+|ek|do|teen|chaar|paanch|two|three|four|five)\s*seasons?[^.\n,;]*?(?:har|each|sabhi|every)\s*season[^.\n,;]*?(\d+|ek|do|teen|chaar|paanch|two|three|four|five|\d+)\s*(?:episodes?|eps?|ep|boxes?|box)/i);
+        if (uniformMatch) {
+          const totalS = getNumVal(uniformMatch[1]) || 1;
+          const epPerS = getNumVal(uniformMatch[2]) || 12;
+          for (let sI = 1; sI <= Math.min(totalS, 10); sI++) {
+            parsedSeasonsMap.set(sI, epPerS);
+          }
+        }
+      }
+
+      // If seasons and episode counts were ordered in the prompt, guarantee explicit upload intent!
+      if (parsedSeasonsMap.size > 0 && !isLoyaltyOrFunRequest && !isInventoryQuery && !isCasualGreeting && !isConversationalQuestion) {
+        isExplicitUploadOrder = true;
+      }
+
       const isMediaInquiry = !isExplicitUploadOrder && !isCasualGreeting && !isConversationalQuestion && !isLoyaltyOrFunRequest && !isInventoryQuery && !isGeneralEditIntent && !isSpecificEditIntent && /\b(movie|series|anime|season|film|show|kaisa|kaisi|story|plot|review|recommend|suggest|release|actor|cast)\b/i.test(prompt);
 
-      // Season Number detection
-      const seasonMatch = prompt.match(/(?:season|s)\s*(\d+)/i);
-      const targetSeasonNumber = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
-
-      // Episode Count detection ("kitne episode banana hai", "do episode upload karna hai")
-      const promptWithoutUrls = prompt.replace(/https?:\/\/[^\s"'<>)\]]+/g, " [STREAM_LINK] ");
-
+      // If no seasons detected by patterns 1-3, fall back to single season check
       let requestedEpisodeCount: number | null = null;
-      const countMatch = promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episodes?|eps?|ep|bhag|kist)\b/i) ||
-                         promptWithoutUrls.match(/(?:episodes?|eps?|ep)\s*(?:count|total|ki\s*sankhya)?\s*[:=-]?\s*(\d+)/i) ||
-                         promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episode|episodes)\s*(?:banana|banao|rakhna|upload|add|create|generate)/i);
+      const countMatch = promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episodes?|eps?|ep|boxes?|box|bhag|kist)\b/i) ||
+                         promptWithoutUrls.match(/(?:episodes?|eps?|ep|boxes?|box)\s*(?:count|total|ki\s*sankhya)?\s*[:=-]?\s*(\d+)/i) ||
+                         promptWithoutUrls.match(/\b(ek|one|do|dono|donon|two|teen|teeno|three|char|chaar|four|paanch|panch|five|che|chhah|six|saat|seven|aath|eight|nau|nine|das|ten|gyarah|barah|baarah|terah|chaudah|pandrah|solah|satrah|atharah|unnis|bees|chaubees|pachees|\d+)\s*(?:episode|episodes|boxes|box)\s*(?:banana|banao|bnao|bnado|bna\s*do|rakhna|upload|add|create|generate)/i);
       if (countMatch) {
         const rawVal = countMatch[1].toLowerCase();
         const num = wordToNumMap[rawVal] || parseInt(rawVal, 10);
@@ -757,8 +1424,23 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       }
 
-      // Map links to specific Episode numbers and Part numbers using accurate segment slicing
+      const singleSeasonMatch = prompt.match(/(?:season|s)\s*(\d+)/i);
+      const defaultSeasonNum = singleSeasonMatch ? parseInt(singleSeasonMatch[1], 10) : 1;
+
+      if (parsedSeasonsMap.size === 0) {
+        parsedSeasonsMap.set(defaultSeasonNum, requestedEpisodeCount || 1);
+      }
+
+      const sortedSeasons: SeasonSpec[] = Array.from(parsedSeasonsMap.entries())
+        .map(([seasonNumber, episodeCount]) => ({ seasonNumber, episodeCount }))
+        .sort((a, b) => a.seasonNumber - b.seasonNumber);
+
+      const isMultiSeason = sortedSeasons.length > 1;
+      const targetSeasonNumber = sortedSeasons[0].seasonNumber;
+
+      // Map links to specific Season, Episode numbers, and Part numbers
       interface MappedLink {
+        seasonNum: number;
         epNum: number;
         partNum: number;
         url: string;
@@ -773,6 +1455,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         rawMatches.push({ url: lMatch[0], index: lMatch.index, end: lMatch.index + lMatch[0].length });
       }
 
+      let lastSeason = sortedSeasons[0]?.seasonNumber || 1;
       let lastEp = 1;
       let lastPart = 0;
 
@@ -780,6 +1463,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         const m = rawMatches[i];
         const prevEnd = i === 0 ? 0 : rawMatches[i - 1].end;
         const segment = prompt.substring(prevEnd, m.index);
+
+        // Find season mention in segment
+        const sMatches = Array.from(segment.matchAll(/(?:season|s)\s*(\d+)/gi));
+        let seasonNum = sMatches.length > 0 ? parseInt(sMatches[sMatches.length - 1][1], 10) : lastSeason;
 
         // Find episode mentions in segment (e.g. "Episode 1", "Ep 2")
         const epMatches = Array.from(segment.matchAll(/(?:episode|ep|bhag|kist)\s*(\d+)/gi));
@@ -792,7 +1479,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         if (epNum === 0) {
           if (partNum > 1) {
             epNum = lastEp;
-          } else if (rawMatches.length === 1 && requestedEpisodeCount === 1) {
+          } else if (rawMatches.length === 1 && sortedSeasons[0].episodeCount === 1) {
             epNum = 1;
           } else if (i === 0) {
             epNum = 1;
@@ -809,9 +1496,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           }
         }
 
+        lastSeason = seasonNum;
         lastEp = epNum;
         lastPart = partNum;
-        mappedLinks.push({ epNum, partNum, url: m.url });
+        mappedLinks.push({ seasonNum, epNum, partNum, url: m.url });
       }
 
       // Media type detection
@@ -819,19 +1507,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const isMovie = /\b(movie|film|cinema)\b/i.test(prompt) && !isAnime && !hasEpisodePattern;
       const mediaType: "movie" | "series" | "anime" = isAnime ? "anime" : (isMovie ? "movie" : "series");
 
-      if (!requestedEpisodeCount && mediaType !== "movie") {
-        if (mappedLinks.length > 0) {
-          const maxEp = Math.max(...mappedLinks.map(l => l.epNum));
-          requestedEpisodeCount = Math.max(maxEp, 1);
-        } else {
-          requestedEpisodeCount = 1;
-        }
-      }
-
       // Clean search title for TMDB (removes procedural instruction words cleanly)
-      let searchTitle = prompt
+      let cleanSearchTitle = prompt
         .replace(/(https?:\/\/[^\s]+)/gi, " ")
-        .replace(/\b(upload|add|draft|publish|stream|link|links|episode|episodes|ep|eps|season|seasons|s\d+|part|parts|skip|intro|outro|credits|movie|anime|series|web\s*series|urdu|hindi|english|japanese|korean|tamil|telugu|1080p|720p|480p|360p|4k|2k|with|and|for|in|to|batao|kaisa|kaisi|story|plot|review|banana|banao|bana\s*do|banane|banani|rakhna|rakho|rakhe|target|karna|kar|karo|hai|hain|ke|ka|ki|ko|me|mein|par|pe|audio|track|quality|qualities|kitne|total|count|number|hata|hatao|hata\s*do|laga|lagao|lagana|laga\s*do|sirf|baki|sab|saari|select|selected|selection|chahiye|honge|hoga|hogi|suggest|specification|badal\s*do|badlo|lekin|wale|wali|wala|iss|is|us|language|languages|hi|bhi)\b/gi, " ")
+        .replace(/\b(upload|add|draft|publish|stream|link|links|episode|episodes|ep|eps|season|seasons|s\d+|part|parts|skip|intro|outro|credits|movie|anime|series|web\s*series|urdu|hindi|english|japanese|korean|tamil|telugu|1080p|720p|480p|360p|4k|2k|with|and|for|in|to|batao|kaisa|kaisi|story|plot|review|banana|banao|bana\s*do|banane|banani|rakhna|rakho|rakhe|target|karna|kar|karo|hai|hain|ke|ka|ki|ko|me|mein|par|pe|audio|track|quality|qualities|kitne|total|count|number|hata|hatao|hata\s*do|laga|lagao|lagana|laga\s*do|sirf|baki|sab|saari|select|selected|selection|chahiye|honge|hoga|hogi|suggest|specification|badal\s*do|badlo|lekin|wale|wali|wala|iss|is|us|language|languages|hi|bhi|boxes|box|bnao|bna|bnado|banado|or|aur|dono|teeno|issi|isi|kist|bhag|generate|create)\b/gi, " ")
         .replace(/[\d]+s\b/gi, " ")
         .replace(/[0-9]+-[0-9]+s?/gi, " ")
         .replace(/\b\d+\b/g, " ")
@@ -858,6 +1537,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         { pattern: /\b(fullmetal\s*alchemist)\b/i, title: "Fullmetal Alchemist: Brotherhood" }
       ];
 
+      let searchTitle = cleanSearchTitle;
       for (const k of knownMediaTitles) {
         if (k.pattern.test(prompt)) {
           searchTitle = k.title;
@@ -866,7 +1546,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       if (!searchTitle || searchTitle.length < 2) {
-        searchTitle = prompt.split(" ").slice(0, 3).join(" ").trim();
+        const draftTitle = enhancedContext?.currentDraft?.title || enhancedContext?.activeTitle;
+        if (draftTitle && typeof draftTitle === "string" && draftTitle.trim().length > 1) {
+          searchTitle = draftTitle.trim();
+        } else {
+          searchTitle = isAnime ? "Anime Series" : (isMovie ? "New Movie" : "Web Series");
+        }
       }
 
       // 2. Playful Loyalty Commands (e.g. "meow meow bolo", "loyalty test", "tareef karo")
@@ -964,9 +1649,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           skipStr = `• **Skip Markers**: Intro [${c.skipMarkers.intro.start || 0}s - ${c.skipMarkers.intro.end || 90}s]\n`;
         }
 
-        const wantsToOpenForm = /\b(load|open|kholo|khool\s*do|le\s*jao|form\s*me\s*kholo)\b/i.test(prompt);
+        const wantsToOpenForm = /\b(load|open|kholo|khool\s*do|le\s*jao|form\s*me\s*kholo|edit|update|badalna)\b/i.test(prompt);
 
-        const editReply = `Haan Boss! **"${c.title}"** (${typeStr}) ka record mil gaya hai. Abhi isme ye details maujud hain:\n\n` +
+        const editReply = `Haan Boss! **"${c.title}"** (${typeStr}) ka record mil gaya hai aur maine use Studio Edit Form me load kar diya hai. Abhi isme ye details maujud hain:\n\n` +
           `• **Title**: ${c.title} (${c.year || '2024'})\n` +
           `• **Type**: ${typeStr} | Rating: ⭐ ${c.rating || '8.8'}\n` +
           `• **Genres**: ${genreStr}\n` +
@@ -974,11 +1659,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           `• **Active Qualities**: ${qualStr}\n` +
           epInfoStr +
           skipStr +
-          `\n**Aap isme kya edit karwana chahte hain?**\n` +
-          `1. Naye episodes ya stream links add karna?\n` +
-          `2. Quality update karna (jaise 720p se 1080p)?\n` +
-          `3. Skip markers (intro / outro) badalna?\n` +
-          `4. Ya direct upload form me load karna?`;
+          `\n**Aap isme kya modify karwana chahte hain?**\n` +
+          `1. Skip markers (intro / outro) hatana ya badalna?\n` +
+          `2. Quality update karna (jaise 720p hata kar 1080p lagana)?\n` +
+          `3. Naye episodes ya stream links add karna?`;
 
         return res.json({
           thought: `Inspected ${c.title} from uploaded library and presented full configuration in chat.`,
@@ -986,13 +1670,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           reply: editReply,
           voiceUsed: selectedVoice,
           suggestionChips: [
-            { label: "📝 Open in Edit Form", prompt: `Load ${c.title} in edit form` },
+            { label: "⏩ Saare Skip Markers Hatao", prompt: `${c.title} me se skip markers jitne bhi set kiye hai sab ko hata do` },
             { label: "🎬 Set 1080p Quality", prompt: `${c.title} me 1080p quality set karo` },
-            { label: "⏩ Intro Skip 0-90s", prompt: `${c.title} me intro skip 0 to 90s set karo` }
+            { label: "👁️ Step 2: Episodes Inspect", prompt: `Step 2 me episodes dikhao` }
           ],
-          actions: wantsToOpenForm ? [{ type: "LOAD_FOR_EDIT", data: { contentId: c.id, title: c.title } }] : [],
+          actions: wantsToOpenForm ? [{ type: "LOAD_FOR_EDIT", data: { contentId: c.id, title: c.title } }, { type: "GO_TO_STEP", step: 1 }] : [{ type: "LOAD_FOR_EDIT", data: { contentId: c.id, title: c.title } }],
           summary: [
-            `Inspected "${c.title}" (${typeStr})`,
+            `Loaded "${c.title}" into Edit Studio`,
             `Languages: ${langStr}`,
             `Qualities: ${qualStr}`
           ]
@@ -1047,7 +1731,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       if (isConversationalQuestion) {
         let conversationalReply = "";
         try {
-          const chatModel = "gemini-3.6-flash";
+          const chatModel = "gemini-3.1-flash-lite";
           const chatPrompt = `The Super Admin of MaxPlay streaming platform asked: "${prompt.trim()}".
 You are the MaxPlay AI Copilot. Answer the admin directly, politely, and intelligently in fluent Hinglish.
 Address them respectfully as "Boss".
@@ -1094,8 +1778,9 @@ Respond strictly in valid JSON format:
         });
       }
 
-      // 8. TMDB Search (STRICTLY for explicit upload orders)
-      const shouldSearchTmdb = isExplicitUploadOrder && !isCasualGreeting && !isLoyaltyOrFunRequest && !isInventoryQuery && !isConversationalQuestion;
+      // 8. TMDB Search (STRICTLY for explicit upload orders with specific title)
+      const isGenericTitle = /^(Web Series|Anime Series|New Movie|New Media|is series|nayi series|series|anime|movie)$/i.test(searchTitle.trim());
+      const shouldSearchTmdb = isExplicitUploadOrder && !isGenericTitle && !isCasualGreeting && !isLoyaltyOrFunRequest && !isInventoryQuery && !isConversationalQuestion;
       if (shouldSearchTmdb && TMDB_API_KEY && TMDB_API_KEY !== "paste_your_api_key_here") {
         try {
           if (searchTitle) {
@@ -1206,15 +1891,25 @@ Respond strictly in valid JSON format:
       }
 
       // 7. Explicit Upload Order Handling - Gemini AI invocation with strict directives
-      const maxLinkEp = mappedLinks.length > 0 ? Math.max(...mappedLinks.map(l => l.epNum)) : 1;
-      const finalEpCount = Math.max(requestedEpisodeCount || 1, maxLinkEp);
       const primaryLang = targetLanguages[0] || "Hindi";
       const primaryQual = targetQualities[0] || "1080p";
 
+      let seasonsDirective = "";
+      if (isMultiSeason) {
+        seasonsDirective = `\n- MULTIPLE SEASONS REQUESTED (CRITICAL MANDATE):
+Boss explicitly ordered ${sortedSeasons.length} seasons in this single command:
+${sortedSeasons.map(s => `  • Season ${s.seasonNumber}: Exactly ${s.episodeCount} episode boxes MUST be generated`).join('\n')}
+You MUST output a separate "BUILD_SERIES_EPISODES" action in the "actions" array for EACH requested season:
+${sortedSeasons.map(s => `  - Action: { "type": "BUILD_SERIES_EPISODES", "data": { "seasonNumber": ${s.seasonNumber}, "seasonTitle": "Season ${s.seasonNumber}", "episodes": [exactly ${s.episodeCount} episode objects (epNum 1 to ${s.episodeCount})] } }`).join('\n')}
+DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested seasons) MUST be present in the actions array!`;
+      } else {
+        const s = sortedSeasons[0];
+        seasonsDirective = `\n- SEASON NUMBER: ${s.seasonNumber}
+- TARGET EPISODE COUNT: Exactly ${s.episodeCount} episodes MUST be in the "BUILD_SERIES_EPISODES" episodes array (epNum: 1 to ${s.episodeCount}). NEVER output fewer episodes!`;
+      }
+
       let taskDirective = `\nCRITICAL UPLOAD SPECIFICATIONS (STRICTLY ADHERE TO THESE):
-- MEDIA TYPE: "${mediaType}"
-- SEASON NUMBER: ${targetSeasonNumber}
-- TARGET EPISODE COUNT: Exactly ${finalEpCount} episodes MUST be in the "BUILD_SERIES_EPISODES" episodes array (epNum: 1 to ${finalEpCount}). NEVER output fewer episodes!
+- MEDIA TYPE: "${mediaType}"${seasonsDirective}
 - ALL TARGET QUALITIES: [${allActiveQualities.map(q => `"${q}"`).join(", ")}] in "FILL_UPLOAD_METADATA.data.qualities".
 - TARGET LANGUAGES: [${targetLanguages.map(l => `"${l}"`).join(", ")}] in "FILL_UPLOAD_METADATA.data.languages".
 - SPECIFIC EPISODE OVERRIDES:
@@ -1226,7 +1921,7 @@ Respond strictly in valid JSON format:
     : 'Single part default per episode.'}
 - LINK MAPPING MANDATE:
   ${mappedLinks.length > 0 
-    ? `Boss provided ${mappedLinks.length} stream links: ${JSON.stringify(mappedLinks.map(l => ({ epNum: l.epNum, partNum: l.partNum, url: l.url })))}. Paste these into their exact episodes.` 
+    ? `Boss provided ${mappedLinks.length} stream links: ${JSON.stringify(mappedLinks.map(l => ({ seasonNum: l.seasonNum, epNum: l.epNum, partNum: l.partNum, url: l.url })))}. Paste these into their exact season and episodes.` 
     : 'Boss provided NO stream links in this message.'}
   CRITICAL: For all episodes where NO link was provided, keep input boxes clean and empty with NO fake URLs (no example.com, no test.mp4, no duplicates)!
 - DURATION: Include CALCULATE_DURATION action.
@@ -1234,7 +1929,7 @@ Respond strictly in valid JSON format:
 
       const userMessage = `Admin Command: ${prompt.trim()}\nCurrent Admin Context: ${JSON.stringify(enhancedContext)}${taskDirective}\nPlease analyze the admin's command and output the structured operational plan.`;
 
-      const candidateModels = ["gemini-3.6-flash", "gemini-2.5-pro"];
+      const candidateModels = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview"];
       let lastErr = null;
       let response = null;
 
@@ -1257,8 +1952,8 @@ Respond strictly in valid JSON format:
             if (response && response.text) break;
           } catch (err: any) {
             lastErr = err;
-            const isQuotaErr = err?.status === 429 || err?.message?.includes("429") || err?.message?.includes("Quota exceeded");
-            if (isQuotaErr) break;
+            const isQuotaErr = err?.status === 429 || err?.message?.includes("429") || err?.message?.includes("Quota exceeded") || err?.message?.includes("resource_exhausted");
+            if (isQuotaErr) break; // Break attempt to move to next candidate model
             const isUnavailable = err?.message?.includes("503") || err?.message?.includes("UNAVAILABLE") || err?.status === 503;
             if (isUnavailable && attempt < 2) {
               await new Promise((r) => setTimeout(r, 1000 * attempt));
@@ -1268,14 +1963,15 @@ Respond strictly in valid JSON format:
           }
         }
         if (response && response.text) break;
-        if (lastErr && (lastErr?.status === 429 || lastErr?.message?.includes("429") || lastErr?.message?.includes("Quota exceeded"))) break;
       }
 
-      // Build flawless episodes structure helper supporting per-episode qualities and parts
-      const buildVerifiedEpisodes = () => {
+      // Build flawless episodes structure helper supporting multi-seasons, per-episode qualities, and parts
+      const buildVerifiedEpisodesForSeason = (seasonNum: number, epCount: number) => {
         const episodesList: any[] = [];
-        for (let epI = 1; epI <= finalEpCount; epI++) {
-          const linksForThisEp = mappedLinks.filter(l => l.epNum === epI).sort((a, b) => a.partNum - b.partNum);
+        const seasonLinks = mappedLinks.filter(l => (l.seasonNum || 1) === seasonNum);
+
+        for (let epI = 1; epI <= epCount; epI++) {
+          const linksForThisEp = seasonLinks.filter(l => l.epNum === epI).sort((a, b) => a.partNum - b.partNum);
           
           // Determine qualities for this specific episode
           const epQualities = (episodeQualitiesMap[epI] && episodeQualitiesMap[epI].length > 0)
@@ -1326,7 +2022,7 @@ Respond strictly in valid JSON format:
 
             episodesList.push({
               epNum: epI,
-              title: `${tmdb?.title || searchTitle || 'Content'} - Episode ${epI}`,
+              title: `${tmdb?.title || searchTitle || 'Content'} - S${seasonNum} E${epI}`,
               duration: formatDurationSec(epDurationSum),
               qualities: epQualities,
               partsCount: customPartsCount,
@@ -1356,7 +2052,7 @@ Respond strictly in valid JSON format:
 
             episodesList.push({
               epNum: epI,
-              title: `${tmdb?.title || searchTitle || 'Content'} - Episode ${epI}`,
+              title: `${tmdb?.title || searchTitle || 'Content'} - S${seasonNum} E${epI}`,
               duration: "",
               qualities: epQualities,
               partsCount: customPartsCount,
@@ -1427,13 +2123,17 @@ Respond strictly in valid JSON format:
             }
           });
         } else {
-          fallbackActions.push({
-            type: "BUILD_SERIES_EPISODES",
-            data: {
-              seasonNumber: targetSeasonNumber,
-              episodes: buildVerifiedEpisodes()
-            }
-          });
+          // Output a separate BUILD_SERIES_EPISODES action for EACH requested season!
+          for (const s of sortedSeasons) {
+            fallbackActions.push({
+              type: "BUILD_SERIES_EPISODES",
+              data: {
+                seasonNumber: s.seasonNumber,
+                seasonTitle: "Season " + s.seasonNumber,
+                episodes: buildVerifiedEpisodesForSeason(s.seasonNumber, s.episodeCount)
+              }
+            });
+          }
         }
 
         fallbackActions.push({
@@ -1451,15 +2151,19 @@ Respond strictly in valid JSON format:
         let totalSeasonSeconds = 0;
 
         if (mappedLinks.length > 0) {
-          for (let epI = 1; epI <= finalEpCount; epI++) {
-            const epLinks = mappedLinks.filter(l => l.epNum === epI).sort((a, b) => a.partNum - b.partNum);
-            if (epLinks.length > 0) {
-              const epTotalSec = epLinks.reduce((acc, curr) => acc + (curr.probedDurationSec || 1420), 0);
-              totalSeasonSeconds += epTotalSec;
-              const partsText = epLinks.map((l, idx) => `Part ${idx + 1} (${formatHumanDuration(l.probedDurationSec || 1420)})`).join(" + ");
-              epBreakdown += `\n  • Episode ${epI} (${epLinks.length} Part${epLinks.length > 1 ? 's' : ''}): ${partsText} => Combined Total: **${formatHumanDuration(epTotalSec)}**`;
-            } else {
-              epBreakdown += `\n  • Episode ${epI}: Link input box empty (unprovided)`;
+          for (const s of sortedSeasons) {
+            const sLinks = mappedLinks.filter(l => (l.seasonNum || 1) === s.seasonNumber);
+            if (sLinks.length > 0) {
+              epBreakdown += `\n**Season ${s.seasonNumber} Links**:`;
+              for (let epI = 1; epI <= s.episodeCount; epI++) {
+                const epLinks = sLinks.filter(l => l.epNum === epI).sort((a, b) => a.partNum - b.partNum);
+                if (epLinks.length > 0) {
+                  const epTotalSec = epLinks.reduce((acc, curr) => acc + (curr.probedDurationSec || 1420), 0);
+                  totalSeasonSeconds += epTotalSec;
+                  const partsText = epLinks.map((l, idx) => `Part ${idx + 1} (${formatHumanDuration(l.probedDurationSec || 1420)})`).join(" + ");
+                  epBreakdown += `\n  • Episode ${epI} (${epLinks.length} Part${epLinks.length > 1 ? 's' : ''}): ${partsText} => Total: **${formatHumanDuration(epTotalSec)}**`;
+                }
+              }
             }
           }
         }
@@ -1475,30 +2179,48 @@ Respond strictly in valid JSON format:
           overridesSummary += `• Isolated Skip Markers: ${Object.entries(episodeSkipMarkersMap).map(([ep, sm]) => `Episode ${ep} (Intro: ${sm.intro ? `${sm.intro.start}s-${sm.intro.end}s` : 'None'})`).join(', ')}.\n`;
         }
 
-        const fallbackReply = `Haan Boss! Aapke aadesh ke mutabiq maine **${tmdb?.title || searchTitle || 'content'}** (${mediaType === 'anime' ? 'Anime Series' : 'Series'}, Season ${targetSeasonNumber}) prepare kar diya hai:\n` +
-          `• Total Episodes: Exactly ${finalEpCount} episodes banaye hain.\n` +
-          `• Global Selected Quality: [${targetQualities.join(', ')}] select kiya hai.\n` +
-          `• Audio Language: Sirf [${targetLanguages.join(', ')}] language select ki gayi hai.\n` +
-          overridesSummary +
-          (linkedCount > 0 
-            ? `• Links & Duration Breakdown:${epBreakdown}\n` +
-              `• **Total Season Calculated Duration**: **${formatHumanDuration(totalSeasonSeconds)}**!\n`
-            : `• Stream Links: Koi link message me nahi tha, isliye sabhi ${finalEpCount} episodes ke input boxes bilkul clean aur empty chhod diye hain!\n`) +
-          `Step 2 upload form open kar diya hai Boss!`;
+        const totalAllEpisodesCount = sortedSeasons.reduce((sum, s) => sum + s.episodeCount, 0);
+        const seasonsLines = sortedSeasons.map(s => `  • **Season ${s.seasonNumber}**: Exactly ${s.episodeCount} episode boxes`).join('\n');
+
+        let fallbackReply = "";
+        if (isMultiSeason) {
+          fallbackReply = `Haan Boss! Aapke aadesh ke mutabiq maine **${tmdb?.title || searchTitle || 'series'}** (${mediaType === 'anime' ? 'Anime Series' : 'Series'}) ke sabhi ${sortedSeasons.length} seasons successfully prepare kar diye hain:\n` +
+            `${seasonsLines}\n` +
+            `• **Total Episodes**: Sabhi seasons milakar exactly **${totalAllEpisodesCount} episode boxes** generate kar diye gaye hain.\n` +
+            `• **Selected Quality**: [${targetQualities.join(', ')}] select kiya hai.\n` +
+            `• **Audio Language**: Sirf [${targetLanguages.join(', ')}] language set ki gayi hai.\n` +
+            overridesSummary +
+            (linkedCount > 0 
+              ? `• Links & Duration Breakdown:${epBreakdown}\n` +
+                `• **Total Calculated Duration**: **${formatHumanDuration(totalSeasonSeconds)}**!\n`
+              : `• Stream Links: Message me koi video link nahi tha, isliye sabhi ${totalAllEpisodesCount} episodes ke input boxes bilkul clean aur empty chhod diye hain!\n`) +
+            `Upload form Step 2 live open kar diya hai Boss! Season tabs se aap Season 1 aur Season 2 ke beech switch karke episodes verify kar sakte hain.`;
+        } else {
+          fallbackReply = `Haan Boss! Aapke aadesh ke mutabiq maine **${tmdb?.title || searchTitle || 'content'}** (${mediaType === 'anime' ? 'Anime Series' : 'Series'}, Season ${sortedSeasons[0].seasonNumber}) prepare kar diya hai:\n` +
+            `• Total Episodes: Exactly ${sortedSeasons[0].episodeCount} episodes banaye hain.\n` +
+            `• Global Selected Quality: [${targetQualities.join(', ')}] select kiya hai.\n` +
+            `• Audio Language: Sirf [${targetLanguages.join(', ')}] language select ki gayi hai.\n` +
+            overridesSummary +
+            (linkedCount > 0 
+              ? `• Links & Duration Breakdown:${epBreakdown}\n` +
+                `• **Total Season Calculated Duration**: **${formatHumanDuration(totalSeasonSeconds)}**!\n`
+              : `• Stream Links: Koi link message me nahi tha, isliye sabhi ${sortedSeasons[0].episodeCount} episodes ke input boxes bilkul clean aur empty chhod diye hain!\n`) +
+            `Step 2 upload form open kar diya hai Boss!`;
+        }
 
         const summaryBullets = [
-          `Built ${finalEpCount} episode(s) for ${tmdb?.title || searchTitle}`,
+          ...sortedSeasons.map(s => `Built Season ${s.seasonNumber} with ${s.episodeCount} episode boxes`),
           `Audio language set to ${targetLanguages.join(', ')}`,
           `Global selected quality: ${targetQualities.join(', ')}`,
           Object.keys(episodeQualitiesMap).length > 0 ? `Per-episode quality overrides: ${Object.entries(episodeQualitiesMap).map(([ep, qs]) => `Ep ${ep} [${qs.join(', ')}]`).join(', ')}` : null,
-          Object.keys(episodePartsMap).length > 0 ? `Multi-part episodes: ${Object.entries(episodePartsMap).map(([ep, p]) => `Ep ${ep} (${p} parts)`).join(', ')}` : null,
+          Object.keys(episodePartsMap).length > 0 ? `Multi-part episodes configured` : null,
           Object.keys(episodeSkipMarkersMap).length > 0 ? `Episode-specific skip markers configured` : null,
           linkedCount > 0 ? `Pasted provided links and probed duration` : `Input boxes kept clean & empty for unprovided links`,
           `Navigated to Step 2 upload form`
         ].filter(Boolean) as string[];
 
         return res.json({
-          thought: "Configured media upload adhering strictly to Boss's episode count, quality, language, and link pasting instructions.",
+          thought: "Configured media upload adhering strictly to Boss's multiple seasons, episode count, quality, language, and link pasting instructions.",
           intent: mediaType === "movie" ? "movie_upload" : "series_upload",
           reply: fallbackReply,
           voiceUsed: selectedVoice,
@@ -1519,7 +2241,6 @@ Respond strictly in valid JSON format:
         // Post-process actions to ensure compliance
         if (Array.isArray(parsed.actions)) {
           let hasMetadata = false;
-          let hasEpisodes = false;
           let hasCalc = false;
           let hasStep = false;
 
@@ -1541,14 +2262,39 @@ Respond strictly in valid JSON format:
                 if (!act.data.title) act.data.title = tmdb.title;
               }
             }
-            if (act.type === "BUILD_SERIES_EPISODES") {
-              hasEpisodes = true;
-              act.data = act.data || {};
-              // Enforce exact requested episode count, overrides and parts
-              act.data.episodes = buildVerifiedEpisodes();
-            }
             if (act.type === "CALCULATE_DURATION") hasCalc = true;
             if (act.type === "GO_TO_STEP") hasStep = true;
+          }
+
+          if (mediaType !== "movie") {
+            const existingSeasonActions = parsed.actions.filter((a: any) => a.type === "BUILD_SERIES_EPISODES");
+
+            // Guarantee that EVERY season requested by the admin is present with exact verified episodes
+            for (const s of sortedSeasons) {
+              const matchedAction = existingSeasonActions.find((a: any) => (a.data?.seasonNumber || 1) === s.seasonNumber);
+              if (matchedAction) {
+                matchedAction.data = matchedAction.data || {};
+                matchedAction.data.seasonNumber = s.seasonNumber;
+                matchedAction.data.seasonTitle = "Season " + s.seasonNumber;
+                matchedAction.data.episodes = buildVerifiedEpisodesForSeason(s.seasonNumber, s.episodeCount);
+              } else {
+                // Gemini omitted this season; inject it into actions!
+                parsed.actions.push({
+                  type: "BUILD_SERIES_EPISODES",
+                  data: {
+                    seasonNumber: s.seasonNumber,
+                    seasonTitle: "Season " + s.seasonNumber,
+                    episodes: buildVerifiedEpisodesForSeason(s.seasonNumber, s.episodeCount)
+                  }
+                });
+              }
+            }
+
+            // Remove any extra/hallucinated seasons not in sortedSeasons
+            parsed.actions = parsed.actions.filter((a: any) => {
+              if (a.type !== "BUILD_SERIES_EPISODES") return true;
+              return sortedSeasons.some(s => s.seasonNumber === (a.data?.seasonNumber || 1));
+            });
           }
 
           if (!hasMetadata && tmdb) {
@@ -1569,16 +2315,6 @@ Respond strictly in valid JSON format:
             });
           }
 
-          if (mediaType !== "movie" && !hasEpisodes) {
-            parsed.actions.push({
-              type: "BUILD_SERIES_EPISODES",
-              data: {
-                seasonNumber: 1,
-                episodes: buildVerifiedEpisodes()
-              }
-            });
-          }
-
           if (!hasCalc) {
             parsed.actions.push({
               type: "CALCULATE_DURATION",
@@ -1592,6 +2328,24 @@ Respond strictly in valid JSON format:
               step: 2
             });
           }
+        }
+
+        // If multi-season, ensure reply and summary explicitly reflect all seasons
+        if (isMultiSeason) {
+          const totalAllEpisodesCount = sortedSeasons.reduce((sum, s) => sum + s.episodeCount, 0);
+          const seasonsLines = sortedSeasons.map(s => `  • **Season ${s.seasonNumber}**: Exactly ${s.episodeCount} episode boxes`).join('\n');
+          parsed.reply = `Haan Boss! Maine **${tmdb?.title || searchTitle || 'series'}** ke sabhi ${sortedSeasons.length} seasons successfully prepare kar diye hain:\n` +
+            `${seasonsLines}\n` +
+            `• **Total Episodes**: Sabhi seasons milakar exactly **${totalAllEpisodesCount} episode boxes** generate kar diye gaye hain.\n` +
+            `• **Selected Quality**: [${targetQualities.join(', ')}] select kiya hai.\n` +
+            `• **Audio Language**: Sirf [${targetLanguages.join(', ')}] language set ki gayi hai.\n` +
+            `Upload form Step 2 live open kar diya hai Boss! Season tabs se aap Season 1 aur Season 2 ke beech switch karke episodes verify kar sakte hain.`;
+          parsed.summary = [
+            ...sortedSeasons.map(s => `Built Season ${s.seasonNumber} with ${s.episodeCount} episode boxes`),
+            `Quality: ${targetQualities.join(', ')}`,
+            `Language: ${targetLanguages.join(', ')}`,
+            `Navigated to Step 2 upload form`
+          ];
         }
 
         let inlineAudio: { audio: string; format: string } | null = null;
@@ -1612,13 +2366,14 @@ Respond strictly in valid JSON format:
         });
       } catch (parseErr) {
         console.error("Failed to parse Gemini output as JSON, returning verified fallback:", parseErr);
+        const totalAllEpisodesCount = sortedSeasons.reduce((sum, s) => sum + s.episodeCount, 0);
         res.json({
           thought: "Recovered from JSON parsing error with strict verified action plan.",
           intent: mediaType === "movie" ? "movie_upload" : "series_upload",
-          reply: `Haan Boss! ${tmdb?.title || searchTitle} ke liye ${finalEpCount} episodes aur ${targetQualities.join(', ')} (${targetLanguages.join(', ')}) settings tayar kar di hain!`,
+          reply: `Haan Boss! ${tmdb?.title || searchTitle} ke liye ${totalAllEpisodesCount} episodes aur ${targetQualities.join(', ')} (${targetLanguages.join(', ')}) settings tayar kar di hain!`,
           voiceUsed: selectedVoice,
           tmdbMetadata: tmdb || null,
-          summary: [`Configured ${finalEpCount} episodes`, `Quality: ${targetQualities.join(', ')}`, `Language: ${targetLanguages.join(', ')}`],
+          summary: [`Configured ${totalAllEpisodesCount} episodes`, `Quality: ${targetQualities.join(', ')}`, `Language: ${targetLanguages.join(', ')}`],
           actions: [
             {
               type: "FILL_UPLOAD_METADATA",
@@ -1635,13 +2390,14 @@ Respond strictly in valid JSON format:
                 languages: targetLanguages
               }
             },
-            {
+            ...sortedSeasons.map(s => ({
               type: "BUILD_SERIES_EPISODES",
               data: {
-                seasonNumber: 1,
-                episodes: buildVerifiedEpisodes()
+                seasonNumber: s.seasonNumber,
+                seasonTitle: "Season " + s.seasonNumber,
+                episodes: buildVerifiedEpisodesForSeason(s.seasonNumber, s.episodeCount)
               }
-            },
+            })),
             { type: "CALCULATE_DURATION", mode: "episode" },
             { type: "GO_TO_STEP", step: 2 }
           ]
@@ -1867,7 +2623,7 @@ Respond strictly in valid JSON format:
         return cached ? { audio: cached.audio, format: cached.format } : null;
       }
 
-      const ttsModels = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash", "gemini-3.1-flash-live-preview", "gemini-flash-latest"];
+      const ttsModels = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"];
       for (const modelName of ttsModels) {
         try {
           const response = await ai.models.generateContent({
@@ -1961,7 +2717,7 @@ Respond strictly in valid JSON format:
       }
 
       const ai = getGenAI();
-      const ttsModels = ["gemini-3.1-flash-tts-preview"];
+      const ttsModels = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"];
       
       for (const modelName of ttsModels) {
         try {

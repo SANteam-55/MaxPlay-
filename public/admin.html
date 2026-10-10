@@ -1635,7 +1635,91 @@
 
             <!-- STEP 2: VIDEO LINKS & EPISODES -->
             <div id="upload-step-2" style="display:none;">
-              <!-- MOVIE SPLITTED LINKS -->
+              <!-- SMART HLS STREAM MODE TOGGLE BANNER -->
+              <div style="background:linear-gradient(135deg, rgba(168,85,247,0.12), rgba(6,182,212,0.12)); border:1px solid rgba(168,85,247,0.3); border-radius:14px; padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; box-shadow:0 4px 20px rgba(0,0,0,0.25);">
+                <div style="display:flex; align-items:center; gap:14px; flex:1; min-width:260px;">
+                  <div style="width:42px; height:42px; border-radius:10px; background:linear-gradient(135deg, #a855f7, #06b6d4); display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 0 15px rgba(168,85,247,0.4);">
+                    <i class="fa-solid fa-bolt" style="font-size:20px; color:#fff;"></i>
+                  </div>
+                  <div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <span style="font-size:15px; font-weight:800; color:#fff; letter-spacing:0.3px;">Smart HLS Stream Mode</span>
+                      <span id="hls-mode-badge" style="font-size:10px; font-weight:800; text-transform:uppercase; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,0.1); color:#aaa; letter-spacing:0.5px;">OFF</span>
+                    </div>
+                    <p style="font-size:12px; color:var(--text-secondary); margin:3px 0 0 0; line-height:1.4;">
+                      Paste Master/VOE source link directly. Qualities & audio tracks will auto-load in player without manual part splitting!
+                    </p>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <span id="hls-toggle-status-label" style="font-size:12px; font-weight:700; color:var(--text-tertiary);">Normal Multi-Part Mode</span>
+                  <label class="switch" style="position:relative; display:inline-block; width:50px; height:26px; margin:0; cursor:pointer;">
+                    <input type="checkbox" id="hls-mode-toggle" onchange="toggleSmartHlsMode(this.checked)" style="opacity:0; width:0; height:0;">
+                    <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#374151; transition:.3s; border-radius:26px;"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- SMART HLS SINGLE MOVIE STREAM CONTAINER (ACTIVE WHEN TOGGLE IS ON AND MODE IS MOVIE) -->
+              <div id="movie-hls-container" style="display:none; background:var(--bg-tertiary); border:1px solid rgba(168,85,247,0.3); border-radius:14px; padding:18px; margin-bottom:20px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                  <i class="fa-solid fa-play-circle" style="color:var(--accent-purple); font-size:16px;"></i>
+                  <h3 style="font-size:15px; font-weight:800; margin:0; color:#fff;">Movie HLS / Master Stream Link</h3>
+                </div>
+                <p style="font-size:12px; color:var(--text-secondary); margin-bottom:14px;">
+                  Paste your raw or VOE stream link below. MaxPlay backend proxy automatically resolves and streams optimal HLS qualities with full token security.
+                </p>
+                <div class="form-group" style="margin-bottom:16px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <label class="form-label" style="font-size:11px; font-weight:700; color:var(--accent-cyan); margin:0;">
+                      Master HLS Stream URL (e.g. VOE / m3u8 source)
+                    </label>
+                    <span style="font-size:10px; color:var(--text-tertiary);">Auto-extracts to secure HuggingFace proxy</span>
+                  </div>
+                  <div style="display:flex; gap:10px;">
+                    <input type="text" id="movie-hls-url" class="input-control" placeholder="https://voe.sx/yz8csmojmi6a or https://...master.m3u8" style="font-family:monospace; font-size:13px; font-weight:600; border-color:rgba(168,85,247,0.4);" oninput="updateMovieHlsPreview()">
+                    <button type="button" id="btn-test-movie-hls" class="btn-primary" onclick="testAndExtractMovieStream()" style="white-space:nowrap; padding:0 16px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
+                      <i class="fa-solid fa-bolt"></i> Test & Extract
+                    </button>
+                  </div>
+                  <div id="movie-hls-extract-result" style="display:none; margin-top:8px;"></div>
+                </div>
+
+                <!-- Movie Skip Markers in Smart HLS Mode -->
+                <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:14px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <label class="form-label" style="font-size:12px; font-weight:800; color:var(--text-primary); margin-bottom:0;">
+                      <i class="fa-solid fa-forward-step" style="color:#F59E0B;"></i> ⏩ Skip Markers (Seconds)
+                    </label>
+                    <span style="font-size:10px; color:var(--text-tertiary);">Optional intro/outro/credits markers</span>
+                  </div>
+                  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
+                      <div style="font-size:11px; font-weight:700; color:#34D399; margin-bottom:6px;">▶ Intro</div>
+                      <div style="display:flex; gap:8px;">
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" id="movie-hls-intro-start" class="input-control" placeholder="0"></div>
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" id="movie-hls-intro-end" class="input-control" placeholder="90"></div>
+                      </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
+                      <div style="font-size:11px; font-weight:700; color:#FBBF24; margin-bottom:6px;">▶ Outro</div>
+                      <div style="display:flex; gap:8px;">
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" id="movie-hls-outro-start" class="input-control"></div>
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" id="movie-hls-outro-end" class="input-control"></div>
+                      </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:8px;">
+                      <div style="font-size:11px; font-weight:700; color:#60A5FA; margin-bottom:6px;">▶ Credits</div>
+                      <div style="display:flex; gap:8px;">
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">Start (s)</label><input type="number" id="movie-hls-credits-start" class="input-control"></div>
+                        <div style="flex:1"><label style="font-size:9px; color:var(--text-tertiary);">End (s)</label><input type="number" id="movie-hls-credits-end" class="input-control"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- MOVIE SPLITTED LINKS (NORMAL MODE) -->
               <div id="movie-links-container" style="display:block;">
                 <h3 style="font-size:16px; font-weight:700; margin-bottom:12px;">Splitted Video Part Links (Movie)</h3>
                 <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;">Add seamless pre-buffered video chunk URLs or server mirror links for continuous playback.</p>
@@ -4877,19 +4961,26 @@
         let displayEl = null;
 
         if (mode === 'movie') {
-          const cards = document.querySelectorAll('.movie-part-card');
           displayEl = document.getElementById('movie-total-duration-text');
-          cards.forEach(card => {
-            const inputs = card.querySelectorAll('input[type="text"]');
-            inputs.forEach(inp => {
-              const val = inp.value ? inp.value.trim() : '';
-              if (val && (val.startsWith('http://') || val.startsWith('https://')) && !val.includes('/photo-') && !val.includes('unsplash')) {
-                if (!inp.classList.contains('ep-input-thumb') && !inp.id.includes('thumb') && !inp.id.includes('poster') && !inp.id.includes('backdrop')) {
-                  partUrls.push(val);
+          if (window.isSmartHlsMode) {
+            const hlsInp = document.getElementById('movie-hls-url');
+            if (hlsInp && hlsInp.value.trim()) {
+              partUrls.push(hlsInp.value.trim());
+            }
+          } else {
+            const cards = document.querySelectorAll('.movie-part-card');
+            cards.forEach(card => {
+              const inputs = card.querySelectorAll('input[type="text"]');
+              inputs.forEach(inp => {
+                const val = inp.value ? inp.value.trim() : '';
+                if (val && (val.startsWith('http://') || val.startsWith('https://')) && !val.includes('/photo-') && !val.includes('unsplash')) {
+                  if (!inp.classList.contains('ep-input-thumb') && !inp.id.includes('thumb') && !inp.id.includes('poster') && !inp.id.includes('backdrop')) {
+                    partUrls.push(val);
+                  }
                 }
-              }
+              });
             });
-          });
+          }
         } else if (mode === 'episode' && btnElement) {
           container = btnElement.closest('.episode-card') || btnElement.closest('.ep-card') || btnElement.closest('[class*="episode"]');
           if (!container) {
@@ -5015,7 +5106,7 @@
       }
     };
 
-    window.editContent = function(id) {
+    window.editContent = async function(id) {
       const docItem = window.cachedContentDocs.find(d => d.id === id);
       if (!docItem) return;
       const item = docItem.data;
@@ -5106,6 +5197,14 @@
         cb.checked = assignedRows.includes(cb.value);
       });
 
+      // Detect if content uses Smart HLS
+      const isItemSmartHls = !!(
+        item.isSmartHls ||
+        (item.videoUrl && (item.videoUrl.includes('voe.sx') || item.videoUrl.includes('/proxy/m3u8') || item.videoUrl.includes('master.m3u8'))) ||
+        (item.videoSources?.Default?.['1080p'] && (item.videoSources.Default['1080p'].includes('voe.sx') || item.videoSources.Default['1080p'].includes('/proxy/m3u8') || item.videoSources.Default['1080p'].includes('master.m3u8')))
+      );
+      window.toggleSmartHlsMode(isItemSmartHls);
+
       // Video Links / Episodes
       if (item.type === 'movie') {
         switchUploadMode('movie');
@@ -5120,8 +5219,14 @@
           links = ['https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'];
         }
         renderMovieLinksUI(links);
+
+        // Pre-fill movie smart HLS url if present
+        const movieHlsInput = document.getElementById('movie-hls-url');
+        if (movieHlsInput) {
+          movieHlsInput.value = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
+        }
         
-        // Pre-fill movie skip markers
+        // Pre-fill movie skip markers (both normal and HLS containers)
         if (item.skipMarkers) {
           document.getElementById('movie-intro-start').value = item.skipMarkers.intro?.start ?? '';
           document.getElementById('movie-intro-end').value = item.skipMarkers.intro?.end ?? '';
@@ -5129,6 +5234,13 @@
           document.getElementById('movie-outro-end').value = item.skipMarkers.outro?.end ?? '';
           document.getElementById('movie-credits-start').value = item.skipMarkers.credits?.start ?? '';
           document.getElementById('movie-credits-end').value = item.skipMarkers.credits?.end ?? '';
+
+          document.getElementById('movie-hls-intro-start').value = item.skipMarkers.intro?.start ?? '';
+          document.getElementById('movie-hls-intro-end').value = item.skipMarkers.intro?.end ?? '';
+          document.getElementById('movie-hls-outro-start').value = item.skipMarkers.outro?.start ?? '';
+          document.getElementById('movie-hls-outro-end').value = item.skipMarkers.outro?.end ?? '';
+          document.getElementById('movie-hls-credits-start').value = item.skipMarkers.credits?.start ?? '';
+          document.getElementById('movie-hls-credits-end').value = item.skipMarkers.credits?.end ?? '';
         } else {
           document.getElementById('movie-intro-start').value = '';
           document.getElementById('movie-intro-end').value = '';
@@ -5136,26 +5248,35 @@
           document.getElementById('movie-outro-end').value = '';
           document.getElementById('movie-credits-start').value = '';
           document.getElementById('movie-credits-end').value = '';
+
+          document.getElementById('movie-hls-intro-start').value = '';
+          document.getElementById('movie-hls-intro-end').value = '';
+          document.getElementById('movie-hls-outro-start').value = '';
+          document.getElementById('movie-hls-outro-end').value = '';
+          document.getElementById('movie-hls-credits-start').value = '';
+          document.getElementById('movie-hls-credits-end').value = '';
         }
       } else {
         switchUploadMode('series');
         if (item.hasExternalSeasons) {
           try {
-            getDoc(doc(db, 'content_seasons', item.id)).then(extSnap => {
-              if (extSnap && extSnap.exists() && extSnap.data() && extSnap.data().seasonsData) {
-                window.seasonsData = JSON.parse(JSON.stringify(extSnap.data().seasonsData));
-                window.currentSeasonIdx = 0;
-                if (typeof renderSeasonsUI === 'function') renderSeasonsUI();
-              }
-            }).catch(err => console.warn('Could not load external seasons:', err));
-          } catch(e) {}
+            const extSnap = await getDoc(doc(db, 'content_seasons', item.id));
+            if (extSnap && extSnap.exists() && extSnap.data() && extSnap.data().seasonsData) {
+              window.seasonsData = JSON.parse(JSON.stringify(extSnap.data().seasonsData));
+              window.currentSeasonIdx = 0;
+            }
+          } catch(err) {
+            console.warn('Could not load external seasons:', err);
+          }
         }
-        if (item.seasonsData && Array.isArray(item.seasonsData) && item.seasonsData.length > 0) {
-          window.seasonsData = JSON.parse(JSON.stringify(item.seasonsData));
-        } else if (item.episodesList && Array.isArray(item.episodesList) && item.episodesList.length > 0) {
-          window.seasonsData = [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: JSON.parse(JSON.stringify(item.episodesList)) }];
-        } else {
-          window.seasonsData = [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: [] }];
+        if ((!item.hasExternalSeasons || !window.seasonsData || window.seasonsData.length === 0)) {
+          if (item.seasonsData && Array.isArray(item.seasonsData) && item.seasonsData.length > 0) {
+            window.seasonsData = JSON.parse(JSON.stringify(item.seasonsData));
+          } else if (item.episodesList && Array.isArray(item.episodesList) && item.episodesList.length > 0) {
+            window.seasonsData = [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: JSON.parse(JSON.stringify(item.episodesList)) }];
+          } else {
+            window.seasonsData = [{ seasonNumber: 1, seasonTitle: "Season 1", episodes: [] }];
+          }
         }
         window.currentSeasonIdx = 0;
         renderSeasonsUI();
@@ -5187,6 +5308,23 @@
       document.getElementById('movie-outro-end').value = '';
       document.getElementById('movie-credits-start').value = '';
       document.getElementById('movie-credits-end').value = '';
+
+      const movieHlsUrlEl = document.getElementById('movie-hls-url');
+      if (movieHlsUrlEl) movieHlsUrlEl.value = '';
+      const movieHlsIntroS = document.getElementById('movie-hls-intro-start');
+      if (movieHlsIntroS) movieHlsIntroS.value = '';
+      const movieHlsIntroE = document.getElementById('movie-hls-intro-end');
+      if (movieHlsIntroE) movieHlsIntroE.value = '';
+      const movieHlsOutroS = document.getElementById('movie-hls-outro-start');
+      if (movieHlsOutroS) movieHlsOutroS.value = '';
+      const movieHlsOutroE = document.getElementById('movie-hls-outro-end');
+      if (movieHlsOutroE) movieHlsOutroE.value = '';
+      const movieHlsCredS = document.getElementById('movie-hls-credits-start');
+      if (movieHlsCredS) movieHlsCredS.value = '';
+      const movieHlsCredE = document.getElementById('movie-hls-credits-end');
+      if (movieHlsCredE) movieHlsCredE.value = '';
+      
+      window.toggleSmartHlsMode(false);
       
       onTypeDropdownChange('anime');
       switchUploadMode('series');
@@ -5300,6 +5438,185 @@
       }
     };
 
+    window.isSmartHlsMode = false;
+
+    window.toggleSmartHlsMode = function(enabled) {
+      window.isSmartHlsMode = !!enabled;
+      const toggle = document.getElementById('hls-mode-toggle');
+      if (toggle && toggle.checked !== window.isSmartHlsMode) {
+        toggle.checked = window.isSmartHlsMode;
+      }
+      const badge = document.getElementById('hls-mode-badge');
+      const statusLabel = document.getElementById('hls-toggle-status-label');
+      if (badge) {
+        badge.innerText = window.isSmartHlsMode ? 'ACTIVE' : 'OFF';
+        badge.style.background = window.isSmartHlsMode ? 'rgba(168,85,247,0.3)' : 'rgba(255,255,255,0.1)';
+        badge.style.color = window.isSmartHlsMode ? '#C4B5FD' : '#aaa';
+      }
+      if (statusLabel) {
+        statusLabel.innerText = window.isSmartHlsMode ? 'Smart Single HLS Stream Mode' : 'Normal Multi-Part Mode';
+        statusLabel.style.color = window.isSmartHlsMode ? '#A78BFA' : 'var(--text-tertiary)';
+      }
+
+      // Re-apply visibility according to upload mode and toggle
+      window.applyHlsModeVisibility();
+
+      // If series mode, re-render episodes to show single HLS input per episode
+      if (window.currentUploadMode !== 'movie') {
+        window.renderEpisodesList();
+      }
+    };
+
+    window.applyHlsModeVisibility = function() {
+      const movieNormal = document.getElementById('movie-links-container');
+      const movieHls = document.getElementById('movie-hls-container');
+      const seriesContainer = document.getElementById('series-episodes-container');
+
+      if (window.currentUploadMode === 'movie') {
+        if (seriesContainer) seriesContainer.style.display = 'none';
+        if (window.isSmartHlsMode) {
+          if (movieNormal) movieNormal.style.display = 'none';
+          if (movieHls) movieHls.style.display = 'block';
+        } else {
+          if (movieNormal) movieNormal.style.display = 'block';
+          if (movieHls) movieHls.style.display = 'none';
+        }
+      } else {
+        if (movieNormal) movieNormal.style.display = 'none';
+        if (movieHls) movieHls.style.display = 'none';
+        if (seriesContainer) seriesContainer.style.display = 'block';
+      }
+    };
+
+    window.updateMovieHlsPreview = function() {
+      const resEl = document.getElementById('movie-hls-extract-result');
+      if (resEl) resEl.style.display = 'none';
+    };
+
+    window.testAndExtractMovieStream = async function() {
+      const urlInput = document.getElementById('movie-hls-url');
+      const statusEl = document.getElementById('movie-hls-extract-result');
+      const btn = document.getElementById('btn-test-movie-hls');
+      if (!urlInput || !statusEl) return;
+      
+      const rawUrl = urlInput.value.trim();
+      if (!rawUrl) {
+        showToast('Please enter a stream URL first (e.g. https://voe.sx/...)', 'warning');
+        return;
+      }
+
+      const origHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Extracting...';
+      }
+
+      statusEl.style.display = 'block';
+      statusEl.innerHTML = '<div style="color:var(--accent-cyan); display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-spinner fa-spin"></i> Calling extractor API with key & resolving proxy stream...</div>';
+
+      try {
+        const resp = await fetch('/api/extract-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
+        });
+        const data = await resp.json();
+
+        if (data.ok && data.m3u8Url) {
+          statusEl.innerHTML = `
+            <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:12px; margin-top:8px;">
+              <div style="color:#10B981; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                <i class="fa-solid fa-circle-check"></i> Extractor API Success! Proxy Stream Verified
+              </div>
+              <div style="font-size:11px; color:#ddd; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.3); padding:8px; border-radius:6px; margin-bottom:8px; border:1px solid rgba(255,255,255,0.05);">
+                ${data.m3u8Url}
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+                <span style="color:var(--text-tertiary);">Token Session: ${Math.round((data.remainingSeconds || 10200) / 60)} min safe window</span>
+                <button type="button" class="btn-secondary" style="height:26px; font-size:10px; padding:0 10px;" onclick="calculateTotalDuration('movie')">
+                  <i class="fa-solid fa-stopwatch"></i> Calculate Duration
+                </button>
+              </div>
+            </div>
+          `;
+          showToast('Stream extracted successfully! Proxy player link ready.', 'success');
+          // Automatically trigger duration probe for movie
+          if (typeof window.calculateTotalDuration === 'function') {
+            window.calculateTotalDuration('movie');
+          }
+        } else {
+          statusEl.innerHTML = `
+            <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
+              <i class="fa-solid fa-circle-exclamation"></i> Extraction Failed: ${data.error || 'Could not extract m3u8Url from stream'}
+            </div>
+          `;
+          showToast(data.error || 'Extraction failed', 'error');
+        }
+      } catch (err) {
+        statusEl.innerHTML = `
+          <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
+            <i class="fa-solid fa-circle-exclamation"></i> Network error: ${err.message}
+          </div>
+        `;
+        showToast('Error connecting to extractor: ' + err.message, 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    };
+
+    window.testAndExtractEpisodeStream = async function(epIdx, btn) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-hls-stream-input');
+      const statusEl = card.querySelector('.ep-hls-extract-status');
+      const rawUrl = inp ? inp.value.trim() : '';
+
+      if (!rawUrl) {
+        showToast('Please enter episode stream URL first', 'warning');
+        return;
+      }
+
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent-cyan);"><i class="fa-solid fa-spinner fa-spin"></i> Verifying...</span>';
+
+      try {
+        const resp = await fetch('/api/extract-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
+        });
+        const data = await resp.json();
+        if (data.ok && data.m3u8Url) {
+          if (statusEl) {
+            statusEl.innerHTML = '<span style="color:#10B981; font-weight:700;"><i class="fa-solid fa-circle-check"></i> Valid Proxy Stream Ready</span>';
+          }
+          showToast(`Episode ${epIdx + 1} stream verified!`, 'success');
+          // Trigger duration probe for this episode card
+          const calcBtn = card.querySelector('button[onclick*="calculateTotalDuration"]');
+          if (calcBtn && typeof window.calculateTotalDuration === 'function') {
+            window.calculateTotalDuration('episode', calcBtn);
+          }
+        } else {
+          if (statusEl) {
+            statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Failed'}</span>`;
+          }
+          showToast(data.error || 'Extraction failed', 'error');
+        }
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Error: ${err.message}</span>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    };
+
     window.switchUploadMode = function(mode) {
       window.currentUploadMode = mode;
       const typeSelect = document.getElementById('up-type');
@@ -5309,18 +5626,15 @@
       if (mode === 'movie') {
         if (btnMovie) btnMovie.setAttribute('class', 'btn-primary');
         if (btnSeries) btnSeries.setAttribute('class', 'btn-secondary');
-        document.getElementById('movie-links-container').style.display = 'block';
-        document.getElementById('series-episodes-container').style.display = 'none';
         window.setCustomTypeDropdown('movie');
         if (groupSeasons) groupSeasons.style.display = 'none';
       } else {
         if (btnMovie) btnMovie.setAttribute('class', 'btn-secondary');
         if (btnSeries) btnSeries.setAttribute('class', 'btn-primary');
-        document.getElementById('movie-links-container').style.display = 'none';
-        document.getElementById('series-episodes-container').style.display = 'block';
         const curType = document.getElementById('up-type')?.value; if (curType === 'movie') window.setCustomTypeDropdown('anime');
         if (groupSeasons) groupSeasons.style.display = 'block';
       }
+      window.applyHlsModeVisibility();
     };
 
     
@@ -5895,43 +6209,53 @@
         }
         if (thumbInput) ep.thumbnailUrl = thumbInput.value.trim();
 
-        // Part 1 Multi-Language Video Sources
-        const part1Sources = {};
-        window.activeLanguages.forEach(lang => {
-          const inputs = card.querySelectorAll(`.ep-part1-q-input[data-lang="${lang}"]`);
-          inputs.forEach(inp => {
-            const q = inp.getAttribute('data-quality');
-            const val = inp.value.trim();
-            if (q) {
-              if (!part1Sources[lang]) part1Sources[lang] = {};
-              part1Sources[lang][q] = val;
-              if (!window.activeQualities.some(item => item.toLowerCase() === q.toLowerCase())) {
-                window.activeQualities.push(q);
+        // Smart HLS vs Normal Part 1 Multi-Language Video Sources
+        const hlsInp = card.querySelector('.ep-hls-stream-input');
+        if (window.isSmartHlsMode && hlsInp) {
+          const smartUrl = hlsInp.value.trim();
+          ep.videoUrl = smartUrl;
+          if (!ep.videoSources) ep.videoSources = {};
+          if (!ep.videoSources['Default']) ep.videoSources['Default'] = {};
+          ep.videoSources['Default']['1080p'] = smartUrl;
+          ep.qualityLinks = { '1080p': smartUrl };
+        } else {
+          const part1Sources = {};
+          window.activeLanguages.forEach(lang => {
+            const inputs = card.querySelectorAll(`.ep-part1-q-input[data-lang="${lang}"]`);
+            inputs.forEach(inp => {
+              const q = inp.getAttribute('data-quality');
+              const val = inp.value.trim();
+              if (q) {
+                if (!part1Sources[lang]) part1Sources[lang] = {};
+                part1Sources[lang][q] = val;
+                if (!window.activeQualities.some(item => item.toLowerCase() === q.toLowerCase())) {
+                  window.activeQualities.push(q);
+                }
               }
+            });
+            
+            // Legacy support (in case they haven't been dynamically generated yet this session)
+            const q1080 = card.querySelector(`.ep-part1-1080[data-lang="${lang}"]`)?.value.trim() || '';
+            const q720 = card.querySelector(`.ep-part1-720[data-lang="${lang}"]`)?.value.trim() || '';
+            const q480 = card.querySelector(`.ep-part1-480[data-lang="${lang}"]`)?.value.trim() || '';
+            const q360 = card.querySelector(`.ep-part1-360[data-lang="${lang}"]`)?.value.trim() || '';
+
+            if (q1080 || q720 || q480 || q360) {
+              if (!part1Sources[lang]) part1Sources[lang] = {};
+              if (q1080 && !part1Sources[lang]['1080p']) part1Sources[lang]['1080p'] = q1080;
+              if (q720 && !part1Sources[lang]['720p']) part1Sources[lang]['720p'] = q720;
+              if (q480 && !part1Sources[lang]['480p']) part1Sources[lang]['480p'] = q480;
+              if (q360 && !part1Sources[lang]['360p']) part1Sources[lang]['360p'] = q360;
             }
           });
-          
-          // Legacy support (in case they haven't been dynamically generated yet this session)
-          const q1080 = card.querySelector(`.ep-part1-1080[data-lang="${lang}"]`)?.value.trim() || '';
-          const q720 = card.querySelector(`.ep-part1-720[data-lang="${lang}"]`)?.value.trim() || '';
-          const q480 = card.querySelector(`.ep-part1-480[data-lang="${lang}"]`)?.value.trim() || '';
-          const q360 = card.querySelector(`.ep-part1-360[data-lang="${lang}"]`)?.value.trim() || '';
+          ep.videoSources = part1Sources;
 
-          if (q1080 || q720 || q480 || q360) {
-            if (!part1Sources[lang]) part1Sources[lang] = {};
-            if (q1080 && !part1Sources[lang]['1080p']) part1Sources[lang]['1080p'] = q1080;
-            if (q720 && !part1Sources[lang]['720p']) part1Sources[lang]['720p'] = q720;
-            if (q480 && !part1Sources[lang]['480p']) part1Sources[lang]['480p'] = q480;
-            if (q360 && !part1Sources[lang]['360p']) part1Sources[lang]['360p'] = q360;
+          // Fallbacks for legacy fields
+          const firstLang = Object.keys(part1Sources)[0];
+          if (firstLang && part1Sources[firstLang]) {
+            ep.qualityLinks = part1Sources[firstLang];
+            ep.videoUrl = ep.qualityLinks['1080p'] || ep.qualityLinks['720p'] || ep.qualityLinks['480p'] || ep.qualityLinks['360p'] || '';
           }
-        });
-        ep.videoSources = part1Sources;
-
-        // Fallbacks for legacy fields
-        const firstLang = Object.keys(part1Sources)[0];
-        if (firstLang && part1Sources[firstLang]) {
-          ep.qualityLinks = part1Sources[firstLang];
-          ep.videoUrl = ep.qualityLinks['1080p'] || ep.qualityLinks['720p'] || ep.qualityLinks['480p'] || ep.qualityLinks['360p'] || '';
         }
 
         // Additional Parts (Part 2, Part 3...)
@@ -6200,17 +6524,33 @@
               </div>
             </div>
 
-            <div style="margin-top:4px;">
-              <div style="font-size:13px; font-weight:800; margin-bottom:8px; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
-              ${part1LangsHTML}
-            </div>
+            ${window.isSmartHlsMode ? `
+              <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.25); border-radius:10px; padding:14px; margin-top:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <label class="form-label" style="font-size:12px; font-weight:800; color:var(--accent-purple); margin-bottom:0; display:flex; align-items:center; gap:6px;">
+                    <i class="fa-solid fa-bolt" style="color:var(--accent-cyan);"></i> Episode Smart HLS / VOE Stream URL
+                  </label>
+                  <span style="font-size:10px; color:var(--text-tertiary);">Direct HLS master or VOE extractor link</span>
+                </div>
+                <div style="display:flex; gap:8px;">
+                  <input type="text" class="input-control ep-hls-stream-input" value="${ep.videoUrl || (ep.videoSources?.Default?.['1080p'] || '')}" placeholder="https://voe.sx/yz8csmojmi6a or https://...master.m3u8" style="font-family:monospace; font-size:12px; font-weight:600; border-color:rgba(168,85,247,0.4);" onchange="syncEpisodesFromDOM()">
+                  <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 12px; height:38px; font-size:11px; font-weight:700;" onclick="testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify</button>
+                </div>
+                <div class="ep-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
+              </div>
+            ` : `
+              <div style="margin-top:4px;">
+                <div style="font-size:13px; font-weight:800; margin-bottom:8px; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
+                ${part1LangsHTML}
+              </div>
 
-            <div style="margin-top:8px;">
-              ${extraPartsHTML}
-              <button type="button" class="btn-secondary" style="height:32px; font-size:11px; margin-top:8px;" onclick="addEpisodeExtraPart(${epIdx})">
-                <i class="fa-solid fa-plus"></i> Add Splitted Part to Episode
-              </button>
-            </div>
+              <div style="margin-top:8px;">
+                ${extraPartsHTML}
+                <button type="button" class="btn-secondary" style="height:32px; font-size:11px; margin-top:8px;" onclick="addEpisodeExtraPart(${epIdx})">
+                  <i class="fa-solid fa-plus"></i> Add Splitted Part to Episode
+                </button>
+              </div>
+            `}
 
             <div style="margin-top: 10px; background: rgba(255,255,255,0.02); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
               <div class="ep-total-duration-text" style="font-size: 12px; font-weight: 700; color: var(--text-tertiary);">
@@ -6339,10 +6679,28 @@
 
     window.renderReviewSummary = function() {
       if (window.currentUploadMode === 'movie') {
-        const parts = collectCurrentMoviePartsData();
-        const filledParts = parts.filter(p => p.videoSources && Object.keys(p.videoSources).length > 0);
         const title = document.getElementById('up-title').value || 'Untitled';
         const type = document.getElementById('up-type').value || 'movie';
+
+        let streamSummaryHtml = '';
+        if (window.isSmartHlsMode) {
+          const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || 'No link added';
+          streamSummaryHtml = `
+            <div style="color:#A78BFA; font-weight:800; font-size:13px; margin-bottom:4px;">
+              <i class="fa-solid fa-bolt" style="color:var(--accent-cyan);"></i> Smart HLS Single Stream (VOE / Proxy)
+            </div>
+            <div style="color:var(--text-secondary); font-size:11px; word-break:break-all; max-width:320px;">
+              ${hlsUrl}
+            </div>
+          `;
+        } else {
+          const parts = collectCurrentMoviePartsData();
+          const filledParts = parts.filter(p => p.videoSources && Object.keys(p.videoSources).length > 0);
+          streamSummaryHtml = `
+            <div style="color:var(--accent-purple); font-weight:800; font-size:13px; margin-bottom:4px;">${filledParts.length || 1} Seamless Video Part(s)</div>
+            <div style="color:var(--text-secondary); font-size:11px;">Matrix: ${window.activeLanguages.join(', ')}</div>
+          `;
+        }
 
         const container = document.getElementById('review-summary-details');
         if (container) {
@@ -6359,8 +6717,7 @@
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="color:var(--text-tertiary); font-weight:700;">Media Streams</span>
                 <div style="text-align:right;">
-                  <div style="color:var(--accent-purple); font-weight:800; font-size:13px; margin-bottom:4px;">${filledParts.length || 1} Seamless Video Part(s)</div>
-                  <div style="color:var(--text-secondary); font-size:11px;">Matrix: ${window.activeLanguages.join(', ')}</div>
+                  ${streamSummaryHtml}
                 </div>
               </div>
             </div>
@@ -6390,7 +6747,9 @@
                 <span style="color:var(--text-tertiary); font-weight:700;">Library Structure</span>
                 <div style="text-align:right;">
                   <div style="color:var(--accent-amber); font-weight:800; font-size:13px; margin-bottom:4px;">${window.seasonsData.length} Season(s), ${totalEps} Episode(s)</div>
-                  <div style="color:var(--text-secondary); font-size:11px;">Audio: ${window.activeLanguages.join(', ')}</div>
+                  <div style="color:var(--text-secondary); font-size:11px;">
+                    ${window.isSmartHlsMode ? '<span style="color:#A78BFA; font-weight:700;"><i class="fa-solid fa-bolt"></i> Smart HLS Stream Mode</span>' : `Audio: ${window.activeLanguages.join(', ')}`}
+                  </div>
                 </div>
               </div>
             </div>
@@ -6530,29 +6889,37 @@
         let mainVideoSources = {}; // Multi-Language Matrix
 
         if (window.currentUploadMode === 'movie') {
-          if (typeof window.collectCurrentMoviePartsData === 'function') {
-            movieParts = window.collectCurrentMoviePartsData();
-          }
-          if (movieParts && movieParts.length > 0) {
-            for (let p of movieParts) {
-              let u = '';
-              for (let l in p.videoSources) {
-                 if (p.videoSources[l]['1080p']) { u = p.videoSources[l]['1080p']; break; }
-                 if (p.videoSources[l]['720p']) { u = p.videoSources[l]['720p']; break; }
-                 if (p.videoSources[l]['480p']) { u = p.videoSources[l]['480p']; break; }
-                 if (p.videoSources[l]['360p']) { u = p.videoSources[l]['360p']; break; }
-              }
-              if (u && !p.duration) {
-                 p.duration = await window.getVideoDuration(u);
-              }
+          if (window.isSmartHlsMode) {
+            const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || '';
+            firstVideoUrl = hlsUrl;
+            mainQualityLinks = { '1080p': hlsUrl };
+            mainVideoSources = { 'Default': { '1080p': hlsUrl } };
+            movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } } }];
+          } else {
+            if (typeof window.collectCurrentMoviePartsData === 'function') {
+              movieParts = window.collectCurrentMoviePartsData();
             }
-            const p1 = movieParts[0];
-            if (p1 && p1.videoSources && Object.keys(p1.videoSources).length > 0) {
-              mainVideoSources = p1.videoSources;
-              const firstLang = Object.keys(p1.videoSources)[0];
-              if (firstLang && p1.videoSources[firstLang]) {
-                mainQualityLinks = p1.videoSources[firstLang];
-                firstVideoUrl = mainQualityLinks['1080p'] || mainQualityLinks['720p'] || mainQualityLinks['480p'] || mainQualityLinks['360p'] || '';
+            if (movieParts && movieParts.length > 0) {
+              for (let p of movieParts) {
+                let u = '';
+                for (let l in p.videoSources) {
+                   if (p.videoSources[l]['1080p']) { u = p.videoSources[l]['1080p']; break; }
+                   if (p.videoSources[l]['720p']) { u = p.videoSources[l]['720p']; break; }
+                   if (p.videoSources[l]['480p']) { u = p.videoSources[l]['480p']; break; }
+                   if (p.videoSources[l]['360p']) { u = p.videoSources[l]['360p']; break; }
+                }
+                if (u && !p.duration) {
+                   p.duration = await window.getVideoDuration(u);
+                }
+              }
+              const p1 = movieParts[0];
+              if (p1 && p1.videoSources && Object.keys(p1.videoSources).length > 0) {
+                mainVideoSources = p1.videoSources;
+                const firstLang = Object.keys(p1.videoSources)[0];
+                if (firstLang && p1.videoSources[firstLang]) {
+                  mainQualityLinks = p1.videoSources[firstLang];
+                  firstVideoUrl = mainQualityLinks['1080p'] || mainQualityLinks['720p'] || mainQualityLinks['480p'] || mainQualityLinks['360p'] || '';
+                }
               }
             }
           }
@@ -6705,12 +7072,12 @@
 
         let movieSkipMarkers = undefined;
         if (isMovieUpload) {
-          const introStart = parseInt(document.getElementById('movie-intro-start')?.value);
-          const introEnd = parseInt(document.getElementById('movie-intro-end')?.value);
-          const outroStart = parseInt(document.getElementById('movie-outro-start')?.value);
-          const outroEnd = parseInt(document.getElementById('movie-outro-end')?.value);
-          const creditsStart = parseInt(document.getElementById('movie-credits-start')?.value);
-          const creditsEnd = parseInt(document.getElementById('movie-credits-end')?.value);
+          const introStart = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-intro-start')?.value : document.getElementById('movie-intro-start')?.value);
+          const introEnd = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-intro-end')?.value : document.getElementById('movie-intro-end')?.value);
+          const outroStart = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-outro-start')?.value : document.getElementById('movie-outro-start')?.value);
+          const outroEnd = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-outro-end')?.value : document.getElementById('movie-outro-end')?.value);
+          const creditsStart = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-credits-start')?.value : document.getElementById('movie-credits-start')?.value);
+          const creditsEnd = parseInt(window.isSmartHlsMode ? document.getElementById('movie-hls-credits-end')?.value : document.getElementById('movie-credits-end')?.value);
           
           movieSkipMarkers = {};
           if (!isNaN(introStart) && !isNaN(introEnd)) movieSkipMarkers.intro = { start: introStart, end: introEnd };
@@ -6734,6 +7101,7 @@
           title,
           type,
           uploadMode: isMovieUpload ? 'movie' : 'series',
+          isSmartHls: !!window.isSmartHlsMode,
           rating,
           year,
           country,
@@ -6749,7 +7117,7 @@
           videoUrl: firstVideoUrl,
           qualityLinks: mainQualityLinks,
           videoSources: mainVideoSources,
-          availableLanguages: window.activeLanguages || ['Hindi', 'English'],
+          availableLanguages: window.isSmartHlsMode ? ['Default'] : (window.activeLanguages || ['Hindi', 'English']),
           videoLinks: movieParts.length > 0 ? movieParts : (firstVideoUrl ? [firstVideoUrl] : []),
           seasonsData: activeSeasons,
           episodesList: lightweightEpisodes,
@@ -14081,7 +14449,7 @@ docs.forEach(docItem => {
       
       const actions = Array.isArray(data.actions) ? data.actions : [];
       const fillMetaAction = actions.find(a => a.type === 'FILL_UPLOAD_METADATA');
-      const seriesAction = actions.find(a => a.type === 'BUILD_SERIES_EPISODES');
+      const seriesActions = actions.filter(a => a.type === 'BUILD_SERIES_EPISODES');
       const movieLinksAction = actions.find(a => a.type === 'CONFIGURE_MOVIE_LINKS');
       const annAction = actions.find(a => a.type === 'FILL_ANNOUNCEMENT');
 
@@ -14136,124 +14504,139 @@ docs.forEach(docItem => {
       let cardHtml = '';
 
       // 1. MEDIA PRESENTATION CARD (Movies, Anime, Series)
-      if (title || posterUrl || seriesAction || movieLinksAction) {
+      if (title || posterUrl || seriesActions.length > 0 || movieLinksAction) {
         const typeBg = type === 'ANIME' ? 'linear-gradient(135deg, #EC4899, #8B5CF6)' : (type === 'MOVIE' ? 'linear-gradient(135deg, #06B6D4, #3B82F6)' : 'linear-gradient(135deg, #8B5CF6, #6366F1)');
         
         let episodesHtml = '';
-        if (seriesAction && Array.isArray(seriesAction.data?.episodes)) {
-          const eps = seriesAction.data.episodes;
-          const seasonNum = seriesAction.data.seasonNumber || 1;
-          const totalEps = eps.length;
+        if (seriesActions.length > 0) {
+          const totalAllEpisodesAcrossSeasons = seriesActions.reduce((sum, sAct) => sum + (Array.isArray(sAct.data?.episodes) ? sAct.data.episodes.length : 0), 0);
+          
+          let multiSeasonHeader = '';
+          if (seriesActions.length > 1) {
+            multiSeasonHeader = `
+              <div style="margin-top:10px; background:linear-gradient(135deg, rgba(139,92,246,0.2), rgba(6,182,212,0.15)); border:1px solid rgba(139,92,246,0.3); border-radius:10px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:11px; font-weight:800; color:#E9D5FF;"><i class="fa-solid fa-layer-group" style="color:#C084FC;"></i> Multi-Season Architecture (${seriesActions.length} Seasons)</span>
+                <span style="font-size:10px; font-weight:700; color:#34D399; background:rgba(16,185,129,0.2); padding:2px 8px; border-radius:10px;">${totalAllEpisodesAcrossSeasons} Total Episodes</span>
+              </div>
+            `;
+          }
 
-          const epItemsHtml = eps.map((ep, idx) => {
-            const epNum = ep.epNum || (idx + 1);
-            const epTitle = ep.title || `Episode ${epNum}`;
-            const links = Array.isArray(ep.links) ? ep.links : [];
-            const partCount = Math.max(1, links.length);
+          const seasonSectionsHtml = seriesActions.map((sAct, sIdx) => {
+            const eps = Array.isArray(sAct.data?.episodes) ? sAct.data.episodes : [];
+            const seasonNum = sAct.data?.seasonNumber || (sIdx + 1);
+            const totalEps = eps.length;
 
-            // Sum duration of all individual parts if present
-            let partsDurationSum = 0;
-            let hasIndividualPartDur = false;
-            links.forEach(l => {
-              if (l && l.duration) {
-                const s = parseSeconds(l.duration);
-                if (s > 0) {
-                  partsDurationSum += s;
-                  hasIndividualPartDur = true;
+            const epItemsHtml = eps.map((ep, idx) => {
+              const epNum = ep.epNum || (idx + 1);
+              const epTitle = ep.title || `Episode ${epNum}`;
+              const links = Array.isArray(ep.links) ? ep.links : [];
+              const partCount = Math.max(1, links.length);
+
+              // Sum duration of all individual parts if present
+              let partsDurationSum = 0;
+              let hasIndividualPartDur = false;
+              links.forEach(l => {
+                if (l && l.duration) {
+                  const s = parseSeconds(l.duration);
+                  if (s > 0) {
+                    partsDurationSum += s;
+                    hasIndividualPartDur = true;
+                  }
+                }
+              });
+
+              let finalEpisodeSec = 0;
+              if (hasIndividualPartDur && partsDurationSum > 0) {
+                finalEpisodeSec = partsDurationSum;
+              } else if (ep.duration) {
+                finalEpisodeSec = parseSeconds(ep.duration);
+              }
+              if (finalEpisodeSec === 0) finalEpisodeSec = 1420; // 23:40 default
+
+              const durStr = formatDur(finalEpisodeSec);
+
+              const hasActualStreamLinks = links.some(l => l.url || (l.videoSources && Object.keys(l.videoSources).length > 0));
+
+              // Parts detail pills
+              let partsPills = '';
+              if (hasActualStreamLinks) {
+                partsPills = links.map((l, pIdx) => {
+                  const pNum = pIdx + 1;
+                  const sources = l.videoSources || {};
+                  const langs = Object.keys(sources);
+                  const firstLang = langs[0] || 'Hindi';
+                  const quals = Object.keys(sources[firstLang] || { '1080p': '' }).join(', ') || '1080p';
+                  const pDur = l.duration ? ` • ${formatDur(l.duration)}` : '';
+                  return `<span style="display:inline-flex; align-items:center; gap:4px; font-size:9px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:2px 6px; color:#E4E4E7;"><i class="fa-solid fa-link" style="color:#A78BFA; font-size:8px;"></i> Part ${pNum}: ${firstLang} (${quals})${pDur}</span>`;
+                }).join(' ');
+              } else {
+                partsPills = `<span style="font-size:9px; color:#A1A1AA; display:inline-flex; align-items:center; gap:4px;"><i class="fa-regular fa-clock" style="color:#F59E0B;"></i> Stream Link Pending (Input Box Clean & Empty)</span>`;
+              }
+
+              // Multi-part combined pill
+              let combinedPill = '';
+              if (partCount > 1 && hasActualStreamLinks) {
+                combinedPill = `<span class="ai-combined-pill" data-epnum="${epNum}" style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); border-radius:4px; padding:2px 6px; color:#38BDF8;"><i class="fa-solid fa-calculator" style="font-size:8px;"></i> Total (${partCount} Parts): ${durStr}</span>`;
+              }
+
+              // Skip markers pill
+              let skipPill = '';
+              if (ep.skipMarkers) {
+                const intro = ep.skipMarkers.intro;
+                const outro = ep.skipMarkers.outro;
+                if (intro && intro.end) {
+                  skipPill += `<span style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(234,179,8,0.12); border:1px solid rgba(234,179,8,0.25); border-radius:4px; padding:2px 6px; color:#FDE047;"><i class="fa-solid fa-forward-step" style="font-size:8px;"></i> Intro: ${intro.start || 0}s-${intro.end}s</span>`;
+                }
+                if (outro && outro.start) {
+                  skipPill += `<span style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(234,179,8,0.12); border:1px solid rgba(234,179,8,0.25); border-radius:4px; padding:2px 6px; color:#FDE047; margin-left:4px;"><i class="fa-solid fa-forward-fast" style="font-size:8px;"></i> Outro: ${outro.start}s-${outro.end || ''}s</span>`;
                 }
               }
-            });
 
-            let finalEpisodeSec = 0;
-            if (hasIndividualPartDur && partsDurationSum > 0) {
-              finalEpisodeSec = partsDurationSum;
-            } else if (ep.duration) {
-              finalEpisodeSec = parseSeconds(ep.duration);
-            }
-            if (finalEpisodeSec === 0) finalEpisodeSec = 1420; // 23:40 default
+              const durBadgeHTML = hasActualStreamLinks 
+                ? `<span class="ai-badge-ep-dur" data-epnum="${epNum}" style="font-size:10px; font-weight:700; color:#34D399; background:rgba(52,211,153,0.12); border:1px solid rgba(52,211,153,0.25); padding:2px 6px; border-radius:4px;"><i class="fa-regular fa-clock" style="font-size:9px;"></i> Total: ${durStr}</span>`
+                : `<span class="ai-badge-ep-dur" data-epnum="${epNum}" style="font-size:10px; font-weight:600; color:#A1A1AA; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px;"><i class="fa-regular fa-clock" style="font-size:9px;"></i> Duration Pending</span>`;
 
-            const durStr = formatDur(finalEpisodeSec);
-
-            const hasActualStreamLinks = links.some(l => l.url || (l.videoSources && Object.keys(l.videoSources).length > 0));
-
-            // Parts detail pills
-            let partsPills = '';
-            if (hasActualStreamLinks) {
-              partsPills = links.map((l, pIdx) => {
-                const pNum = pIdx + 1;
-                const sources = l.videoSources || {};
-                const langs = Object.keys(sources);
-                const firstLang = langs[0] || 'Hindi';
-                const quals = Object.keys(sources[firstLang] || { '1080p': '' }).join(', ') || '1080p';
-                const pDur = l.duration ? ` • ${formatDur(l.duration)}` : '';
-                return `<span style="display:inline-flex; align-items:center; gap:4px; font-size:9px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:2px 6px; color:#E4E4E7;"><i class="fa-solid fa-link" style="color:#A78BFA; font-size:8px;"></i> Part ${pNum}: ${firstLang} (${quals})${pDur}</span>`;
-              }).join(' ');
-            } else {
-              partsPills = `<span style="font-size:9px; color:#A1A1AA; display:inline-flex; align-items:center; gap:4px;"><i class="fa-regular fa-clock" style="color:#F59E0B;"></i> Stream Link Pending (Input Box Clean & Empty)</span>`;
-            }
-
-            // Multi-part combined pill
-            let combinedPill = '';
-            if (partCount > 1 && hasActualStreamLinks) {
-              combinedPill = `<span class="ai-combined-pill" data-epnum="${epNum}" style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.25); border-radius:4px; padding:2px 6px; color:#38BDF8;"><i class="fa-solid fa-calculator" style="font-size:8px;"></i> Total (${partCount} Parts): ${durStr}</span>`;
-            }
-
-            // Skip markers pill
-            let skipPill = '';
-            if (ep.skipMarkers) {
-              const intro = ep.skipMarkers.intro;
-              const outro = ep.skipMarkers.outro;
-              if (intro && intro.end) {
-                skipPill += `<span style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(234,179,8,0.12); border:1px solid rgba(234,179,8,0.25); border-radius:4px; padding:2px 6px; color:#FDE047;"><i class="fa-solid fa-forward-step" style="font-size:8px;"></i> Intro: ${intro.start || 0}s-${intro.end}s</span>`;
-              }
-              if (outro && outro.start) {
-                skipPill += `<span style="display:inline-flex; align-items:center; gap:3px; font-size:9px; background:rgba(234,179,8,0.12); border:1px solid rgba(234,179,8,0.25); border-radius:4px; padding:2px 6px; color:#FDE047; margin-left:4px;"><i class="fa-solid fa-forward-fast" style="font-size:8px;"></i> Outro: ${outro.start}s-${outro.end || ''}s</span>`;
-              }
-            }
-
-            const durBadgeHTML = hasActualStreamLinks 
-              ? `<span class="ai-badge-ep-dur" data-epnum="${epNum}" style="font-size:10px; font-weight:700; color:#34D399; background:rgba(52,211,153,0.12); border:1px solid rgba(52,211,153,0.25); padding:2px 6px; border-radius:4px;"><i class="fa-regular fa-clock" style="font-size:9px;"></i> Total: ${durStr}</span>`
-              : `<span class="ai-badge-ep-dur" data-epnum="${epNum}" style="font-size:10px; font-weight:600; color:#A1A1AA; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px;"><i class="fa-regular fa-clock" style="font-size:9px;"></i> Duration Pending</span>`;
-
-            return `
-              <div style="background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06); border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px; transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(168,85,247,0.4)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.06)'">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                  <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
-                    <span style="background:rgba(168,85,247,0.2); color:#C084FC; font-weight:800; font-size:10px; padding:2px 6px; border-radius:4px; flex-shrink:0;">EP ${epNum.toString().padStart(2, '0')}</span>
-                    <span style="font-weight:700; color:#FFF; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(epTitle)}</span>
+              return `
+                <div style="background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06); border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px; transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(168,85,247,0.4)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.06)'">
+                  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
+                      <span style="background:rgba(168,85,247,0.2); color:#C084FC; font-weight:800; font-size:10px; padding:2px 6px; border-radius:4px; flex-shrink:0;">EP ${epNum.toString().padStart(2, '0')}</span>
+                      <span style="font-weight:700; color:#FFF; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(epTitle)}</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                      ${durBadgeHTML}
+                      <span style="font-size:9px; color:#A1A1AA; background:rgba(255,255,255,0.05); padding:2px 6px; border-radius:4px;">${partCount} Part${partCount > 1 ? 's' : ''}</span>
+                    </div>
                   </div>
-                  <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
-                    ${durBadgeHTML}
-                    <span style="font-size:9px; color:#A1A1AA; background:rgba(255,255,255,0.05); padding:2px 6px; border-radius:4px;">${partCount} Part${partCount > 1 ? 's' : ''}</span>
+                  <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
+                    ${partsPills}
+                    ${combinedPill}
+                    ${skipPill}
                   </div>
                 </div>
-                <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
-                  ${partsPills}
-                  ${combinedPill}
-                  ${skipPill}
+              `;
+            }).join('');
+
+            return `
+              <div style="margin-top:8px; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <i class="fa-solid fa-layer-group" style="color:#A78BFA; font-size:12px;"></i>
+                    <span style="font-size:11px; font-weight:800; color:#FFF; text-transform:uppercase; letter-spacing:0.5px;">Season ${seasonNum} Episodes (${totalEps} Total)</span>
+                  </div>
+                  <span style="font-size:9px; background:rgba(16,185,129,0.15); color:#34D399; font-weight:800; padding:2px 8px; border-radius:10px; border:1px solid rgba(16,185,129,0.3);">
+                    <i class="fa-solid fa-circle-check"></i> ${totalEps} Episode Boxes Ready
+                  </span>
+                </div>
+                
+                <div style="max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px;">
+                  ${epItemsHtml}
                 </div>
               </div>
             `;
           }).join('');
 
-          episodesHtml = `
-            <div style="margin-top:10px; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <i class="fa-solid fa-layer-group" style="color:#A78BFA; font-size:12px;"></i>
-                  <span style="font-size:11px; font-weight:800; color:#FFF; text-transform:uppercase; letter-spacing:0.5px;">Season ${seasonNum} Episodes (${totalEps} Total)</span>
-                </div>
-                <span style="font-size:9px; background:rgba(16,185,129,0.15); color:#34D399; font-weight:800; padding:2px 8px; border-radius:10px; border:1px solid rgba(16,185,129,0.3);">
-                  <i class="fa-solid fa-circle-check"></i> ${totalEps} Links & Timers Configured
-                </span>
-              </div>
-              
-              <!-- Episode scrollable list -->
-              <div style="max-height:240px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px;">
-                ${epItemsHtml}
-              </div>
-            </div>
-          `;
+          episodesHtml = multiSeasonHeader + seasonSectionsHtml;
         } else if (movieLinksAction && Array.isArray(movieLinksAction.data?.links)) {
           const mLinks = movieLinksAction.data.links;
           const skip = movieLinksAction.data.skipMarkers || {};
@@ -14422,6 +14805,29 @@ docs.forEach(docItem => {
               activeTab: activeTabId,
               currentSeasonIdx: window.currentSeasonIdx || 0,
               uploadMode: window.currentUploadMode || 'movie',
+              editingContentId: window.editingContentId || null,
+              currentDraft: {
+                id: window.editingContentId || null,
+                title: document.getElementById('up-title')?.value || '',
+                type: window.currentUploadMode || 'series',
+                rating: document.getElementById('up-rating')?.value || '',
+                year: document.getElementById('up-year')?.value || '',
+                genres: document.getElementById('up-genre')?.value || '',
+                activeLanguages: window.activeLanguages || [],
+                activeQualities: window.activeQualities || [],
+                seasonsCount: (window.seasonsData && window.seasonsData.length) || 1,
+                seasonsOverview: (window.seasonsData || []).map(function(s, idx) {
+                  return {
+                    seasonNumber: s.seasonNumber || (idx + 1),
+                    seasonTitle: s.seasonTitle || ('Season ' + (idx + 1)),
+                    episodesCount: (s.episodes && s.episodes.length) || 0
+                  };
+                }),
+                activeSeasonEpisodesCount: (window.seasonsData && window.seasonsData[window.currentSeasonIdx || 0]?.episodes?.length) || 0,
+                totalEpisodesCount: (window.seasonsData || []).reduce((acc, s) => acc + ((s.episodes && s.episodes.length) || 0), 0),
+                hasSkipMarkers: (window.seasonsData || []).some(s => (s.episodes || []).some(ep => ep.skipMarkers && Object.keys(ep.skipMarkers).length > 0)) ||
+                  Boolean(document.getElementById('movie-intro-start')?.value || document.getElementById('movie-outro-start')?.value)
+              },
               stats: {
                 totalContent: document.getElementById('stat-total-titles')?.innerText || '0',
                 totalUsers: document.getElementById('stat-total-users')?.innerText || '0',
@@ -14583,7 +14989,7 @@ docs.forEach(docItem => {
               </button>
             </div>
           `;
-        } else if (intent === 'movie_upload' || intent === 'series_upload' || intent === 'upload') {
+        } else if (intent === 'movie_upload' || intent === 'series_upload' || intent === 'upload' || intent === 'content_edit' || intent === 'edit_inquiry' || intent === 'content_management' || (Array.isArray(data.actions) && data.actions.length > 0)) {
           intentBadge = '<span style="font-size:9px; background:rgba(168,85,247,0.15); color:#C084FC; padding:2px 6px; border-radius:6px; font-weight:600;"><i class="fa-solid fa-cloud-arrow-up"></i> Upload Wizard</span>';
           actionButtonsHtml = `
             <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
@@ -14714,6 +15120,9 @@ docs.forEach(docItem => {
 
             case 'FILL_UPLOAD_METADATA': {
               const d = action.data || {};
+              if (actions.some(a => a.type === 'BUILD_SERIES_EPISODES')) {
+                window.seasonsData = [];
+              }
               if (d.title) {
                 const el = document.getElementById('up-title');
                 if (el) { el.value = d.title; el.dispatchEvent(new Event('input')); }
@@ -14841,8 +15250,68 @@ docs.forEach(docItem => {
             case 'LOAD_FOR_EDIT': {
               const d = action.data || {};
               if (d.contentId && typeof window.editContent === 'function') {
-                window.editContent(d.contentId);
+                await window.editContent(d.contentId);
                 appendStepLog(`Loaded content "${d.title || d.contentId}" into Edit Form`);
+              }
+              break;
+            }
+
+            case 'SWITCH_SEASON': {
+              const d = action.data || {};
+              const targetNum = Number(d.seasonNumber) || (d.seasonIndex !== undefined ? Number(d.seasonIndex) + 1 : 1);
+              if (Array.isArray(window.seasonsData) && window.seasonsData.length > 0) {
+                let targetIdx = window.seasonsData.findIndex(s => Number(s.seasonNumber) === targetNum);
+                if (targetIdx === -1 && d.seasonIndex !== undefined && window.seasonsData[d.seasonIndex]) {
+                  targetIdx = d.seasonIndex;
+                }
+                if (targetIdx !== -1) {
+                  if (typeof syncEpisodesFromDOM === 'function') syncEpisodesFromDOM();
+                  window.currentSeasonIdx = targetIdx;
+                  if (typeof renderSeasonsUI === 'function') renderSeasonsUI();
+                  if (typeof renderEpisodesList === 'function') renderEpisodesList();
+                  appendStepLog(`Switched view to Season ${targetNum}`, 'fa-layer-group', '#A78BFA');
+                }
+              }
+              break;
+            }
+
+            case 'ADD_SEASON':
+            case 'CREATE_SEASON': {
+              const d = action.data || {};
+              const maxExisting = (window.seasonsData || []).reduce((max, s) => Math.max(max, Number(s.seasonNumber) || 0), 0);
+              const targetNum = Number(d.seasonNumber) || (maxExisting + 1);
+              const seasonTitle = d.seasonTitle || `Season ${targetNum}`;
+              const epCount = Number(d.episodeCount) || 12;
+
+              if (!Array.isArray(window.seasonsData)) window.seasonsData = [];
+              let existing = window.seasonsData.find(s => Number(s.seasonNumber) === targetNum);
+              if (!existing) {
+                const defaultLangs = (window.activeLanguages && window.activeLanguages.length > 0) ? window.activeLanguages : ['Hindi'];
+                const defaultQuals = (window.activeQualities && window.activeQualities.length > 0) ? window.activeQualities : ['1080p', '720p'];
+                const newEpisodes = [];
+                for (let i = 1; i <= epCount; i++) {
+                  const sources = {};
+                  defaultLangs.forEach(lng => {
+                    sources[lng] = {};
+                    defaultQuals.forEach(q => sources[lng][q] = "");
+                  });
+                  newEpisodes.push({
+                    id: 'ep-' + Date.now() + '-' + i,
+                    episodeNumber: i,
+                    episodeTitle: `Episode ${i}`,
+                    duration: 1420,
+                    videoSources: sources
+                  });
+                }
+                window.seasonsData.push({
+                  seasonNumber: targetNum,
+                  seasonTitle: seasonTitle,
+                  episodes: newEpisodes
+                });
+                window.currentSeasonIdx = window.seasonsData.length - 1;
+                if (typeof renderSeasonsUI === 'function') renderSeasonsUI();
+                if (typeof renderEpisodesList === 'function') renderEpisodesList();
+                appendStepLog(`Created ${seasonTitle} with ${epCount} episodes`, 'fa-circle-plus', '#34D399');
               }
               break;
             }
@@ -14955,8 +15424,41 @@ docs.forEach(docItem => {
             case 'UPDATE_EPISODES_SPEC': {
               const d = action.data || {};
               if (typeof syncEpisodesFromDOM === 'function') syncEpisodesFromDOM();
-              const activeSeason = (window.seasonsData && window.currentSeasonIdx !== undefined) ? window.seasonsData[window.currentSeasonIdx] : null;
-              if (activeSeason && Array.isArray(activeSeason.episodes)) {
+
+              let targetSeasons = [];
+              if (Array.isArray(window.seasonsData) && window.seasonsData.length > 0) {
+                if (d.applyToAllSeasons) {
+                  targetSeasons = window.seasonsData;
+                } else if (Array.isArray(d.seasonNumbers) && d.seasonNumbers.length > 0) {
+                  const sNums = d.seasonNumbers.map(n => Number(n));
+                  targetSeasons = window.seasonsData.filter(s => sNums.includes(Number(s.seasonNumber)));
+                  if (targetSeasons.length === 0) {
+                    targetSeasons = d.seasonNumbers.map(n => window.seasonsData[n - 1]).filter(Boolean);
+                  }
+                } else if (d.seasonNumber !== undefined && d.seasonNumber !== null) {
+                  const sNum = Number(d.seasonNumber);
+                  targetSeasons = window.seasonsData.filter(s => Number(s.seasonNumber) === sNum);
+                  if (targetSeasons.length === 0 && window.seasonsData[sNum - 1]) {
+                    targetSeasons = [window.seasonsData[sNum - 1]];
+                  }
+                  // Automatically switch UI view to this target season
+                  const sIdx = window.seasonsData.findIndex(s => Number(s.seasonNumber) === sNum);
+                  if (sIdx !== -1) {
+                    window.currentSeasonIdx = sIdx;
+                  }
+                } else if (d.seasonIndex !== undefined && d.seasonIndex !== null) {
+                  const sIdx = Number(d.seasonIndex);
+                  if (window.seasonsData[sIdx]) {
+                    targetSeasons = [window.seasonsData[sIdx]];
+                    window.currentSeasonIdx = sIdx;
+                  }
+                } else {
+                  const activeSeason = (window.currentSeasonIdx !== undefined) ? window.seasonsData[window.currentSeasonIdx] : null;
+                  targetSeasons = activeSeason ? [activeSeason] : window.seasonsData;
+                }
+              }
+
+              if (targetSeasons.length > 0) {
                 // Ensure new qualities exist in window.activeQualities and checkboxes
                 const newQuals = d.addQualities || d.setQualities || [];
                 newQuals.forEach(q => {
@@ -14966,105 +15468,172 @@ docs.forEach(docItem => {
                   if (typeof ensureQualityCheckboxExists === 'function') ensureQualityCheckboxExists(q);
                 });
 
-                const targetNums = Array.isArray(d.episodeNumbers) ? d.episodeNumbers : [];
-                activeSeason.episodes.forEach(ep => {
-                  if (d.applyToAll || targetNums.includes(ep.episodeNumber)) {
-                    // Update Part 1 videoSources
-                    if (!ep.videoSources) ep.videoSources = {};
-                    const langs = Object.keys(ep.videoSources).length > 0 ? Object.keys(ep.videoSources) : ((window.activeLanguages && window.activeLanguages.length > 0) ? window.activeLanguages : ['Hindi']);
+                const targetNums = Array.isArray(d.episodeNumbers) ? d.episodeNumbers.map(n => Number(n)) : [];
+                targetSeasons.forEach(season => {
+                  if (!Array.isArray(season.episodes)) return;
+                  season.episodes.forEach(ep => {
+                    const epNum = Number(ep.episodeNumber);
+                    if (d.applyToAll || d.applyToAllSeasons || targetNums.length === 0 || targetNums.includes(epNum)) {
+                      // Update Part 1 videoSources
+                      if (!ep.videoSources) ep.videoSources = {};
+                      const langs = Object.keys(ep.videoSources).length > 0 ? Object.keys(ep.videoSources) : ((window.activeLanguages && window.activeLanguages.length > 0) ? window.activeLanguages : ['Hindi']);
 
-                    langs.forEach(lng => {
-                      if (!ep.videoSources[lng]) ep.videoSources[lng] = {};
-                      // Remove qualities
-                      if (Array.isArray(d.removeQualities)) {
-                        d.removeQualities.forEach(rq => {
-                          const k = Object.keys(ep.videoSources[lng]).find(x => x.toLowerCase() === rq.toLowerCase());
-                          if (k) delete ep.videoSources[lng][k];
-                        });
-                      }
-                      // Add / Set qualities
-                      if (Array.isArray(d.addQualities)) {
-                        d.addQualities.forEach(aq => {
-                          if (ep.videoSources[lng][aq] === undefined) {
-                            ep.videoSources[lng][aq] = "";
-                          }
-                        });
-                      }
-                      if (Array.isArray(d.setQualities)) {
-                        const newSources = {};
-                        d.setQualities.forEach(sq => {
-                          newSources[sq] = ep.videoSources[lng][sq] || "";
-                        });
-                        ep.videoSources[lng] = newSources;
-                      }
-                    });
-
-                    // Also apply quality modifications to all extra parts (Part 2, Part 3...)
-                    if (Array.isArray(ep.videoLinks)) {
-                      ep.videoLinks.forEach(exPart => {
-                        if (!exPart.videoSources) exPart.videoSources = {};
-                        langs.forEach(lng => {
-                          if (!exPart.videoSources[lng]) exPart.videoSources[lng] = {};
-                          if (Array.isArray(d.removeQualities)) {
-                            d.removeQualities.forEach(rq => {
-                              const k = Object.keys(exPart.videoSources[lng]).find(x => x.toLowerCase() === rq.toLowerCase());
-                              if (k) delete exPart.videoSources[lng][k];
-                            });
-                          }
-                          if (Array.isArray(d.addQualities)) {
-                            d.addQualities.forEach(aq => {
-                              if (exPart.videoSources[lng][aq] === undefined) {
-                                exPart.videoSources[lng][aq] = "";
-                              }
-                            });
-                          }
-                          if (Array.isArray(d.setQualities)) {
-                            const newSources = {};
-                            d.setQualities.forEach(sq => {
-                              newSources[sq] = exPart.videoSources[lng][sq] || "";
-                            });
-                            exPart.videoSources[lng] = newSources;
-                          }
-                        });
+                      langs.forEach(lng => {
+                        if (!ep.videoSources[lng]) ep.videoSources[lng] = {};
+                        // Remove qualities
+                        if (Array.isArray(d.removeQualities)) {
+                          d.removeQualities.forEach(rq => {
+                            const k = Object.keys(ep.videoSources[lng]).find(x => x.toLowerCase() === rq.toLowerCase());
+                            if (k) delete ep.videoSources[lng][k];
+                          });
+                        }
+                        // Add / Set qualities
+                        if (Array.isArray(d.addQualities)) {
+                          d.addQualities.forEach(aq => {
+                            if (ep.videoSources[lng][aq] === undefined) {
+                              ep.videoSources[lng][aq] = "";
+                            }
+                          });
+                        }
+                        if (Array.isArray(d.setQualities)) {
+                          const newSources = {};
+                          d.setQualities.forEach(sq => {
+                            newSources[sq] = ep.videoSources[lng][sq] || "";
+                          });
+                          ep.videoSources[lng] = newSources;
+                        }
                       });
-                    }
 
-                    // Update Skip Markers if provided
-                    if (d.skipMarkers) {
-                      if (!ep.skipMarkers) ep.skipMarkers = {};
-                      if (d.skipMarkers.intro) ep.skipMarkers.intro = { ...d.skipMarkers.intro };
-                      if (d.skipMarkers.outro) ep.skipMarkers.outro = { ...d.skipMarkers.outro };
-                      if (d.skipMarkers.credits) ep.skipMarkers.credits = { ...d.skipMarkers.credits };
-                      if (d.skipMarkers.removeIntro) delete ep.skipMarkers.intro;
-                      if (d.skipMarkers.removeOutro) delete ep.skipMarkers.outro;
-                      if (d.skipMarkers.removeCredits) delete ep.skipMarkers.credits;
-                    }
-
-                    // Update parts count if specified
-                    if (d.partsCount !== undefined && d.partsCount > 0) {
-                      if (!Array.isArray(ep.videoLinks)) ep.videoLinks = [];
-                      const neededExtraParts = d.partsCount - 1;
-                      while (ep.videoLinks.length < neededExtraParts) {
-                        const emptySources = {};
-                        langs.forEach(lng => {
-                          emptySources[lng] = {};
-                          (d.setQualities || d.addQualities || Object.keys(ep.videoSources[lng]) || window.activeQualities).forEach(q => {
-                            emptySources[lng][q] = "";
+                      // Also apply quality modifications to all extra parts (Part 2, Part 3...)
+                      if (Array.isArray(ep.videoLinks)) {
+                        ep.videoLinks.forEach(exPart => {
+                          if (!exPart.videoSources) exPart.videoSources = {};
+                          langs.forEach(lng => {
+                            if (!exPart.videoSources[lng]) exPart.videoSources[lng] = {};
+                            if (Array.isArray(d.removeQualities)) {
+                              d.removeQualities.forEach(rq => {
+                                const k = Object.keys(exPart.videoSources[lng]).find(x => x.toLowerCase() === rq.toLowerCase());
+                                if (k) delete exPart.videoSources[lng][k];
+                              });
+                            }
+                            if (Array.isArray(d.addQualities)) {
+                              d.addQualities.forEach(aq => {
+                                if (exPart.videoSources[lng][aq] === undefined) {
+                                  exPart.videoSources[lng][aq] = "";
+                                }
+                              });
+                            }
+                            if (Array.isArray(d.setQualities)) {
+                              const newSources = {};
+                              d.setQualities.forEach(sq => {
+                                newSources[sq] = exPart.videoSources[lng][sq] || "";
+                              });
+                              exPart.videoSources[lng] = newSources;
+                            }
                           });
                         });
-                        ep.videoLinks.push({ videoSources: emptySources });
                       }
-                      while (ep.videoLinks.length > neededExtraParts) {
-                        ep.videoLinks.pop();
+
+                      // Update Skip Markers if provided
+                      if (d.skipMarkers) {
+                        if (d.skipMarkers.removeAll || d.skipMarkers.clearAll) {
+                          ep.skipMarkers = {};
+                          delete ep.skipMarkers;
+                        } else {
+                          if (!ep.skipMarkers) ep.skipMarkers = {};
+                          if (d.skipMarkers.intro) ep.skipMarkers.intro = { ...d.skipMarkers.intro };
+                          if (d.skipMarkers.outro) ep.skipMarkers.outro = { ...d.skipMarkers.outro };
+                          if (d.skipMarkers.credits) ep.skipMarkers.credits = { ...d.skipMarkers.credits };
+                          if (d.skipMarkers.removeIntro) delete ep.skipMarkers.intro;
+                          if (d.skipMarkers.removeOutro) delete ep.skipMarkers.outro;
+                          if (d.skipMarkers.removeCredits) delete ep.skipMarkers.credits;
+                          if (Object.keys(ep.skipMarkers).length === 0) delete ep.skipMarkers;
+                        }
+                      }
+
+                      // Update parts count if specified
+                      if (d.partsCount !== undefined && d.partsCount > 0) {
+                        if (!Array.isArray(ep.videoLinks)) ep.videoLinks = [];
+                        const neededExtraParts = d.partsCount - 1;
+                        while (ep.videoLinks.length < neededExtraParts) {
+                          const emptySources = {};
+                          langs.forEach(lng => {
+                            emptySources[lng] = {};
+                            (d.setQualities || d.addQualities || Object.keys(ep.videoSources[lng]) || window.activeQualities).forEach(q => {
+                              emptySources[lng][q] = "";
+                            });
+                          });
+                          ep.videoLinks.push({ videoSources: emptySources });
+                        }
+                        while (ep.videoLinks.length > neededExtraParts) {
+                          ep.videoLinks.pop();
+                        }
                       }
                     }
-                  }
+                  });
                 });
+
+                // Clear DOM skip marker inputs if requested
+                if (d.skipMarkers && (d.skipMarkers.removeAll || d.skipMarkers.clearAll)) {
+                  document.querySelectorAll('.ep-intro-start, .ep-intro-end, .ep-outro-start, .ep-outro-end, .ep-credits-start, .ep-credits-end').forEach(inp => {
+                    inp.value = '';
+                  });
+                  ['movie-intro-start', 'movie-intro-end', 'movie-outro-start', 'movie-outro-end', 'movie-credits-start', 'movie-credits-end'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = '';
+                  });
+                } else if (d.skipMarkers) {
+                  if (d.skipMarkers.removeIntro) {
+                    document.querySelectorAll('.ep-intro-start, .ep-intro-end').forEach(inp => { inp.value = ''; });
+                    const s = document.getElementById('movie-intro-start');
+                    const e = document.getElementById('movie-intro-end');
+                    if (s) s.value = '';
+                    if (e) e.value = '';
+                  }
+                  if (d.skipMarkers.removeOutro) {
+                    document.querySelectorAll('.ep-outro-start, .ep-outro-end').forEach(inp => { inp.value = ''; });
+                    const s = document.getElementById('movie-outro-start');
+                    const e = document.getElementById('movie-outro-end');
+                    if (s) s.value = '';
+                    if (e) e.value = '';
+                  }
+                }
+
+                // If movie mode, update movie skip markers
+                if (window.currentUploadMode === 'movie') {
+                  if (d.skipMarkers?.intro) {
+                    const s = document.getElementById('movie-intro-start');
+                    const e = document.getElementById('movie-intro-end');
+                    if (s) s.value = d.skipMarkers.intro.start ?? 0;
+                    if (e) e.value = d.skipMarkers.intro.end ?? 90;
+                  }
+                  if (d.skipMarkers?.outro) {
+                    const s = document.getElementById('movie-outro-start');
+                    const e = document.getElementById('movie-outro-end');
+                    if (s) s.value = d.skipMarkers.outro.start ?? 0;
+                    if (e) e.value = d.skipMarkers.outro.end ?? 90;
+                  }
+                }
 
                 if (typeof renderEpisodesList === 'function') {
                   renderEpisodesList();
                 }
-                appendStepLog(`Updated episode specifications: ${d.removeQualities ? 'Removed [' + d.removeQualities.join(', ') + ']' : ''} ${d.addQualities ? 'Added [' + d.addQualities.join(', ') + ']' : ''}`, 'fa-sliders', '#60A5FA');
+                if (typeof renderSeasonsUI === 'function') {
+                  renderSeasonsUI();
+                }
+
+                const sLabel = d.applyToAllSeasons 
+                  ? 'All Seasons' 
+                  : (d.seasonNumber ? `Season ${d.seasonNumber}` : (d.seasonNumbers ? `Seasons [${d.seasonNumbers.join(', ')}]` : `Season ${(window.currentSeasonIdx || 0) + 1}`));
+
+                let logMsg = `Updated specs for ${sLabel}`;
+                if (d.skipMarkers?.removeAll || d.skipMarkers?.clearAll) logMsg = `Removed all skip markers across ${sLabel}`;
+                else if (d.skipMarkers?.removeIntro) logMsg = `Removed intro skip markers for ${sLabel}`;
+                else if (d.skipMarkers?.removeOutro) logMsg = `Removed outro skip markers for ${sLabel}`;
+                else if (d.removeQualities || d.addQualities) {
+                  logMsg = `${sLabel}: ${d.removeQualities ? 'Removed [' + d.removeQualities.join(', ') + '] ' : ''}${d.addQualities ? 'Added [' + d.addQualities.join(', ') + ']' : ''}`;
+                }
+                appendStepLog(logMsg, 'fa-sliders', '#60A5FA');
               }
               break;
             }
@@ -15181,6 +15750,14 @@ docs.forEach(docItem => {
               appendStepLog(`Filtered catalog for "${action.query}"`);
               break;
 
+            case 'SAVE_EDITED_CONTENT':
+            case 'PUBLISH_MEDIA':
+              if (typeof window.publishMedia === 'function') {
+                await window.publishMedia();
+                appendStepLog('Saved and published changes live!', 'fa-circle-check', '#10B981');
+              }
+              break;
+
             case 'EXECUTE_JS':
               if (action.code) {
                 try {
@@ -15197,6 +15774,25 @@ docs.forEach(docItem => {
         } catch (actErr) {
           console.warn('Action dispatch error:', action, actErr);
           appendStepLog(`Step ${action.type} error: ${actErr.message}`, 'fa-triangle-exclamation', '#EF4444');
+        }
+      }
+
+      // Post-batch cleanup & presentation for series/seasons
+      const hasSeriesEpisodes = actions.some(a => a.type === 'BUILD_SERIES_EPISODES');
+      if (hasSeriesEpisodes && Array.isArray(window.seasonsData) && window.seasonsData.length > 0) {
+        // Sort seasons sequentially (Season 1, Season 2...)
+        window.seasonsData.sort((a, b) => {
+          const numA = (typeof a.seasonNumber === 'number') ? a.seasonNumber : parseInt(a.seasonNumber, 10) || 999;
+          const numB = (typeof b.seasonNumber === 'number') ? b.seasonNumber : parseInt(b.seasonNumber, 10) || 999;
+          return numA - numB;
+        });
+        // Default active season to first season (Season 1)
+        window.currentSeasonIdx = 0;
+        if (typeof renderSeasonsUI === 'function') {
+          renderSeasonsUI();
+        }
+        if (typeof renderEpisodesList === 'function') {
+          renderEpisodesList();
         }
       }
     };
