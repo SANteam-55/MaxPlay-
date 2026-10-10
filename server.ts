@@ -16,11 +16,10 @@ export const TMDB_API_KEY = (process.env.TMDB_API_KEY && process.env.TMDB_API_KE
   ? process.env.TMDB_API_KEY
   : TMDB_API_KEY_DEFAULT;
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  app.use(express.json({ limit: "15mb" }));
+app.use(express.json({ limit: "15mb" }));
 
   // Initialize Google GenAI client (Server-Side Only - Secure)
   let genAIClient: GoogleGenAI | null = null;
@@ -2796,11 +2795,12 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+    createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
+    }).then((vite) => {
+      app.use(vite.middlewares);
     });
-    app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -2809,9 +2809,12 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
-}
+  import url from 'url';
+  const isMainModule = import.meta.url === url.pathToFileURL(process.argv[1]).href;
+  if (isMainModule) {
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 
-startServer();
+  export default app;
