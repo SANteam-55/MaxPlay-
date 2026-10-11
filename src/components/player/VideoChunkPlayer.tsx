@@ -147,7 +147,14 @@ export const VideoChunkPlayer: React.FC<VideoChunkPlayerProps> = ({
       if (SmartStreamService.isExtractableSource(currentChunk.url)) {
         SmartStreamService.resolveStream(currentChunk.url)
           .then((res) => setupPlayback(res.streamUrl))
-          .catch((err) => onError(err.message || 'Stream extraction failed'));
+          .catch((err) => {
+            const fallback = SmartStreamService.getEmbedUrl(currentChunk.url);
+            if (fallback) {
+              setupPlayback(fallback);
+            } else {
+              onError(err?.message || 'Stream extraction failed');
+            }
+          });
       } else {
         setupPlayback(currentChunk.url);
       }

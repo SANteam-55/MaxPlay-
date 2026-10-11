@@ -45,6 +45,59 @@ export class SmartStreamService {
   }
 
   /**
+   * Helper to retrieve iframe embed URL for external hosters like VOE.
+   */
+  public static getEmbedUrl(sourceUrl?: string): string | null {
+    if (!sourceUrl || typeof sourceUrl !== "string") return null;
+    const trimmed = sourceUrl.trim();
+    const lower = trimmed.toLowerCase();
+
+    if (
+      lower.includes("voe.sx") ||
+      lower.includes("voe.") ||
+      lower.includes("voe-network") ||
+      lower.includes("cloudwindow-route") ||
+      lower.includes("reputationsickler") ||
+      lower.includes("turtledoveconsequent")
+    ) {
+      if (trimmed.includes("/e/")) return trimmed;
+      const match = trimmed.match(/https?:\/\/[^\/]+\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        const host = trimmed.split("/")[2];
+        return `https://${host}/e/${match[1]}`;
+      }
+      return trimmed;
+    }
+
+    if (lower.includes("youtube.com/watch?v=")) {
+      const v = new URL(trimmed).searchParams.get("v");
+      return `https://www.youtube.com/embed/${v}?autoplay=1&rel=0`;
+    }
+    if (lower.includes("youtu.be/")) {
+      const v = trimmed.split("youtu.be/")[1].split("?")[0];
+      return `https://www.youtube.com/embed/${v}?autoplay=1&rel=0`;
+    }
+    if (lower.includes("drive.google.com/file/d/")) {
+      return trimmed.replace("/view", "/preview");
+    }
+    if (lower.includes("vimeo.com/")) {
+      const v = trimmed.split("vimeo.com/")[1].split("?")[0];
+      if (!isNaN(Number(v))) {
+        return `https://player.vimeo.com/video/${v}?autoplay=1`;
+      }
+    }
+    if (lower.includes("dailymotion.com/video/")) {
+      const v = trimmed.split("video/")[1].split("?")[0];
+      return `https://www.dailymotion.com/embed/video/${v}?autoplay=1`;
+    }
+    if (lower.includes("/embed/") || lower.includes("/iframe/")) {
+      return trimmed;
+    }
+
+    return null;
+  }
+
+  /**
    * Retrieves client-side cached stream URL if still valid.
    */
   private static getClientCache(sourceUrl: string): ClientCachedStream | null {
@@ -112,6 +165,7 @@ export class SmartStreamService {
     streamUrl: string;
     isExtracted: boolean;
     cached: boolean;
+    isEmbed?: boolean;
     expiresAt?: number;
   }> {
     if (!sourceUrl || !sourceUrl.trim()) {
@@ -125,7 +179,8 @@ export class SmartStreamService {
       return {
         streamUrl: trimmed,
         isExtracted: false,
-        cached: false
+        cached: false,
+        isEmbed: false
       };
     }
 
@@ -137,44 +192,109 @@ export class SmartStreamService {
           streamUrl: cached.m3u8Url,
           isExtracted: true,
           cached: true,
+          isEmbed: false,
           expiresAt: cached.expiresAt
         };
       }
     }
 
     // 2. Call backend proxy endpoint
-    const response = await fetch("/api/extract-stream", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        url: trimmed,
-        forceRefresh: options.forceRefresh === true
-      })
-    });
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => null);
-      throw new Error(errData?.error || `Stream extraction failed (${response.status})`);
+      const response = await fetch("/api/extract-stream", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          url: trimmed,
+          forceRefresh: options.forceRefresh === true
+        })
+      });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.ok && result.m3u8Url) {
+          if (result.expiresAt) {
+            this.setClientCache(trimmed, result.m3u8Url, result.expiresAt);
+          }
+          return {
+            streamUrl: result.m3u8Url,
+            isExtracted: true,
+            cached: Boolean(result.cached),
+            isEmbed: false,
+            expiresAt: result.expiresAt
+          };
+        }
+
+        // If backend returned embed fallback
+        if (result.isEmbed && result.fallbackUrl) {
+          console.log("[SmartStreamService] Backend provided embed fallback:", result.fallbackUrl);
+          return {
+            streamUrl: result.fallbackUrl,
+            isExtracted: false,
+            cached: false,
+            isEmbed: true
+          };
+        }
+      }
+    } catch (proxyErr) {
+      console.warn("[SmartStreamService] Backend proxy call failed or timed out, trying direct extractor:", proxyErr);
     }
 
-    const result = await response.json();
+    // 3. Fallback Tier 1: Direct client-side call to Hugging Face extractor (CORS enabled)
+    try {
+      const clientCtrl = new AbortController();
+      const clientTimer = setTimeout(() => clientCtrl.abort(), 8000);
+      const directApiUrl = `https://nawazkhan001-mw-hub-master.hf.space/api/extract?url=${encodeURIComponent(trimmed)}&key=MaxPlayMasterPass777!`;
+      const directRes = await fetch(directApiUrl, {
+        signal: clientCtrl.signal,
+        headers: { "Accept": "application/json" }
+      });
+      clearTimeout(clientTimer);
 
-    if (!result.ok || !result.m3u8Url) {
-      throw new Error(result.error || "Master stream link not found");
+      if (directRes.ok) {
+        const directData = await directRes.json();
+        const directM3u8 = directData?.m3u8Url || directData?.url || directData?.streamUrl;
+        if (directM3u8) {
+          const ttlMs = 170 * 60 * 1000;
+          const expiresAt = Date.now() + ttlMs;
+          this.setClientCache(trimmed, directM3u8, expiresAt);
+          return {
+            streamUrl: directM3u8,
+            isExtracted: true,
+            cached: false,
+            isEmbed: false,
+            expiresAt
+          };
+        }
+      }
+    } catch (directErr) {
+      console.warn("[SmartStreamService] Direct client extraction also failed:", directErr);
     }
 
-    // 3. Save to client cache
-    if (result.expiresAt) {
-      this.setClientCache(trimmed, result.m3u8Url, result.expiresAt);
+    // 4. Fallback Tier 2: Check for direct embed iframe URL (e.g. voe.sx/e/ID)
+    const embedFallback = SmartStreamService.getEmbedUrl(trimmed);
+    if (embedFallback) {
+      console.log("[SmartStreamService] Using embed player fallback for source:", embedFallback);
+      return {
+        streamUrl: embedFallback,
+        isExtracted: false,
+        cached: false,
+        isEmbed: true
+      };
     }
 
+    // 5. Fallback Tier 3: Return raw source URL to attempt native playback
     return {
-      streamUrl: result.m3u8Url,
-      isExtracted: true,
-      cached: Boolean(result.cached),
-      expiresAt: result.expiresAt
+      streamUrl: trimmed,
+      isExtracted: false,
+      cached: false,
+      isEmbed: false
     };
   }
 }

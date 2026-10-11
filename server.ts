@@ -2,6 +2,7 @@ import express from "express";
 import { exec } from "child_process";
 import path from "path";
 import fs from "fs";
+import url from "url";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Modality } from "@google/genai";
 import dotenv from "dotenv";
@@ -386,6 +387,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       }
 
+      const isVercelEnv = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
       const extractorKey = (process.env.VOE_EXTRACTOR_KEY || "MaxPlayMasterPass777!").trim();
       let rawBaseUrl = (process.env.VOE_EXTRACTOR_URL || "").trim();
       if (!rawBaseUrl || rawBaseUrl.includes("ltargeturl") || rawBaseUrl.includes("voe.sx")) {
@@ -397,16 +399,49 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const extractorBaseUrl = rawBaseUrl;
       const apiUrl = `${extractorBaseUrl}?url=${encodeURIComponent(trimmedUrl)}&key=${encodeURIComponent(extractorKey)}`;
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s timeout for HF space cold starts
-
-      const response = await fetch(apiUrl, {
-        method: "GET",
-        signal: controller.signal,
-        headers: {
-          "Accept": "application/json"
+      // Helper to compute embed URL for known hosters like VOE
+      const getFallbackEmbed = (urlStr: string) => {
+        const lower = urlStr.toLowerCase();
+        if (lower.includes("voe.") || lower.includes("voe.sx")) {
+          if (urlStr.includes("/e/")) return urlStr;
+          const match = urlStr.match(/https?:\/\/[^\/]+\/([a-zA-Z0-9_-]+)/);
+          if (match && match[1]) {
+            const host = urlStr.split("/")[2];
+            return `https://${host}/e/${match[1]}`;
+          }
+          return urlStr;
         }
-      });
+        return "";
+      };
+
+      const fallbackEmbedUrl = getFallbackEmbed(trimmedUrl);
+
+      // 12s on Vercel to stay within serverless function limits; 25s elsewhere
+      const timeoutMs = isVercelEnv ? 12000 : 25000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      let response: Response;
+      try {
+        response = await fetch(apiUrl, {
+          method: "GET",
+          signal: controller.signal,
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+        console.warn("[StreamExtractor] Extractor fetch failed, checking fallback:", fetchErr?.message);
+        res.status(200).json({
+          ok: false,
+          error: fetchErr?.name === "AbortError" ? "Extraction timeout" : (fetchErr?.message || "Extraction unreachable"),
+          canFallbackToEmbed: Boolean(fallbackEmbedUrl),
+          fallbackUrl: fallbackEmbedUrl || trimmedUrl,
+          isEmbed: Boolean(fallbackEmbedUrl)
+        });
+        return;
+      }
       clearTimeout(timeoutId);
 
       if (!response.ok) {
@@ -420,9 +455,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         } catch {
           if (errText && errText.length < 200) errMsg = errText;
         }
-        res.status(response.status >= 400 && response.status < 500 ? 400 : 502).json({
+        res.status(200).json({
           ok: false,
-          error: errMsg
+          error: errMsg,
+          canFallbackToEmbed: Boolean(fallbackEmbedUrl),
+          fallbackUrl: fallbackEmbedUrl || trimmedUrl,
+          isEmbed: Boolean(fallbackEmbedUrl)
         });
         return;
       }
@@ -431,9 +469,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const resolvedM3u8 = data?.m3u8Url || data?.url || data?.streamUrl || data?.rawVoeUrl;
 
       if (!data || !resolvedM3u8) {
-        res.status(502).json({
+        res.status(200).json({
           ok: false,
-          error: "Stream extraction failed: Master m3u8Url not provided by extractor service"
+          error: "Stream extraction failed: Master m3u8Url not provided by extractor service",
+          canFallbackToEmbed: Boolean(fallbackEmbedUrl),
+          fallbackUrl: fallbackEmbedUrl || trimmedUrl,
+          isEmbed: Boolean(fallbackEmbedUrl)
         });
         return;
       }
@@ -469,15 +510,34 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     } catch (err: any) {
       console.error("[StreamExtractor] Extraction error:", err);
       const isAbort = err.name === "AbortError";
-      res.status(500).json({
+      const u = (req.body?.url || req.query?.url || "").trim();
+      let fallbackEmbed = "";
+      if (u.toLowerCase().includes("voe")) {
+        if (u.includes("/e/")) {
+          fallbackEmbed = u;
+        } else {
+          const match = u.match(/https?:\/\/[^\/]+\/([a-zA-Z0-9_-]+)/);
+          if (match && match[1]) {
+            const host = u.split("/")[2];
+            fallbackEmbed = `https://${host}/e/${match[1]}`;
+          } else {
+            fallbackEmbed = u;
+          }
+        }
+      }
+
+      res.status(200).json({
         ok: false,
-        error: isAbort ? "Extraction service timed out (20s)" : (err.message || "Stream extraction failed")
+        error: isAbort ? "Extraction service timed out" : (err.message || "Stream extraction failed"),
+        canFallbackToEmbed: Boolean(fallbackEmbed),
+        fallbackUrl: fallbackEmbed || u,
+        isEmbed: Boolean(fallbackEmbed)
       });
     }
   };
 
-  app.post("/api/extract-stream", handleExtractStream);
-  app.get("/api/extract-stream", handleExtractStream);
+  app.post(["/api/extract-stream", "/extract-stream"], handleExtractStream);
+  app.get(["/api/extract-stream", "/extract-stream"], handleExtractStream);
 
   // TMDB Key Verification & Search Endpoints
   app.post("/api/tmdb/verify", async (req, res) => {
@@ -2793,24 +2853,76 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    createViteServer({
+  const isVercel = Boolean(
+    process.env.VERCEL ||
+    process.env.NOW_REGION ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.VERCEL_ENV
+  );
+
+  const distPath = path.join(process.cwd(), "dist");
+  const hasDist = fs.existsSync(path.join(distPath, "index.html"));
+
+  let vitePromise: Promise<any> | null = null;
+  let viteMiddleware: any = null;
+
+  if (!isVercel && (process.env.NODE_ENV !== "production" || !hasDist)) {
+    vitePromise = createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
-    }).then((vite) => {
-      app.use(vite.middlewares);
+    })
+      .then((vite) => {
+        viteMiddleware = vite.middlewares;
+        return vite;
+      })
+      .catch((err) => {
+        console.error("Failed to create Vite server:", err);
+        return null;
+      });
+
+    app.use(async (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path.startsWith("/proxy/")) {
+        return next();
+      }
+      if (viteMiddleware) {
+        return viteMiddleware(req, res, next);
+      }
+      if (vitePromise) {
+        try {
+          const vite = await vitePromise;
+          if (vite) {
+            return vite.middlewares(req, res, next);
+          }
+        } catch (e) {
+          console.error("Error waiting for Vite middleware:", e);
+        }
+      }
+      next();
     });
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
+  } else if (hasDist) {
     app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+  }
+
+  if (!isVercel) {
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path.startsWith("/proxy/")) {
+        return next();
+      }
+      const indexFile = path.join(distPath, "index.html");
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        const rootIndex = path.join(process.cwd(), "index.html");
+        if (fs.existsSync(rootIndex)) {
+          res.sendFile(rootIndex);
+        } else {
+          res.status(404).send("App is building or dist not found. Please compile.");
+        }
+      }
     });
   }
 
-  import url from 'url';
-  const isMainModule = import.meta.url === url.pathToFileURL(process.argv[1]).href;
+  const isMainModule = process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href;
   if (isMainModule) {
     app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server running on http://0.0.0.0:${PORT}`);

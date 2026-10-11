@@ -518,7 +518,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   }, [qualityLinks, videoSources, videoUrl, currentLanguage, currentQuality, availableLanguages]);
 
 
+  const [embedFallbackUrl, setEmbedFallbackUrl] = useState<string>('');
+
+  // Reset embed fallback when active source URL changes
+  useEffect(() => {
+    setEmbedFallbackUrl('');
+  }, [activeVideoUrl]);
+
   const { isIframe, iframeUrl } = useMemo(() => {
+    if (embedFallbackUrl) {
+      return { isIframe: true, iframeUrl: embedFallbackUrl };
+    }
     if (!activeVideoUrl) return { isIframe: false, iframeUrl: '' };
     try {
       const urlStr = activeVideoUrl;
@@ -552,7 +562,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       console.warn("Error parsing iframe url", e);
     }
     return { isIframe: false, iframeUrl: '' };
-  }, [activeVideoUrl]);
+  }, [activeVideoUrl, embedFallbackUrl]);
 
   const lastActiveUrlRef = useRef<string>('');
   const isSwitchingSourceRef = useRef<boolean>(false);
@@ -588,15 +598,30 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: false })
       .then((res) => {
         if (!isMounted) return;
-        setResolvedStreamUrl(res.streamUrl);
+        if (res.isEmbed) {
+          setEmbedFallbackUrl(res.streamUrl);
+          setResolvedStreamUrl('');
+        } else {
+          setResolvedStreamUrl(res.streamUrl);
+          setEmbedFallbackUrl('');
+        }
         setIsResolvingStream(false);
       })
       .catch((err) => {
         if (!isMounted) return;
-        console.error('Smart stream extraction error:', err);
-        setIsResolvingStream(false);
-        setIsLoading(false);
-        setPlaybackError(err.message || 'Failed to extract video stream. Please try again.');
+        console.warn('Smart stream extraction error:', err);
+        const fallback = SmartStreamService.getEmbedUrl(activeVideoUrl);
+        if (fallback) {
+          setEmbedFallbackUrl(fallback);
+          setResolvedStreamUrl('');
+          setIsResolvingStream(false);
+          setIsLoading(false);
+          setPlaybackError(null);
+        } else {
+          setIsResolvingStream(false);
+          setIsLoading(false);
+          setPlaybackError(err.message || 'Failed to extract video stream. Please try again.');
+        }
       });
 
     return () => {
@@ -743,11 +768,25 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 SmartStreamService.clearClientCache(activeVideoUrl);
                 SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true })
                   .then((res) => {
-                    setResolvedStreamUrl(res.streamUrl);
+                    if (res.isEmbed) {
+                      setEmbedFallbackUrl(res.streamUrl);
+                      setResolvedStreamUrl('');
+                    } else {
+                      setResolvedStreamUrl(res.streamUrl);
+                      setEmbedFallbackUrl('');
+                    }
                   })
                   .catch((e) => {
-                    setIsLoading(false);
-                    setPlaybackError('Stream token expired. Renewal failed: ' + e.message);
+                    const fallback = SmartStreamService.getEmbedUrl(activeVideoUrl);
+                    if (fallback) {
+                      setEmbedFallbackUrl(fallback);
+                      setResolvedStreamUrl('');
+                      setIsLoading(false);
+                      setPlaybackError(null);
+                    } else {
+                      setIsLoading(false);
+                      setPlaybackError('Stream token expired. Renewal failed: ' + e.message);
+                    }
                   });
                 return;
               }
@@ -1248,8 +1287,22 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 p-6 text-center text-white pointer-events-auto">
             <AlertTriangle className="w-10 h-10 text-amber-500 mb-3" />
             <p className="font-semibold text-lg mb-2">{playbackError || 'No Video Stream Available'}</p>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <button onClick={() => { setPlaybackError(null); handlePlayPause(); handleControlInteraction(); }} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer">Retry</button>
+              {activeVideoUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fallback = SmartStreamService.getEmbedUrl(activeVideoUrl) || activeVideoUrl;
+                    setEmbedFallbackUrl(fallback);
+                    setResolvedStreamUrl('');
+                    setPlaybackError(null);
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer text-center flex items-center shadow-lg shadow-emerald-900/30"
+                >
+                  Play in Web Player
+                </button>
+              )}
               {activeVideoUrl && (
                 <a href={activeVideoUrl} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-[#8B5CF6] hover:bg-[#7C3AED] rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer text-center flex items-center">
                   Open Externally
