@@ -24,10 +24,66 @@ import { adManager } from '../../services/adService';
 import { useAuth } from '../../context/AuthContext';
 import { SmartStreamService } from '../../services/smartStreamService';
 
+// Comprehensive ISO 639 & friendly language label mapper
+export const formatLanguageLabel = (name?: string, lang?: string, index?: number): string => {
+  const code = (lang || '').toLowerCase().trim();
+  const rawName = (name || '').trim();
+
+  const ISO_MAP: Record<string, string> = {
+    hin: 'Hindi',
+    hi: 'Hindi',
+    eng: 'English',
+    en: 'English',
+    jpn: 'Japanese',
+    ja: 'Japanese',
+    tam: 'Tamil',
+    ta: 'Tamil',
+    tel: 'Telugu',
+    te: 'Telugu',
+    mal: 'Malayalam',
+    ml: 'Malayalam',
+    kan: 'Kannada',
+    kn: 'Kannada',
+    kor: 'Korean',
+    ko: 'Korean',
+    spa: 'Spanish',
+    es: 'Spanish',
+    fra: 'French',
+    fr: 'French',
+    deu: 'German',
+    de: 'German',
+    ita: 'Italian',
+    it: 'Italian',
+    rus: 'Russian',
+    ru: 'Russian',
+    por: 'Portuguese',
+    pt: 'Portuguese',
+    ara: 'Arabic',
+    ar: 'Arabic',
+    zho: 'Chinese',
+    zh: 'Chinese',
+  };
+
+  if (ISO_MAP[code]) return ISO_MAP[code];
+
+  if (rawName) {
+    const lower = rawName.toLowerCase();
+    for (const [key, val] of Object.entries(ISO_MAP)) {
+      if (lower === key || lower.includes(val.toLowerCase()) || lower.includes(key)) {
+        return val;
+      }
+    }
+    return rawName;
+  }
+
+  return code.toUpperCase() || `Audio Track ${(index ?? 0) + 1}`;
+};
+
 interface InlinePlayerProps {
   videoUrl?: string;
   qualityLinks?: Record<string, string>;
   videoSources?: Record<string, any>;
+  availableLanguages?: string[];
   chunks?: any[];
   posterUrl?: string;
   title?: string;
@@ -55,6 +111,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   videoUrl,
   qualityLinks,
   videoSources,
+  availableLanguages: propAvailableLanguages,
   posterUrl,
   title,
   streamKey,
@@ -410,18 +467,36 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     setShowControls((prev) => !prev);
   }, [activeMenu, isLocked]);
 
-  // Derive available languages for current videoSources or dynamic HLS audio tracks
+  // Derive available languages for current videoSources, dynamic HLS audio tracks, or passed content languages
   const availableLanguages = useMemo(() => {
+    const list: string[] = [];
+
+    // 1. Dynamic HLS audio tracks from master playlist
+    if (hlsAudioTracks.length > 0) {
+      hlsAudioTracks.forEach(t => {
+        if (t.name && !list.includes(t.name)) list.push(t.name);
+      });
+    }
+
+    // 2. Multi-language videoSources
     if (videoSources && typeof videoSources === 'object') {
       const keys = Object.keys(videoSources).filter(k => videoSources[k] && Object.keys(videoSources[k]).length > 0);
-      if (keys.length > 0) return keys;
+      keys.forEach(k => {
+        if (!list.includes(k)) list.push(k);
+      });
     }
-    // Dynamic HLS audio tracks from master playlist
-    if (hlsAudioTracks.length > 1) {
-      return hlsAudioTracks.map(t => t.name || t.lang || `Track ${t.id + 1}`);
+
+    // 3. Known content languages from props (e.g. ['Hindi', 'English', 'Japanese'])
+    if (propAvailableLanguages && Array.isArray(propAvailableLanguages) && propAvailableLanguages.length > 0) {
+      propAvailableLanguages.forEach(l => {
+        if (l && !list.some(existing => existing.toLowerCase() === l.toLowerCase())) {
+          list.push(l);
+        }
+      });
     }
-    return [];
-  }, [videoSources, hlsAudioTracks]);
+
+    return list;
+  }, [videoSources, hlsAudioTracks, propAvailableLanguages]);
 
   // Keep currentLanguage in sync with activeLanguage prop and available languages
   useEffect(() => {
@@ -467,11 +542,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
     if (links && typeof links === 'object' && Object.keys(links).length > 0) {
       const validQualities = Object.keys(links).filter(q => Boolean(links![q]));
+      if (validQualities.length === 1) {
+        return validQualities;
+      }
       return ['auto', ...validQualities];
     }
 
     // Dynamic HLS qualities extracted from master .m3u8 playlist
     if (hlsQualities.length > 0) {
+      if (hlsQualities.length === 1) {
+        return hlsQualities;
+      }
       return ['auto', ...hlsQualities];
     }
 
@@ -716,7 +797,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         if (hls.audioTracks && hls.audioTracks.length > 0) {
           const parsedAudio = hls.audioTracks.map((t, idx) => ({
             id: idx,
-            name: t.name || (t.lang ? t.lang.toUpperCase() : `Audio ${idx + 1}`),
+            name: formatLanguageLabel(t.name, t.lang, idx),
+            rawName: t.name || '',
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
@@ -737,7 +819,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         if (data.audioTracks && data.audioTracks.length > 0) {
           const parsedAudio = data.audioTracks.map((t: any, idx: number) => ({
             id: idx,
-            name: t.name || (t.lang ? t.lang.toUpperCase() : `Audio ${idx + 1}`),
+            name: formatLanguageLabel(t.name, t.lang, idx),
+            rawName: t.name || '',
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
@@ -1065,16 +1148,44 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   
   const changeLanguage = (lang: string) => {
     setCurrentLanguage(lang);
-    setCurrentQuality('auto');
     if (onLanguageChange) onLanguageChange(lang);
 
-    // If HLS stream has internal audio tracks, switch audio track immediately
+    // 1. If HLS stream has internal audio tracks, switch audio track immediately
     if (hlsRef.current && isHlsStreamRef.current && hlsAudioTracks.length > 0) {
-      const trackIdx = hlsAudioTracks.findIndex(
-        (t) => t.name.toLowerCase() === lang.toLowerCase() || t.lang.toLowerCase() === lang.toLowerCase()
-      );
+      const normLang = lang.toLowerCase().trim();
+      const trackIdx = hlsAudioTracks.findIndex((t) => {
+        const tName = (t.name || '').toLowerCase();
+        const tRaw = ((t as any).rawName || '').toLowerCase();
+        const tLang = (t.lang || '').toLowerCase();
+        return tName === normLang ||
+               tRaw === normLang ||
+               tLang === normLang ||
+               tName.includes(normLang) ||
+               normLang.includes(tName) ||
+               (normLang.includes('hindi') && (tName.includes('hin') || tRaw.includes('hin') || tLang.includes('hi'))) ||
+               (normLang.includes('english') && (tName.includes('eng') || tRaw.includes('eng') || tLang.includes('en'))) ||
+               (normLang.includes('japanese') && (tName.includes('jpn') || tRaw.includes('jpn') || tLang.includes('ja'))) ||
+               (normLang.includes('tamil') && (tName.includes('tam') || tRaw.includes('tam') || tLang.includes('ta'))) ||
+               (normLang.includes('telugu') && (tName.includes('tel') || tRaw.includes('tel') || tLang.includes('te')));
+      });
+
       if (trackIdx !== -1) {
         hlsRef.current.audioTrack = trackIdx;
+      }
+    }
+
+    // 2. If HTML5 Video has native audioTracks
+    if (videoRef.current && (videoRef.current as any).audioTracks) {
+      const nativeTracks = (videoRef.current as any).audioTracks;
+      const normLang = lang.toLowerCase().trim();
+      for (let i = 0; i < nativeTracks.length; i++) {
+        const track = nativeTracks[i];
+        const label = (track.label || track.language || '').toLowerCase();
+        if (label.includes(normLang) || normLang.includes(label)) {
+          track.enabled = true;
+        } else {
+          track.enabled = false;
+        }
       }
     }
 

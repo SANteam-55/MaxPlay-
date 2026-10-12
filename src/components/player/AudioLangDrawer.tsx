@@ -63,7 +63,10 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = ({
             </div>
           ) : (
             availableLanguages.map((lang) => {
-              const isActive = currentLanguage.toLowerCase() === lang.toLowerCase();
+              const curLower = currentLanguage.toLowerCase().trim();
+              const langLower = lang.toLowerCase().trim();
+              const isActive = curLower === langLower ||
+                (curLower && (langLower.includes(curLower) || curLower.includes(langLower)));
               const badge = getLangBadge(lang);
 
               return (

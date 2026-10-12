@@ -1890,6 +1890,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}
               videoSources={playerVideoSources}
+              availableLanguages={availableLanguages}
               chunks={playerChunks}
               skipMarkers={currentPlayerSkipMarkers}
               isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls)}

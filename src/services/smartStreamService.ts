@@ -201,7 +201,7 @@ export class SmartStreamService {
     // 2. Call backend proxy endpoint
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minute extraction window
 
       const response = await fetch("/api/extract-stream", {
         method: "POST",
@@ -249,7 +249,7 @@ export class SmartStreamService {
     // 3. Fallback Tier 1: Direct client-side call to Hugging Face extractor (CORS enabled)
     try {
       const clientCtrl = new AbortController();
-      const clientTimer = setTimeout(() => clientCtrl.abort(), 8000);
+      const clientTimer = setTimeout(() => clientCtrl.abort(), 60000); // 1 minute fallback window
       const directApiUrl = `https://nawazkhan001-mw-hub-master.hf.space/api/extract?url=${encodeURIComponent(trimmed)}&key=MaxPlayMasterPass777!`;
       const directRes = await fetch(directApiUrl, {
         signal: clientCtrl.signal,

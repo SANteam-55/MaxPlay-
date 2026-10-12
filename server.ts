@@ -416,8 +416,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       const fallbackEmbedUrl = getFallbackEmbed(trimmedUrl);
 
-      // 12s on Vercel to stay within serverless function limits; 25s elsewhere
-      const timeoutMs = isVercelEnv ? 12000 : 25000;
+      // 12s on Vercel to stay within serverless function limits; 60s (1 min) elsewhere for slow extractions
+      const timeoutMs = isVercelEnv ? 12000 : 60000;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
