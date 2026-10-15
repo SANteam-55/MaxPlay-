@@ -58,8 +58,15 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = ({
 
         <div className="flex flex-col gap-1.5 overflow-y-auto py-1">
           {availableLanguages.length === 0 ? (
-            <div className="text-center py-6 text-xs text-[#71717A]">
-              Default Audio Track
+            <div className="flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold border bg-[#38BDF8]/20 border-[#38BDF8]/50 text-white shadow-md shadow-sky-500/10">
+              <div className="flex items-center gap-2.5">
+                <span className="text-base">🌐</span>
+                <div className="flex flex-col text-left">
+                  <span className="text-sm font-extrabold tracking-wide">Default Audio</span>
+                  <span className="text-[9px] text-[#A1A1AA] font-normal">SOURCE TRACK</span>
+                </div>
+              </div>
+              <Check className="h-4 w-4 text-[#38BDF8]" />
             </div>
           ) : (
             availableLanguages.map((lang) => {

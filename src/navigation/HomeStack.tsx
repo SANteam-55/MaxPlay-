@@ -58,8 +58,14 @@ export const HomeStack: React.FC<HomeStackProps> = ({
       pop();
     };
     window.addEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
+    const handleSelectExternal = (e: any) => {
+      if (e.detail) handleSelect(e.detail);
+    };
+    window.addEventListener('MAXPLAY_SELECT_CONTENT', handleSelectExternal);
+
     return () => {
       window.removeEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
+      window.removeEventListener('MAXPLAY_SELECT_CONTENT', handleSelectExternal);
     };
   }, []);
 

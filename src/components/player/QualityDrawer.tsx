@@ -55,70 +55,131 @@ export const QualityDrawer: React.FC<QualityDrawerProps> = ({
         </div>
 
         <div className="flex flex-col gap-1.5 overflow-y-auto py-1">
-          {/* Auto Quality Option */}
-          <button
-            onClick={() => {
-              onSelectQuality('auto');
-              onClose();
-            }}
-            className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
-              isAutoMode
-                ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10'
-                : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
-            }`}
-          >
-            <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-extrabold tracking-wide">AUTO</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold border bg-[#8B5CF6]/20 text-[#C4B5FD] border-[#8B5CF6]/40 flex items-center gap-1">
-                  <Zap className="h-2.5 w-2.5 text-amber-400" />
-                  Fast Start & Adaptive
-                </span>
-              </div>
-              {isAutoMode && actualQuality && (
-                <span className="text-[10px] font-medium text-[#A1A1AA]">
-                  Current Stream: <span className="text-white uppercase font-bold">{actualQuality}</span>
-                </span>
-              )}
-            </div>
-            {isAutoMode && <Check className="h-4 w-4 text-[#8B5CF6]" />}
-          </button>
-
-          <div className="my-1 border-t border-white/5" />
-
-          {availableQualities.length === 0 ? (
-            <div className="text-center py-6 text-xs text-[#71717A]">
-              No individual quality links available
-            </div>
-          ) : (
-            availableQualities.map((q) => {
-              const isActive = !isAutoMode && currentQuality.toLowerCase() === q.toLowerCase();
-              const badge = getQualityBadge(q);
-
+          {(() => {
+            const specificQualities = availableQualities.filter((q) => q.toLowerCase() !== 'auto');
+            
+            // Scenario 1: Only a Single Quality exists
+            if (specificQualities.length === 1) {
+              const singleQ = specificQualities[0];
+              const badge = getQualityBadge(singleQ);
               return (
-                <button
-                  key={q}
-                  onClick={() => {
-                    onSelectQuality(q);
-                    onClose();
-                  }}
-                  className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
-                    isActive
-                      ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10'
-                      : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className="text-sm font-extrabold tracking-wide">{q.toUpperCase()}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${badge.color}`}>
-                      {badge.label}
+                <div className="flex flex-col gap-2">
+                  <div className="px-2 py-1 text-[11px] font-semibold text-[#A1A1AA] flex items-center justify-between">
+                    <span>Source Quality</span>
+                    <span className="text-[10px] text-zinc-400 bg-white/5 px-2 py-0.5 rounded">Single Quality</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      onSelectQuality(singleQ);
+                      onClose();
+                    }}
+                    className="flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-sm font-extrabold tracking-wide">{singleQ.toUpperCase()}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${badge.color}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+                    <Check className="h-4 w-4 text-[#8B5CF6]" />
+                  </button>
+                </div>
+              );
+            }
+
+            // Scenario 2: Multiple Qualities exist (Auto + All options)
+            if (specificQualities.length > 1) {
+              return (
+                <>
+                  {/* Auto Quality Option */}
+                  <button
+                    onClick={() => {
+                      onSelectQuality('auto');
+                      onClose();
+                    }}
+                    className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
+                      isAutoMode
+                        ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10'
+                        : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
+                    }`}
+                  >
+                    <div className="flex flex-col items-start gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-extrabold tracking-wide">AUTO</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold border bg-[#8B5CF6]/20 text-[#C4B5FD] border-[#8B5CF6]/40 flex items-center gap-1">
+                          <Zap className="h-2.5 w-2.5 text-amber-400" />
+                          Fast Start & Adaptive
+                        </span>
+                      </div>
+                      {isAutoMode && actualQuality && (
+                        <span className="text-[10px] font-medium text-[#A1A1AA]">
+                          Current Stream: <span className="text-white uppercase font-bold">{actualQuality}</span>
+                        </span>
+                      )}
+                    </div>
+                    {isAutoMode && <Check className="h-4 w-4 text-[#8B5CF6]" />}
+                  </button>
+
+                  <div className="my-1 border-t border-white/5" />
+
+                  {specificQualities.map((q) => {
+                    const isActive = !isAutoMode && currentQuality.toLowerCase() === q.toLowerCase();
+                    const badge = getQualityBadge(q);
+
+                    return (
+                      <button
+                        key={q}
+                        onClick={() => {
+                          onSelectQuality(q);
+                          onClose();
+                        }}
+                        className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
+                          isActive
+                            ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10'
+                            : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-sm font-extrabold tracking-wide">{q.toUpperCase()}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${badge.color}`}>
+                            {badge.label}
+                          </span>
+                        </div>
+                        {isActive && <Check className="h-4 w-4 text-[#8B5CF6]" />}
+                      </button>
+                    );
+                  })}
+                </>
+              );
+            }
+
+            // Scenario 3: No discrete qualities detected (Default Auto stream)
+            return (
+              <button
+                onClick={() => {
+                  onSelectQuality('auto');
+                  onClose();
+                }}
+                className="flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10"
+              >
+                <div className="flex flex-col items-start gap-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-extrabold tracking-wide">AUTO</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold border bg-[#8B5CF6]/20 text-[#C4B5FD] border-[#8B5CF6]/40 flex items-center gap-1">
+                      <Zap className="h-2.5 w-2.5 text-amber-400" />
+                      Default Stream
                     </span>
                   </div>
-                  {isActive && <Check className="h-4 w-4 text-[#8B5CF6]" />}
-                </button>
-              );
-            })
-          )}
+                  {actualQuality && (
+                    <span className="text-[10px] font-medium text-[#A1A1AA]">
+                      Current Stream: <span className="text-white uppercase font-bold">{actualQuality}</span>
+                    </span>
+                  )}
+                </div>
+                <Check className="h-4 w-4 text-[#8B5CF6]" />
+              </button>
+            );
+          })()}
         </div>
 
         <div className="mt-auto pt-3 border-t border-[#1C1C1E] flex items-center justify-center gap-1.5 text-[10px] text-[#71717A]">

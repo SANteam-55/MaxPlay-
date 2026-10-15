@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Download, Share2, X, RefreshCw, Smartphone, Check, Sparkles } from 'lucide-react';
 import { downloadManager, DownloadTask, DownloadedFile } from '../../services/DownloadManager';
 import { DownloadItem } from '../../components/downloads/DownloadItem';
 import { DownloadedItem } from '../../components/downloads/DownloadedItem';
+import { SeriesFolderCard } from '../../components/downloads/SeriesFolderCard';
+import { OfflineCustomPlayerModal } from '../../components/player/OfflineCustomPlayerModal';
 import { ContentCard } from '../../components/common/ContentCard';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 
@@ -49,6 +51,65 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     if (activeFilter === 'received') return f.category === 'received';
     return f.category === 'moviebox' || !f.category;
   });
+
+  // Group completed downloads into Series Folders vs Standalone Movies
+  const groupedCompleted = useMemo(() => {
+    const seriesMap = new Map<string, DownloadedFile[]>();
+    const standaloneMovies: DownloadedFile[] = [];
+
+    filteredCompletedFiles.forEach((file) => {
+      // If file has an episodeId or episodeIndex, it belongs to a series/anime
+      if (file.episodeId || file.episodeIndex !== undefined) {
+        const key = file.contentId || file.title;
+        if (!seriesMap.has(key)) {
+          seriesMap.set(key, []);
+        }
+        seriesMap.get(key)!.push(file);
+      } else {
+        standaloneMovies.push(file);
+      }
+    });
+
+    const seriesList = Array.from(seriesMap.entries()).map(([contentId, episodes]) => ({
+      contentId,
+      seriesTitle: episodes[0]?.title || 'Series',
+      posterUrl: episodes[0]?.posterUrl || '',
+      episodes,
+    }));
+
+    return {
+      seriesList,
+      standaloneMovies,
+      totalCount: seriesList.length + standaloneMovies.length,
+    };
+  }, [filteredCompletedFiles]);
+
+  const [offlinePlayingFile, setOfflinePlayingFile] = useState<DownloadedFile | null>(null);
+  const [offlineBlobUrl, setOfflineBlobUrl] = useState<string | null>(null);
+  const [offlinePlayingEpisodes, setOfflinePlayingEpisodes] = useState<DownloadedFile[]>([]);
+
+  const handlePlayItem = async (file: DownloadedFile, episodesList?: DownloadedFile[]) => {
+    try {
+      const blobUrl = await downloadManager.getOfflineVideoUrl(file.id, file.episodeId, file.episodeIndex);
+      if (blobUrl) {
+        setOfflineBlobUrl(blobUrl);
+        setOfflinePlayingFile(file);
+        setOfflinePlayingEpisodes(episodesList || []);
+        return;
+      }
+    } catch (e) {
+      console.warn('Could not load offline blob:', e);
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      triggerToast('Offline video file not found in device storage. Please re-download.');
+      return;
+    }
+
+    if (onPlayContent) {
+      onPlayContent(file.contentId);
+    }
+  };
 
   const handlePauseResume = (taskId: string) => {
     downloadManager.togglePauseResume(taskId);
@@ -164,13 +225,29 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         </div>
 
         {/* Downloaded List */}
-        {filteredCompletedFiles.length > 0 ? (
-          <div className="flex flex-col gap-2.5">
-            {filteredCompletedFiles.map((file) => (
+        {groupedCompleted.totalCount > 0 ? (
+          <div className="flex flex-col gap-3">
+            {/* Render Series / Anime Folders */}
+            {groupedCompleted.seriesList.map((series) => (
+              <SeriesFolderCard
+                key={series.contentId}
+                seriesTitle={series.seriesTitle}
+                posterUrl={series.posterUrl}
+                episodes={series.episodes}
+                onPlayEpisode={(ep) => handlePlayItem(ep, series.episodes)}
+                onDeleteEpisode={handleDeleteCompleted}
+                onDeleteSeries={(episodes) => {
+                  episodes.forEach((ep) => handleDeleteCompleted(ep.id));
+                }}
+              />
+            ))}
+
+            {/* Render Standalone Movies */}
+            {groupedCompleted.standaloneMovies.map((file) => (
               <DownloadedItem
                 key={file.id}
                 item={file}
-                onPlay={(item) => onPlayContent && onPlayContent(item.contentId)}
+                onPlay={(item) => handlePlayItem(item)}
                 onDelete={handleDeleteCompleted}
               />
             ))}
@@ -263,12 +340,19 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         </div>
       )}
 
-      {/* Floating Toast Notification */}
-      {toastMsg && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-2xl bg-[#121212] px-4 py-3 text-xs font-bold text-white border border-[#10B981]/50 shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-200">
-          <Sparkles className="h-4 w-4 text-[#10B981]" />
-          <span>{toastMsg}</span>
-        </div>
+      {/* Offline Custom MaxPlay Video Player Modal */}
+      {offlinePlayingFile && offlineBlobUrl && (
+        <OfflineCustomPlayerModal
+          file={offlinePlayingFile}
+          blobUrl={offlineBlobUrl}
+          allEpisodes={offlinePlayingEpisodes}
+          onSelectEpisode={(nextEp) => handlePlayItem(nextEp, offlinePlayingEpisodes)}
+          onClose={() => {
+            setOfflinePlayingFile(null);
+            setOfflineBlobUrl(null);
+            setOfflinePlayingEpisodes([]);
+          }}
+        />
       )}
     </div>
   );

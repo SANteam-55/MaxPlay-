@@ -33,6 +33,8 @@ import {
 } from 'lucide-react';
 import { ContentItem, CommentItem, CommentReplyItem, SeasonData } from '../../types';
 import { InlinePlayer } from '../../components/player/InlinePlayer';
+import { DownloadSelectionModal } from '../../components/downloads/DownloadSelectionModal';
+import { downloadManager } from '../../services/DownloadManager';
 import { useAuthContext } from '../../context/AuthContext';
 import { 
   subscribeToMyList, 
@@ -594,6 +596,23 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   });
 
   const [isMyList, setIsMyList] = useState(false);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [offlineVideoUrl, setOfflineVideoUrl] = useState<string | null>(null);
+
+  // Check if content or active episode is stored offline in IndexedDB
+  useEffect(() => {
+    if (!content) return;
+    let isSubscribed = true;
+    const epId = (content.type === 'series' || content.type === 'anime') ? `ep-${selectedEpisodeIndex + 1}` : undefined;
+    downloadManager.getOfflineVideoUrl(content.id, epId, selectedEpisodeIndex).then((url) => {
+      if (isSubscribed) {
+        setOfflineVideoUrl(url);
+      }
+    });
+    return () => {
+      isSubscribed = false;
+    };
+  }, [content, selectedEpisodeIndex]);
   
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
@@ -995,7 +1014,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
   // --- Derive Active Playback Data from Backend Schema ---
   let playerTitle = content.title;
-  let playerVideoUrl = content.videoUrl || '';
+  let playerVideoUrl = offlineVideoUrl || content.videoUrl || '';
+  if (offlineVideoUrl) {
+    playerTitle = `${playerTitle} (Offline)`;
+  }
   let playerQualityLinks: Record<string, string> = content.qualityLinks || {};
   let playerVideoSources: Record<string, any> = content.videoSources || {};
   let playerChunks = content.chunks;
@@ -1160,14 +1182,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
       return Object.keys(playerVideoSources);
     }
+    const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks;
+    if (Array.isArray(partLangs) && partLangs.length > 0) {
+      return partLangs.map((l: any) => typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)).filter(Boolean);
+    }
     if (content.availableLanguages && content.availableLanguages.length > 0) {
       return content.availableLanguages;
     }
     if (content.languages && content.languages.length > 0) {
       return content.languages;
     }
-    return ['Hindi'];
-  }, [playerVideoSources, content.availableLanguages, content.languages]);
+    if ((content as any)?.audioLanguages && (content as any).audioLanguages.length > 0) {
+      return (content as any).audioLanguages;
+    }
+    return [];
+  }, [playerVideoSources, activeMoviePart, currentEpisode, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -2095,21 +2124,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Share</span>
           </button>
 
-          {/* 3. Comment Button (Rose Pink Accent + Badge) */}
+          {/* 3. Download Button (Purple Accent) */}
           <button 
             onClick={() => {
               adManager.handleActionDockClick(!!user?.isPremium);
-              handleCommentButtonPress();
+              setShowDownloadModal(true);
             }}
-            className="relative flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-rose-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-rose-300 shadow-md shadow-rose-950/20"
+            className="flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-purple-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-purple-300 shadow-md shadow-purple-950/20"
           >
-            <MessageSquare className="w-4 h-4 stroke-[2.4] text-[#f43f5e]" />
-            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Comments</span>
-            {comments.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-extrabold text-[9px] shadow-sm border border-rose-400/40">
-                {comments.length}
-              </span>
-            )}
+            <Download className="w-4 h-4 stroke-[2.4] text-[#a855f7]" />
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Download</span>
           </button>
 
           {/* 4. Details / Info Button (Violet Purple Accent) */}
@@ -2907,6 +2931,19 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           </div>
         </div>
       )}
+
+      {/* Instant Download Selection Modal */}
+      <DownloadSelectionModal
+        visible={showDownloadModal}
+        content={content}
+        initialSeasonIndex={selectedSeasonIndex}
+        initialEpisodeIndex={selectedEpisodeIndex}
+        onClose={() => setShowDownloadModal(false)}
+        onSuccessToast={(msg) => {
+          setToastMessage(msg);
+          setTimeout(() => setToastMessage(null), 3000);
+        }}
+      />
 
       </div>
     </div>

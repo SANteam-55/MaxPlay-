@@ -802,6 +802,23 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
+
+          const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
+          if (req) {
+            const matchIdx = parsedAudio.findIndex(a => 
+              a.name.toLowerCase() === req || 
+              a.rawName.toLowerCase() === req ||
+              a.lang.toLowerCase() === req ||
+              a.name.toLowerCase().includes(req) ||
+              req.includes(a.name.toLowerCase()) ||
+              (req.includes('hindi') && (a.rawName.toLowerCase().includes('hin') || a.lang.toLowerCase().includes('hi'))) ||
+              (req.includes('english') && (a.rawName.toLowerCase().includes('eng') || a.lang.toLowerCase().includes('en'))) ||
+              (req.includes('japanese') && (a.rawName.toLowerCase().includes('jpn') || a.lang.toLowerCase().includes('ja')))
+            );
+            if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
+              hls.audioTrack = matchIdx;
+            }
+          }
         }
 
         setTimeout(() => {
@@ -824,6 +841,31 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
+
+          const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
+          if (req) {
+            const matchIdx = parsedAudio.findIndex(a => 
+              a.name.toLowerCase() === req || 
+              a.rawName.toLowerCase() === req ||
+              a.lang.toLowerCase() === req ||
+              a.name.toLowerCase().includes(req) ||
+              req.includes(a.name.toLowerCase()) ||
+              (req.includes('hindi') && (a.rawName.toLowerCase().includes('hin') || a.lang.toLowerCase().includes('hi'))) ||
+              (req.includes('english') && (a.rawName.toLowerCase().includes('eng') || a.lang.toLowerCase().includes('en'))) ||
+              (req.includes('japanese') && (a.rawName.toLowerCase().includes('jpn') || a.lang.toLowerCase().includes('ja')))
+            );
+            if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
+              hls.audioTrack = matchIdx;
+            }
+          }
+        }
+      });
+
+      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_event, data) => {
+        if (hls.audioTracks && hls.audioTracks[data.id]) {
+          const trk = hls.audioTracks[data.id];
+          const friendly = formatLanguageLabel(trk.name, trk.lang, data.id);
+          setCurrentLanguage(friendly);
         }
       });
 
@@ -1086,8 +1128,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           await (container as any).mozRequestFullScreen();
         } else if ((container as any).msRequestFullscreen) {
           await (container as any).msRequestFullscreen();
-        } else if (videoRef.current && (videoRef.current as any).webkitEnterFullscreen) {
-          (videoRef.current as any).webkitEnterFullscreen();
+        } else {
+          // Fallback to CSS fullscreen overlay keeping custom controls
+          setIsFullscreen(true);
         }
 
         if (screen.orientation && (screen.orientation as any).lock) {
@@ -1171,6 +1214,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
       if (trackIdx !== -1) {
         hlsRef.current.audioTrack = trackIdx;
+      } else {
+        const matchNum = lang.match(/(\d+)/);
+        if (matchNum) {
+          const idx = parseInt(matchNum[1], 10) - 1;
+          if (idx >= 0 && idx < hlsAudioTracks.length) {
+            hlsRef.current.audioTrack = idx;
+          }
+        }
       }
     }
 

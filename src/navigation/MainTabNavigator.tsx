@@ -1,10 +1,10 @@
 import React from 'react';
-import { Home, Search, Sparkles, User } from 'lucide-react';
+import { Home, Download, Sparkles, User, Search } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../hooks/useAuth';
 import { adManager } from '../services/adService';
 
-export type TabType = 'home' | 'search' | 'anime' | 'me';
+export type TabType = 'home' | 'downloads' | 'anime' | 'me' | 'search';
 
 interface MainTabNavigatorProps {
   activeTab: TabType;
@@ -15,6 +15,7 @@ interface MainTabNavigatorProps {
 export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
   activeTab,
   onTabChange,
+  downloadBadgeCount = 0,
 }) => {
   const { user } = useAuth();
   
@@ -25,7 +26,7 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
 
   const tabs = [
     { id: 'home' as const, label: 'Home', icon: Home },
-    { id: 'search' as const, label: 'Search', icon: Search },
+    { id: 'downloads' as const, label: 'Downloads', icon: Download },
     { id: 'anime' as const, label: 'Anime', icon: Sparkles },
     { id: 'me' as const, label: 'Me', icon: User },
   ];
@@ -57,8 +58,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                   className={`absolute inset-x-1.5 top-1 bottom-1 rounded-2xl ${
                     tab.id === 'anime'
                       ? 'bg-gradient-to-r from-[#8B5CF6]/30 via-[#EC4899]/30 to-[#38BDF8]/30 border border-[#EC4899]/50 shadow-[0_0_18px_rgba(236,72,153,0.35)]'
-                      : tab.id === 'search'
-                      ? 'bg-gradient-to-r from-[#3B82F6]/25 to-[#8B5CF6]/25 border border-[#3B82F6]/40 shadow-[0_0_15px_rgba(59,130,246,0.3)]'
+                      : tab.id === 'downloads'
+                      ? 'bg-gradient-to-r from-[#06B6D4]/25 to-[#8B5CF6]/25 border border-[#06B6D4]/40 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
                       : tab.id === 'home'
                       ? 'bg-gradient-to-r from-[#8B5CF6]/25 to-[#A855F7]/25 border border-[#8B5CF6]/40 shadow-[0_0_15px_rgba(139,92,246,0.3)]'
                       : 'bg-gradient-to-r from-[#EC4899]/25 to-[#8B5CF6]/25 border border-[#EC4899]/40 shadow-[0_0_15px_rgba(236,72,153,0.3)]'
@@ -81,8 +82,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                       className={`absolute inset-0 rounded-full blur-md ${
                         tab.id === "anime"
                           ? "bg-[#F472B6]"
-                          : tab.id === "search"
-                          ? "bg-[#3B82F6]"
+                          : tab.id === "downloads"
+                          ? "bg-[#06B6D4]"
                           : "bg-[#8B5CF6]"
                       }`}
                     />
@@ -92,12 +93,18 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                       isActive
                         ? tab.id === "anime"
                           ? "text-[#F472B6] drop-shadow-[0_0_8px_rgba(244,114,182,0.8)]"
-                          : tab.id === "search"
-                          ? "text-[#60A5FA] drop-shadow-[0_0_8px_rgba(96,165,250,0.8)]"
+                          : tab.id === "downloads"
+                          ? "text-[#22D3EE] drop-shadow-[0_0_8px_rgba(34,211,238,0.8)]"
                           : "text-[#A78BFA] drop-shadow-[0_0_8px_rgba(167,139,250,0.8)]"
                         : "text-[#71717A]"
                     }`}
                   />
+                  {/* Downloads Active Badge */}
+                  {tab.id === 'downloads' && downloadBadgeCount > 0 && (
+                    <span className="absolute -top-1 -right-2 px-1.5 py-0.2 rounded-full bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6] text-white text-[9px] font-black animate-pulse shadow-sm shadow-cyan-900/60">
+                      {downloadBadgeCount}
+                    </span>
+                  )}
                 </motion.div>
               </div>
 
@@ -112,8 +119,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                   isActive
                     ? tab.id === 'anime'
                       ? 'bg-gradient-to-r from-[#C084FC] via-[#F472B6] to-[#38BDF8] bg-clip-text text-transparent font-extrabold'
-                      : tab.id === 'search'
-                      ? 'bg-gradient-to-r from-[#60A5FA] to-[#A78BFA] bg-clip-text text-transparent font-extrabold'
+                      : tab.id === 'downloads'
+                      ? 'bg-gradient-to-r from-[#22D3EE] to-[#A78BFA] bg-clip-text text-transparent font-extrabold'
                       : tab.id === 'me'
                       ? 'bg-gradient-to-r from-[#F472B6] to-[#C084FC] bg-clip-text text-transparent font-extrabold'
                       : 'text-white'
@@ -130,8 +137,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                   className={`absolute top-0.5 md:top-1/2 md:bottom-auto md:left-0 md:h-6 md:w-1 md:-translate-y-1/2 md:rounded-r-full h-0.5 w-4 rounded-full z-20 ${
                     tab.id === 'anime'
                       ? 'bg-gradient-to-r from-[#EC4899] to-[#38BDF8]'
-                      : tab.id === 'search'
-                      ? 'bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6]'
+                      : tab.id === 'downloads'
+                      ? 'bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6]'
                       : tab.id === 'me'
                       ? 'bg-gradient-to-r from-[#F472B6] to-[#8B5CF6]'
                       : 'bg-[#8B5CF6]'

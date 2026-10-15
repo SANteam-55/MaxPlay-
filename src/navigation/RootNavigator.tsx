@@ -9,16 +9,48 @@ import { HomeStack } from './HomeStack';
 import { SearchStack } from './SearchStack';
 import { MeStack } from './MeStack';
 import { AnimeStack } from './AnimeStack';
+import { DownloadsScreen } from '../screens/main/DownloadsScreen';
+import { downloadManager } from '../services/DownloadManager';
+import { useContent } from '../hooks/useContent';
 import { useAuth } from '../hooks/useAuth';
 import { STORAGE_KEYS } from '../utils/constants';
 import { useGeneralSettings } from '../hooks/useGeneralSettings';
 import { MaintenanceScreen } from '../screens/common/MaintenanceScreen';
 import { SuspendedAccountModal } from '../components/common/SuspendedAccountModal';
 import { motion, AnimatePresence } from 'motion/react';
+import { WifiOff, X } from 'lucide-react';
 
 export const RootNavigator: React.FC = () => {
   const { isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
   const { maintenanceMode, appName } = useGeneralSettings();
+
+  // Offline Auto-Detection
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [showOfflineModal, setShowOfflineModal] = useState(false);
+
+  useEffect(() => {
+    const handleOffline = () => {
+      setIsOffline(true);
+      setShowOfflineModal(true);
+    };
+    const handleOnline = () => {
+      setIsOffline(false);
+      setShowOfflineModal(false);
+    };
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setIsOffline(true);
+      setShowOfflineModal(true);
+    }
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
 
   // PWA State Lock - Check if user is resuming an existing session or standalone mode
   const isPwaStandalone = typeof window !== 'undefined' && 
@@ -33,11 +65,23 @@ export const RootNavigator: React.FC = () => {
   });
   const [authScreen, setAuthScreen] = useState<'login' | 'register' | 'forgot'>('login');
   
+  const { contentList } = useContent();
+  const [downloadBadgeCount, setDownloadBadgeCount] = useState<number>(0);
+
+  // Subscribe to real-time active downloads for badge
+  useEffect(() => {
+    const unsub = downloadManager.subscribe((tasks) => {
+      const active = tasks.filter((t) => t.status === 'downloading' || t.status === 'queued').length;
+      setDownloadBadgeCount(active);
+    });
+    return () => unsub();
+  }, []);
+
   // Restore saved active tab from PWA storage only if it's an ongoing session (resumed)
   const [activeTab, setActiveTabState] = useState<TabType>(() => {
     if (hasActiveSession) {
       const saved = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
-      return (saved && ['home', 'search', 'anime', 'me'].includes(saved)) ? saved : 'home';
+      return (saved && ['home', 'downloads', 'anime', 'me', 'search'].includes(saved)) ? saved : 'home';
     }
     // For a fresh start, always go to home
     localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
@@ -46,6 +90,7 @@ export const RootNavigator: React.FC = () => {
 
   const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({
     home: false,
+    downloads: false,
     search: false,
     anime: false,
     me: false,
@@ -218,6 +263,18 @@ export const RootNavigator: React.FC = () => {
           />
         </div>
 
+        <div className={`h-full w-full ${activeTab === 'downloads' ? 'block' : 'hidden'}`}>
+          <DownloadsScreen
+            onPlayContent={(contentId) => {
+              const item = contentList.find((c) => c.id === contentId);
+              if (item) {
+                setActiveTab('home');
+                window.dispatchEvent(new CustomEvent('MAXPLAY_SELECT_CONTENT', { detail: item }));
+              }
+            }}
+          />
+        </div>
+
         <div className={`h-full w-full ${activeTab === 'search' ? 'block' : 'hidden'}`}>
           <SearchStack
             onSelectContent={(content) => {
@@ -253,7 +310,7 @@ export const RootNavigator: React.FC = () => {
         <MainTabNavigator
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          downloadBadgeCount={0}
+          downloadBadgeCount={downloadBadgeCount}
         />
       )}
 
@@ -269,6 +326,50 @@ export const RootNavigator: React.FC = () => {
           >
             <span>📱</span>
             <span>Press back again to exit MaxPlay</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Offline Mode Alert Banner */}
+      <AnimatePresence>
+        {showOfflineModal && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.25 }}
+            className="fixed top-3 left-3 right-3 sm:left-auto sm:right-4 sm:w-96 z-[9999]"
+          >
+            <div className="flex items-center justify-between gap-3 bg-[#181820]/95 backdrop-blur-md p-3.5 rounded-2xl border border-amber-500/40 shadow-2xl shadow-black/80">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 flex-shrink-0">
+                  <WifiOff className="h-4 w-4" />
+                </div>
+                <div className="flex flex-col text-left min-w-0">
+                  <span className="text-xs font-bold text-white truncate">You are Offline</span>
+                  <span className="text-[10px] text-[#A1A1AA] truncate">Watch your downloaded content without internet</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOfflineModal(false);
+                    setActiveTab('downloads');
+                  }}
+                  className="rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#06B6D4] px-3 py-1.5 text-xs font-bold text-white shadow-md cursor-pointer hover:opacity-90 active:scale-95"
+                >
+                  Downloads
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowOfflineModal(false)}
+                  className="p-1 rounded-lg text-[#71717A] hover:text-white cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

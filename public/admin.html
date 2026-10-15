@@ -5226,6 +5226,15 @@
           movieHlsInput.value = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
         }
         
+        // Restore movie download qualities and metadata
+        if (item.downloadQualities && item.downloadQualities.length > 0) {
+          window.extractedMovieDownloadQualities = item.downloadQualities;
+          window.extractedMovieQualityLinks = item.qualityLinks || {};
+          window.extractedMovieAudioTracks = item.audioTracks || [];
+          window.extractedMovieQualities = item.qualities || [];
+          window.extractedMovieM3u8Url = item.videoUrl || '';
+        }
+        
         // Pre-fill movie skip markers (both normal and HLS containers)
         if (item.skipMarkers) {
           document.getElementById('movie-intro-start').value = item.skipMarkers.intro?.start ?? '';
@@ -5323,6 +5332,14 @@
       if (movieHlsCredS) movieHlsCredS.value = '';
       const movieHlsCredE = document.getElementById('movie-hls-credits-end');
       if (movieHlsCredE) movieHlsCredE.value = '';
+      
+      window.extractedMovieM3u8Url = null;
+      window.extractedMovieQualities = null;
+      window.extractedMovieQualityLinks = null;
+      window.extractedMovieDownloadQualities = null;
+      window.extractedMovieAudioTracks = null;
+      const movieResEl = document.getElementById('movie-hls-extract-result');
+      if (movieResEl) { movieResEl.style.display = 'none'; movieResEl.innerHTML = ''; }
       
       window.toggleSmartHlsMode(false);
       
@@ -5523,15 +5540,114 @@
         const data = await resp.json();
 
         if (data.ok && data.m3u8Url) {
+          window.extractedMovieM3u8Url = data.m3u8Url;
+          window.extractedMovieQualities = data.qualities || [];
+          window.extractedMovieQualityLinks = data.qualityLinks || {};
+          window.extractedMovieDownloadQualities = data.downloadQualities || [];
+          window.extractedMovieAudioTracks = data.audioTracks || [];
+
+          // 1. Auto-fill Step 1 Active Qualities and check checkboxes
+          if (Array.isArray(data.qualities) && data.qualities.length > 0) {
+            data.qualities.forEach(q => {
+              if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
+                window.activeQualities.push(q);
+              }
+              if (window.ensureQualityCheckboxExists) {
+                window.ensureQualityCheckboxExists(q);
+              }
+            });
+            document.querySelectorAll('#qualities-checkboxes .quality-checkbox').forEach(cb => {
+              if (data.qualities.some(q => q.toLowerCase() === cb.value.toLowerCase())) {
+                cb.checked = true;
+              }
+            });
+          }
+
+          // 2. Auto-fill Step 1 Active Languages and check checkboxes
+          if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
+            data.audioTracks.forEach(lang => {
+              if (!window.activeLanguages.some(x => x.toLowerCase() === lang.toLowerCase())) {
+                window.activeLanguages.push(lang);
+              }
+              if (window.ensureLanguageCheckboxExists) {
+                window.ensureLanguageCheckboxExists(lang);
+              }
+            });
+            document.querySelectorAll('#languages-checkboxes .language-checkbox').forEach(cb => {
+              if (data.audioTracks.some(l => l.toLowerCase() === cb.value.toLowerCase())) {
+                cb.checked = true;
+              }
+            });
+          }
+
+          // 3. Auto-fill Movie Duration
+          if (data.duration && data.duration > 0) {
+            window.movieTotalDuration = data.duration;
+            const durDisplay = document.getElementById('movie-total-duration-text');
+            if (durDisplay) {
+              const h = Math.floor(data.duration / 3600);
+              const m = Math.floor((data.duration % 3600) / 60);
+              const s = (data.duration % 60).toString().padStart(2, '0');
+              durDisplay.innerHTML = `<span style="color:#10B981; font-weight:900;"><i class="fa-solid fa-circle-check"></i> ${h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${data.duration}s)</span>`;
+            }
+          }
+
+          // 4. Auto-populate Movie Part 1 quality inputs
+          if (data.qualityLinks && typeof data.qualityLinks === 'object') {
+            for (let q in data.qualityLinks) {
+              const inputs = document.querySelectorAll(`.movie-q-input[data-quality="${q}"]`);
+              inputs.forEach(inp => {
+                inp.value = data.qualityLinks[q];
+              });
+            }
+          }
+
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p, 720p';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
+
+          const movieDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 85px 130px 1fr; gap:8px; align-items:center; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:8px; margin-bottom:5px; border:1px solid rgba(255,255,255,0.06);">
+                <span style="font-weight:800; color:#38BDF8; font-size:12px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <input type="number" class="input-control movie-dl-size-input" data-idx="${idx}" value="${q.sizeMb}" style="height:28px; width:75px; padding:2px 6px; font-size:11px; text-align:right;" oninput="updateMovieDownloadSize(${idx}, this.value)">
+                  <span style="font-size:11px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:28px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '<span style="color:#A1A1AA; font-size:11px;">Standard stream</span>';
+
           statusEl.innerHTML = `
-            <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:12px; margin-top:8px;">
+            <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:12px; margin-top:8px;">
               <div style="color:#10B981; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-                <i class="fa-solid fa-circle-check"></i> Extractor API Success! Proxy Stream Verified
+                <i class="fa-solid fa-circle-check"></i> Extractor API Success! Stream & Real Download Data Ready
               </div>
               <div style="font-size:11px; color:#ddd; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.3); padding:8px; border-radius:6px; margin-bottom:8px; border:1px solid rgba(255,255,255,0.05);">
                 ${data.m3u8Url}
               </div>
-              <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+              <div style="display:flex; flex-direction:column; gap:5px; font-size:11px; margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="color:var(--text-tertiary); font-weight:700;"><i class="fa-solid fa-sliders" style="color:#A78BFA;"></i> Qualities:</span>
+                  <span style="color:#fff; font-weight:600;">${qLabels}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="color:var(--text-tertiary); font-weight:700;"><i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> Audios:</span>
+                  <span style="color:#fff; font-weight:600;">${aLabels}</span>
+                </div>
+              </div>
+
+              <!-- Real-time Download Sheet Table for Movie -->
+              <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08);">
+                <div style="font-size:11px; font-weight:800; color:#10B981; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                  <i class="fa-solid fa-download"></i> Verified Download Inputs Sheet (Auto-Filled)
+                </div>
+                ${movieDlRows}
+              </div>
+
+              <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px; margin-top:8px;">
                 <span style="color:var(--text-tertiary);">Token Session: ${Math.round((data.remainingSeconds || 10200) / 60)} min safe window</span>
                 <button type="button" class="btn-secondary" style="height:26px; font-size:10px; padding:0 10px;" onclick="calculateTotalDuration('movie')">
                   <i class="fa-solid fa-stopwatch"></i> Calculate Duration
@@ -5539,7 +5655,7 @@
               </div>
             </div>
           `;
-          showToast('Stream extracted successfully! Proxy player link ready.', 'success');
+          showToast('Stream & download data extracted successfully!', 'success');
           // Automatically trigger duration probe for movie
           if (typeof window.calculateTotalDuration === 'function') {
             window.calculateTotalDuration('movie');
@@ -5567,6 +5683,28 @@
       }
     };
 
+    window.updateMovieDownloadSize = function(idx, val) {
+      if (window.extractedMovieDownloadQualities && window.extractedMovieDownloadQualities[idx]) {
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num > 0) {
+          window.extractedMovieDownloadQualities[idx].sizeMb = num;
+        }
+      }
+    };
+
+    window.updateEpisodeDownloadSize = function(epIdx, qIdx, val) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
+        const ep = activeSeason.episodes[epIdx];
+        if (ep.downloadQualities && ep.downloadQualities[qIdx]) {
+          const num = parseInt(val, 10);
+          if (!isNaN(num) && num > 0) {
+            ep.downloadQualities[qIdx].sizeMb = num;
+          }
+        }
+      }
+    };
+
     window.testAndExtractEpisodeStream = async function(epIdx, btn) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (!activeSeason || !activeSeason.episodes[epIdx]) return;
@@ -5584,7 +5722,7 @@
       const origHtml = btn.innerHTML;
       btn.disabled = true;
       btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent-cyan);"><i class="fa-solid fa-spinner fa-spin"></i> Verifying...</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent-cyan);"><i class="fa-solid fa-spinner fa-spin"></i> Verifying & extracting stream metadata...</span>';
 
       try {
         const resp = await fetch('/api/extract-stream', {
@@ -5594,10 +5732,111 @@
         });
         const data = await resp.json();
         if (data.ok && data.m3u8Url) {
-          if (statusEl) {
-            statusEl.innerHTML = '<span style="color:#10B981; font-weight:700;"><i class="fa-solid fa-circle-check"></i> Valid Proxy Stream Ready</span>';
+          const ep = activeSeason.episodes[epIdx];
+          if (ep) {
+            ep.videoUrl = data.m3u8Url;
+            ep.downloadQualities = data.downloadQualities || [];
+            ep.audioTracks = data.audioTracks || [];
+            ep.qualities = data.qualities || [];
+            ep.qualityLinks = data.qualityLinks || {};
+            ep.availableLanguages = data.audioTracks || [];
+            if (data.duration && data.duration > 0) {
+              ep.duration = data.duration;
+            }
+
+            if (!ep.videoSources) ep.videoSources = {};
+            if (data.audioTracks && data.audioTracks.length > 0) {
+              data.audioTracks.forEach(l => {
+                ep.videoSources[l] = data.qualityLinks || { '1080p': data.m3u8Url };
+              });
+            } else {
+              ep.videoSources['Default'] = data.qualityLinks || { '1080p': data.m3u8Url };
+            }
           }
-          showToast(`Episode ${epIdx + 1} stream verified!`, 'success');
+
+          // 1. Auto-fill Episode Duration input and display
+          if (data.duration && data.duration > 0) {
+            const durInp = card.querySelector('.ep-input-dur');
+            if (durInp) {
+              const mm = Math.floor(data.duration / 60);
+              const ss = (data.duration % 60).toString().padStart(2, '0');
+              durInp.value = `${mm}:${ss}`;
+            }
+            const durTxt = card.querySelector('.ep-total-duration-text');
+            if (durTxt) {
+              const mm = Math.floor(data.duration / 60);
+              const ss = (data.duration % 60).toString().padStart(2, '0');
+              durTxt.innerHTML = `<span style="color:#10B981; font-weight:900; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-circle-check"></i> ${mm}:${ss}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${data.duration}s)</span>`;
+            }
+          }
+
+          // 2. Auto-fill Step 1 Qualities & Languages if not present
+          if (Array.isArray(data.qualities) && data.qualities.length > 0) {
+            data.qualities.forEach(q => {
+              if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
+                window.activeQualities.push(q);
+              }
+              if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(q);
+            });
+          }
+          if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
+            data.audioTracks.forEach(lang => {
+              if (!window.activeLanguages.some(x => x.toLowerCase() === lang.toLowerCase())) {
+                window.activeLanguages.push(lang);
+              }
+              if (window.ensureLanguageCheckboxExists) window.ensureLanguageCheckboxExists(lang);
+            });
+          }
+
+          // 3. Auto-populate Part 1 normal inputs if present
+          if (data.qualityLinks && typeof data.qualityLinks === 'object') {
+            for (let q in data.qualityLinks) {
+              const qInputs = card.querySelectorAll(`.ep-part1-q-input[data-quality="${q}"]`);
+              qInputs.forEach(inp => {
+                inp.value = data.qualityLinks[q];
+              });
+            }
+          }
+
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
+          
+          const epDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 80px 125px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(255,255,255,0.06);">
+                <span style="font-weight:800; color:#38BDF8; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:3px;">
+                  <input type="number" class="input-control ep-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${q.sizeMb}" style="height:26px; width:65px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeDownloadSize(${epIdx}, ${idx}, this.value)">
+                  <span style="font-size:10px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:26px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '';
+
+          if (statusEl) {
+            statusEl.innerHTML = `
+              <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:8px; padding:8px 10px; margin-top:6px;">
+                <div style="color:#10B981; font-weight:800; font-size:11px; display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                  <i class="fa-solid fa-circle-check"></i> Extracted & Ready for Playback & Download
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:6px; font-size:10px; color:#ddd; align-items:center; margin-bottom:6px;">
+                  <span><i class="fa-solid fa-sliders" style="color:#A78BFA;"></i> ${qLabels}</span>
+                  <span>•</span>
+                  <span><i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> ${aLabels}</span>
+                </div>
+                ${epDlRows ? `
+                  <div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.08);">
+                    <div style="font-size:10px; font-weight:800; color:#10B981; margin-bottom:4px;"><i class="fa-solid fa-download"></i> Episode Download Inputs Sheet</div>
+                    ${epDlRows}
+                  </div>
+                ` : ''}
+              </div>
+            `;
+          }
+          showToast(`Episode ${epIdx + 1} stream & download metadata verified!`, 'success');
           // Trigger duration probe for this episode card
           const calcBtn = card.querySelector('button[onclick*="calculateTotalDuration"]');
           if (calcBtn && typeof window.calculateTotalDuration === 'function') {
@@ -5615,6 +5854,37 @@
         btn.disabled = false;
         btn.innerHTML = origHtml;
       }
+    };
+
+    window.promptAndExtractMovieStream = async function(btn) {
+      let detectedUrl = '';
+      const firstInp = document.querySelector('.movie-q-input');
+      if (firstInp && firstInp.value.trim()) detectedUrl = firstInp.value.trim();
+      const rawUrl = prompt('Enter HLS Stream URL (e.g. .m3u8 or VOE link) to extract qualities & download sheet:', detectedUrl);
+      if (!rawUrl || !rawUrl.trim()) return;
+      const hlsInput = document.getElementById('movie-hls-url');
+      if (hlsInput) hlsInput.value = rawUrl.trim();
+      await window.testAndExtractMovieStream();
+    };
+
+    window.promptAndExtractEpisodeStream = async function(epIdx, btn) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
+      const card = btn.closest('.episode-card');
+      let detectedUrl = '';
+      const firstInp = card ? card.querySelector('.ep-part1-q-input') : null;
+      if (firstInp && firstInp.value.trim()) detectedUrl = firstInp.value.trim();
+      const rawUrl = prompt(`Enter Episode ${epIdx + 1} HLS Stream URL (.m3u8 or VOE link) to extract qualities & download sheet:`, detectedUrl);
+      if (!rawUrl || !rawUrl.trim()) return;
+      let hlsInput = card ? card.querySelector('.ep-hls-stream-input') : null;
+      if (!hlsInput && card) {
+        hlsInput = document.createElement('input');
+        hlsInput.className = 'ep-hls-stream-input';
+        hlsInput.style.display = 'none';
+        card.appendChild(hlsInput);
+      }
+      if (hlsInput) hlsInput.value = rawUrl.trim();
+      await window.testAndExtractEpisodeStream(epIdx, btn);
     };
 
     window.switchUploadMode = function(mode) {
@@ -5893,7 +6163,13 @@
               ${i > 0 ? `
               <button type="button" class="btn-danger" style="height:28px; padding:0 10px; font-size:11px;" onclick="window.removeMoviePartCard(this)">
                 <i class="fa-solid fa-trash"></i> Remove Part
-              </button>` : `<span style="font-size:10px; color:var(--text-tertiary);">Main Movie Stream</span>`}
+              </button>` : `
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button type="button" class="btn-secondary" style="height:28px; padding:0 10px; font-size:11px; font-weight:700;" onclick="window.promptAndExtractMovieStream(this)">
+                  <i class="fa-solid fa-bolt" style="color:var(--accent-cyan);"></i> Verify & Auto-Fill from HLS
+                </button>
+                <span style="font-size:10px; color:var(--text-tertiary);">Main Movie Stream</span>
+              </div>`}
             </div>
             ${langInputs}
           </div>
@@ -6217,7 +6493,23 @@
           if (!ep.videoSources) ep.videoSources = {};
           if (!ep.videoSources['Default']) ep.videoSources['Default'] = {};
           ep.videoSources['Default']['1080p'] = smartUrl;
-          ep.qualityLinks = { '1080p': smartUrl };
+          if (!ep.qualityLinks || Object.keys(ep.qualityLinks).length <= 1) {
+            ep.qualityLinks = { '1080p': smartUrl };
+          } else {
+            ep.qualityLinks['1080p'] = smartUrl;
+          }
+          // Preserve & sync episode download sizes if edited
+          const sizeInputs = card.querySelectorAll('.ep-dl-size-input');
+          if (sizeInputs.length > 0 && ep.downloadQualities) {
+            sizeInputs.forEach(sInp => {
+              const qId = sInp.getAttribute('data-quality');
+              const sVal = parseInt(sInp.value, 10);
+              const qItem = ep.downloadQualities.find(q => q.id === qId);
+              if (qItem && !isNaN(sVal) && sVal > 0) {
+                qItem.sizeMb = sVal;
+              }
+            });
+          }
         } else {
           const part1Sources = {};
           window.activeLanguages.forEach(lang => {
@@ -6540,7 +6832,12 @@
               </div>
             ` : `
               <div style="margin-top:4px;">
-                <div style="font-size:13px; font-weight:800; margin-bottom:8px; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div style="font-size:13px; font-weight:800; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
+                  <button type="button" class="btn-secondary" style="height:26px; padding:0 10px; font-size:10px; font-weight:700;" onclick="window.promptAndExtractEpisodeStream(${epIdx}, this)">
+                    <i class="fa-solid fa-bolt" style="color:var(--accent-cyan);"></i> Verify & Auto-Fill from HLS
+                  </button>
+                </div>
                 ${part1LangsHTML}
               </div>
 
@@ -7127,6 +7424,23 @@
 
         if (movieSkipMarkers !== undefined) {
           rawDoc.skipMarkers = movieSkipMarkers;
+        }
+
+        if (isMovieUpload) {
+          if (window.extractedMovieDownloadQualities && window.extractedMovieDownloadQualities.length > 0) {
+            rawDoc.downloadQualities = window.extractedMovieDownloadQualities;
+          }
+          if (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0) {
+            rawDoc.audioTracks = window.extractedMovieAudioTracks;
+            rawDoc.availableLanguages = window.extractedMovieAudioTracks;
+            rawDoc.languages = window.extractedMovieAudioTracks;
+          }
+          if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
+            rawDoc.qualityLinks = window.extractedMovieQualityLinks;
+          }
+          if (window.extractedMovieQualities && window.extractedMovieQualities.length > 0) {
+            rawDoc.qualities = window.extractedMovieQualities;
+          }
         }
 
         // Deep-prune payload to remove empty and unused structures
