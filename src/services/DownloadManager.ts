@@ -140,6 +140,9 @@ class DownloadManager {
       this.notify();
     } finally {
       this.isProcessingQueue = false;
+      setTimeout(() => {
+        this.processNextQueuedTask();
+      }, 50);
     }
   }
 

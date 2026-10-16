@@ -846,10 +846,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         try {
           const meta = await parseHlsManifestMetadata(streamUrl);
           if (quality && meta.qualityLinks && meta.qualityLinks[quality]) {
-            streamUrl = meta.qualityLinks[quality];
+            const candidate = meta.qualityLinks[quality];
+            if (candidate && candidate.startsWith("http")) {
+              streamUrl = candidate;
+            }
           } else if (meta.downloadQualities && meta.downloadQualities.length > 0) {
             const matched = meta.downloadQualities.find((q: any) => q.id === quality) || meta.downloadQualities[0];
-            if (matched && matched.url) {
+            if (matched && matched.url && matched.url.startsWith("http")) {
               streamUrl = matched.url;
             }
           }
@@ -864,6 +867,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           "-y",
           "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
           "-i", streamUrl,
+          "-map", "0:v:0?",
+          "-map", "0:a:0?",
           "-c:v", "copy",
           "-c:a", "aac",
           "-b:a", "128k",

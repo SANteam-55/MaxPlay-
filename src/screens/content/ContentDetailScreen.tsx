@@ -35,6 +35,7 @@ import { ContentItem, CommentItem, CommentReplyItem, SeasonData } from '../../ty
 import { InlinePlayer } from '../../components/player/InlinePlayer';
 import { DownloadSelectionModal } from '../../components/downloads/DownloadSelectionModal';
 import { downloadManager } from '../../services/DownloadManager';
+import { SmartStreamService } from '../../services/smartStreamService';
 import { useAuthContext } from '../../context/AuthContext';
 import { 
   subscribeToMyList, 
@@ -2124,17 +2125,48 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Share</span>
           </button>
 
-          {/* 3. Download Button (Purple Accent) */}
-          <button 
-            onClick={() => {
-              adManager.handleActionDockClick(!!user?.isPremium);
-              setShowDownloadModal(true);
-            }}
-            className="flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-purple-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-purple-300 shadow-md shadow-purple-950/20"
-          >
-            <Download className="w-4 h-4 stroke-[2.4] text-[#a855f7]" />
-            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Download</span>
-          </button>
+          {/* 3. Download Button (Purple Accent) - Strictly for HLS Mode content */}
+          {(() => {
+            const isContentHlsSupported = Boolean(
+              content.isSmartHls ||
+              (currentEpisode as any)?.isSmartHls ||
+              (activeMoviePart as any)?.isSmartHls ||
+              (content.videoUrl && (content.videoUrl.includes('.m3u8') || content.videoUrl.includes('m3u8'))) ||
+              (currentEpisode?.videoUrl && (currentEpisode.videoUrl.includes('.m3u8') || currentEpisode.videoUrl.includes('m3u8'))) ||
+              SmartStreamService.isExtractableSource(content.videoUrl, content.isSmartHls) ||
+              SmartStreamService.isExtractableSource(currentEpisode?.videoUrl, (currentEpisode as any)?.isSmartHls)
+            );
+
+            return (
+              <button 
+                onClick={() => {
+                  adManager.handleActionDockClick(!!user?.isPremium);
+                  if (!isContentHlsSupported) {
+                    setToastMessage("Download is only available for HLS Mode content. Normal links do not support offline downloading.");
+                    setTimeout(() => setToastMessage(null), 3500);
+                    return;
+                  }
+                  setShowDownloadModal(true);
+                }}
+                className={`flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border ${
+                  isContentHlsSupported
+                    ? 'border-white/10 hover:border-purple-500/40 hover:bg-[#181822] text-white/80 hover:text-purple-300'
+                    : 'border-white/5 bg-[#131318]/50 text-white/40 hover:border-white/10'
+                } active:scale-95 transition-all duration-200 cursor-pointer shadow-md shadow-purple-950/20`}
+                title={isContentHlsSupported ? "Download for offline viewing (HLS Mode)" : "Download available only for HLS Mode"}
+              >
+                <div className="relative">
+                  <Download className={`w-4 h-4 stroke-[2.4] ${isContentHlsSupported ? 'text-[#a855f7]' : 'text-zinc-500'}`} />
+                  {!isContentHlsSupported && (
+                    <span className="absolute -top-1 -right-2 text-[7px] bg-zinc-800 text-zinc-400 px-0.5 rounded border border-zinc-700">
+                      Old
+                    </span>
+                  )}
+                </div>
+                <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Download</span>
+              </button>
+            );
+          })()}
 
           {/* 4. Details / Info Button (Violet Purple Accent) */}
           <button 

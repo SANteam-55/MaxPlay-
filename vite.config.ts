@@ -9,6 +9,19 @@ export default defineConfig(() => {
       'process.env': {}
     },
     plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      include: [
+        'firebase/app',
+        'firebase/auth',
+        'firebase/firestore',
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'lucide-react',
+        'hls.js',
+        'motion/react',
+      ],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

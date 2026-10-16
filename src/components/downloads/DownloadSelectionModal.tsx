@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, Download, Check, Sparkles, Film, Tv, HardDrive, CheckSquare, Square } from 'lucide-react';
+import { X, Download, Check, Sparkles, Film, Tv, HardDrive, CheckSquare, Square, AlertCircle } from 'lucide-react';
 import { ContentItem } from '../../types';
 import { downloadManager } from '../../services/DownloadManager';
+import { SmartStreamService } from '../../services/smartStreamService';
 
 interface DownloadSelectionModalProps {
   visible: boolean;
@@ -237,12 +238,30 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     }
   };
 
-  // Robust download URL resolution for any movie, episode, or series item
+  // Check if content or episodes support HLS mode (Required for offline download)
+  const isHlsMode = useMemo(() => {
+    if (content.isSmartHls) return true;
+    if (content.videoUrl && (content.videoUrl.includes('.m3u8') || content.videoUrl.includes('m3u8') || SmartStreamService.isExtractableSource(content.videoUrl, true))) {
+      return true;
+    }
+    if (currentEpisodes.some((ep) => ep.isSmartHls || (ep.videoUrl && (ep.videoUrl.includes('.m3u8') || SmartStreamService.isExtractableSource(ep.videoUrl, true))))) {
+      return true;
+    }
+    return false;
+  }, [content, currentEpisodes]);
+
+  // Robust download URL resolution strictly for HLS mode streams
   const resolveItemDownloadUrl = (
     ep: any | null,
     activeQuality: string,
     preferredLanguage: string
   ): string => {
+    const isHlsStream = (u?: string) => {
+      if (!u || typeof u !== 'string') return false;
+      const lower = u.toLowerCase().trim();
+      return lower.includes('.m3u8') || lower.includes('m3u8') || SmartStreamService.isExtractableSource(u, true);
+    };
+
     const findInQualityDict = (dict: Record<string, string> | undefined | null): string => {
       if (!dict || typeof dict !== 'object') return '';
       if (dict[activeQuality]) return dict[activeQuality];
@@ -277,46 +296,52 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       const epDl = (ep as any)?.downloadQualities;
       if (Array.isArray(epDl) && epDl.length > 0) {
         const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
-        if (match?.url) return match.url;
+        if (match?.url && isHlsStream(match.url)) return match.url;
       }
       const fromEpSources = findInSources(ep.videoSources);
-      if (fromEpSources) return fromEpSources;
+      if (fromEpSources && isHlsStream(fromEpSources)) return fromEpSources;
 
       const fromEpQuality = findInQualityDict(ep.qualityLinks);
-      if (fromEpQuality) return fromEpQuality;
+      if (fromEpQuality && isHlsStream(fromEpQuality)) return fromEpQuality;
 
-      if (ep.videoUrl) return ep.videoUrl;
-      if (ep.streamUrl) return ep.streamUrl;
-      if (ep.url) return ep.url;
+      if (ep.videoUrl && isHlsStream(ep.videoUrl)) return ep.videoUrl;
+      if (ep.streamUrl && isHlsStream(ep.streamUrl)) return ep.streamUrl;
+      if (ep.url && isHlsStream(ep.url)) return ep.url;
     }
 
     // Content-level resolution
     const matchedOpt = qualityOptions.find((q) => q.id === activeQuality);
-    if (matchedOpt?.url) return matchedOpt.url;
+    if (matchedOpt?.url && isHlsStream(matchedOpt.url)) return matchedOpt.url;
 
     const contentDl = (content as any)?.downloadQualities;
     if (Array.isArray(contentDl) && contentDl.length > 0) {
       const match = contentDl.find((q: any) => q.id === activeQuality) || contentDl[0];
-      if (match?.url) return match.url;
+      if (match?.url && isHlsStream(match.url)) return match.url;
     }
 
     const fromContentSources = findInSources(content.videoSources);
-    if (fromContentSources) return fromContentSources;
+    if (fromContentSources && isHlsStream(fromContentSources)) return fromContentSources;
 
     const fromContentQuality = findInQualityDict(content.qualityLinks);
-    if (fromContentQuality) return fromContentQuality;
+    if (fromContentQuality && isHlsStream(fromContentQuality)) return fromContentQuality;
 
-    if (content.videoUrl) return content.videoUrl;
-    if ((content as any).streamUrl) return (content as any).streamUrl;
-    if ((content as any).url) return (content as any).url;
+    if (content.videoUrl && isHlsStream(content.videoUrl)) return content.videoUrl;
+    if ((content as any).streamUrl && isHlsStream((content as any).streamUrl)) return (content as any).streamUrl;
 
     if (Array.isArray((content as any).movieParts) && (content as any).movieParts.length > 0) {
       const mp0 = (content as any).movieParts[0];
       const s = findInSources(mp0?.videoSources) || findInQualityDict(mp0?.qualityLinks) || mp0?.videoUrl;
-      if (s) return s;
+      if (s && isHlsStream(s)) return s;
     }
 
-    return 'https://media.w3.org/2010/05/sintel/trailer.mp4';
+    // Fallback to active HLS stream if marked as isSmartHls
+    if (content.isSmartHls || (ep as any)?.isSmartHls) {
+      if (ep?.videoUrl && isHlsStream(ep.videoUrl)) return ep.videoUrl;
+      if (content.videoUrl && isHlsStream(content.videoUrl)) return content.videoUrl;
+      return 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+    }
+
+    return '';
   };
 
   // Size calculations with robust fallbacks
@@ -335,8 +360,17 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   );
 
   const handleStartDownload = () => {
+    if (!isHlsMode) {
+      if (onSuccessToast) onSuccessToast('Download is only available for HLS Mode content.');
+      return;
+    }
+
     if (isMovie) {
       const targetVideoUrl = resolveItemDownloadUrl(null, activeQualityId, selectedLanguage);
+      if (!targetVideoUrl) {
+        if (onSuccessToast) onSuccessToast('Offline download is only available for HLS Mode streams.');
+        return;
+      }
       const estBytes = (activeQualityObj.movieSizeMb || 450) * 1024 * 1024;
 
       downloadManager.addTask({
@@ -352,11 +386,14 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       if (onSuccessToast) onSuccessToast(`Added "${content.title}" to Downloads!`);
     } else {
       // Add each selected episode to queue
+      let queuedCount = 0;
       selectedEpIndices.forEach((idx) => {
         const ep = currentEpisodes[idx];
         if (!ep) return;
 
         const targetVideoUrl = resolveItemDownloadUrl(ep, activeQualityId, selectedLanguage);
+        if (!targetVideoUrl) return;
+
         const estBytes = (activeQualityObj.epSizeMb || 180) * 1024 * 1024;
 
         downloadManager.addTask({
@@ -372,10 +409,16 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
           videoUrl: targetVideoUrl,
           estimatedBytes: estBytes,
         });
+        queuedCount++;
       });
 
+      if (queuedCount === 0) {
+        if (onSuccessToast) onSuccessToast('No valid HLS streams found for selected episodes.');
+        return;
+      }
+
       if (onSuccessToast) {
-        onSuccessToast(`Queued ${selectedEpIndices.size} episodes in Downloads!`);
+        onSuccessToast(`Queued ${queuedCount} episode${queuedCount > 1 ? 's' : ''} in Downloads queue!`);
       }
     }
 
@@ -427,6 +470,19 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {/* HLS Mode Requirement Banner if content has no HLS stream */}
+        {!isHlsMode && (
+          <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+            <div>
+              <p className="font-bold text-amber-300">HLS Mode Stream Required</p>
+              <p className="text-[11px] text-zinc-300 mt-0.5">
+                Offline download is exclusively configured for HLS Mode streams. The old normal link system does not support offline downloading.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* SUMMARY REVIEW SCREEN (Shown before starting download) */}
         {showSummaryReview ? (
@@ -709,14 +765,23 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowSummaryReview(true)}
-                className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[#8B5CF6] via-[#A855F7] to-[#EC4899] px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-lg shadow-purple-900/40 hover:opacity-95 active:scale-95 transition cursor-pointer"
+                disabled={!isHlsMode}
+                onClick={() => {
+                  if (isHlsMode) setShowSummaryReview(true);
+                }}
+                className={`flex items-center gap-2 rounded-2xl px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-lg transition ${
+                  isHlsMode
+                    ? 'bg-gradient-to-r from-[#8B5CF6] via-[#A855F7] to-[#EC4899] shadow-purple-900/40 hover:opacity-95 active:scale-95 cursor-pointer'
+                    : 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50'
+                }`}
               >
                 <Download className="h-4 w-4" />
                 <span>
-                  {isMovie
-                    ? 'Review & Download'
-                    : `Review (${selectedEpIndices.size} Ep${selectedEpIndices.size > 1 ? 's' : ''})`}
+                  {isHlsMode
+                    ? isMovie
+                      ? 'Review & Download'
+                      : `Review (${selectedEpIndices.size} Ep${selectedEpIndices.size > 1 ? 's' : ''})`
+                    : 'Download Unavailable (HLS Only)'}
                 </span>
               </button>
             </>

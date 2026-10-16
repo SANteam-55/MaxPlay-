@@ -36,6 +36,8 @@ export const MOCK_SERIES_DETAIL: ContentDetailItem = {
     { id: 'lang-3', language: 'English Dub' },
     { id: 'lang-4', language: 'Tamil Dub' },
   ],
+  isSmartHls: true,
+  videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
   episodesList: Array.from({ length: 12 }, (_, i) => ({
     id: `ep-${i + 1}`,
     episodeNumber: i + 1,
@@ -57,23 +59,8 @@ export const MOCK_SERIES_DETAIL: ContentDetailItem = {
     }`,
     duration: 1420, // 23 mins 40 secs
     thumbnailUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=400&auto=format&fit=crop&q=80',
-    videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
-    chunks: [
-      {
-        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4#t=0,10',
-        sizeMB: 42,
-        order: 1,
-        startTime: 0,
-        duration: 300,
-      },
-      {
-        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4#t=10,20',
-        sizeMB: 38,
-        order: 2,
-        startTime: 300,
-        duration: 300,
-      },
-    ],
+    videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    isSmartHls: true,
   })),
   commentsList: [
     {
@@ -146,6 +133,8 @@ export const MOCK_MOVIE_DETAIL: ContentDetailItem = {
   mature: false,
   duration: 9960, // 2h 46m
   language: 'English / Hindi',
+  isSmartHls: true,
+  videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
   uploader: {
     name: 'Warner Bros Max Stream',
     verified: true,
@@ -162,7 +151,8 @@ export const MOCK_MOVIE_DETAIL: ContentDetailItem = {
       title: 'Full Feature Movie (4K Ultra HD)',
       duration: 9960,
       thumbnailUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=400&auto=format&fit=crop&q=80',
-      videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+      videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      isSmartHls: true,
     },
   ],
   commentsList: [
