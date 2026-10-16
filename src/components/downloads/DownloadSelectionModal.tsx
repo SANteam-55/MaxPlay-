@@ -23,8 +23,31 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 }) => {
   if (!visible || !content) return null;
 
-  const isSeries = content.type === 'series' || content.type === 'anime' || (content.seasons && content.seasons > 0);
-  const isMovie = !isSeries;
+  // Content type evaluation - Precise Movie vs Series / Anime
+  const isMovie = useMemo(() => {
+    if (!content) return true;
+    if (
+      content.type === 'movie' ||
+      content.type === 'film' ||
+      (content as any).uploadMode === 'movie' ||
+      (content as any).category === 'movie'
+    ) {
+      return true;
+    }
+    const seasons = content.seasonsData;
+    const hasEpisodesInSeasons =
+      Array.isArray(seasons) && seasons.some((s) => Array.isArray(s?.episodes) && s.episodes.length > 0);
+    const hasEpisodesList = Array.isArray(content.episodesList) && content.episodesList.length > 0;
+    if (hasEpisodesInSeasons || hasEpisodesList) {
+      return false;
+    }
+    if (content.type === 'series') {
+      return false;
+    }
+    return true;
+  }, [content]);
+
+  const isSeries = !isMovie;
 
   // 1. Series Season and Episode selection state
   const seasonsData = content.seasonsData || [];
@@ -40,15 +63,18 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     if (content.episodesList && content.episodesList.length > 0) {
       return content.episodesList;
     }
-    // Fallback generate episode items if episodes count is known
-    const count = content.episodes || 12;
-    return Array.from({ length: count }, (_, i) => ({
-      id: `ep-${i + 1}`,
-      episodeNumber: i + 1,
-      title: `Episode ${i + 1}`,
-      duration: content.duration || 1440,
-      videoUrl: content.videoUrl || '',
-    }));
+    // Only generate fallback dummy episodes if it's explicitly a series with episodes count
+    if (content.type === 'series' && content.episodes && content.episodes > 0) {
+      const count = content.episodes;
+      return Array.from({ length: count }, (_, i) => ({
+        id: `ep-${i + 1}`,
+        episodeNumber: i + 1,
+        title: `Episode ${i + 1}`,
+        duration: content.duration || 1440,
+        videoUrl: content.videoUrl || '',
+      }));
+    }
+    return [];
   }, [isSeries, seasonsData, selectedSeasonIdx, content]);
 
   // Active focused episode for inspecting details / probe
@@ -66,6 +92,12 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
   // Pre-download summary confirmation step state
   const [showSummaryReview, setShowSummaryReview] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (visible) {
+      setShowSummaryReview(false);
+    }
+  }, [visible, content]);
 
   // Dynamic real-time extracted metadata state
   const [extractedMeta, setExtractedMeta] = useState<{
@@ -665,8 +697,40 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
               </div>
             </div>
 
-            {/* 3. SERIES / ANIME EPISODE SELECTOR */}
-            {isSeries && (
+            {/* 3. MOVIE SINGLE CARD OR SERIES EPISODE SELECTOR */}
+            {isMovie ? (
+              <div>
+                <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider mb-2 block">
+                  Movie Download Selection
+                </label>
+                <div className="flex items-center gap-3 p-3 rounded-2xl bg-[#16161C] border border-purple-500/30 shadow-md">
+                  <img
+                    src={content.posterUrl || content.backdropUrl}
+                    alt={content.title}
+                    className="h-14 w-10 rounded-xl object-cover border border-white/10 shadow flex-shrink-0"
+                  />
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="text-xs sm:text-sm font-bold text-white truncate">
+                      {content.title}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 font-extrabold text-[10px] border border-sky-500/30">
+                        {selectedLanguage}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-extrabold text-[10px] border border-purple-500/30">
+                        {activeQualityId.toUpperCase()}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-extrabold text-[10px] border border-emerald-500/30">
+                        Full Movie
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-xs font-extrabold text-emerald-400 flex-shrink-0">
+                    ~{totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(1)} GB` : `${totalEstimatedMb} MB`}
+                  </span>
+                </div>
+              </div>
+            ) : (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -767,7 +831,13 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                 type="button"
                 disabled={!isHlsMode}
                 onClick={() => {
-                  if (isHlsMode) setShowSummaryReview(true);
+                  if (isHlsMode) {
+                    if (isMovie) {
+                      handleStartDownload();
+                    } else {
+                      setShowSummaryReview(true);
+                    }
+                  }
                 }}
                 className={`flex items-center gap-2 rounded-2xl px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-lg transition ${
                   isHlsMode
@@ -779,7 +849,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                 <span>
                   {isHlsMode
                     ? isMovie
-                      ? 'Review & Download'
+                      ? 'Download Movie'
                       : `Review (${selectedEpIndices.size} Ep${selectedEpIndices.size > 1 ? 's' : ''})`
                     : 'Download Unavailable (HLS Only)'}
                 </span>

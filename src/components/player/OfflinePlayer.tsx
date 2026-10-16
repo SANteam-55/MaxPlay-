@@ -308,6 +308,23 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
       } else if (el.msRequestFullscreen) {
         el.msRequestFullscreen();
       }
+
+      // Lock screen orientation to landscape / horizontal mode
+      try {
+        if (screen.orientation && (screen.orientation as any).lock) {
+          ((screen.orientation as any).lock as any)('landscape').catch(() => {});
+        } else if ((screen as any).lockOrientation) {
+          (screen as any).lockOrientation('landscape');
+        } else if ((screen as any).mozLockOrientation) {
+          (screen as any).mozLockOrientation('landscape');
+        } else if ((screen as any).msLockOrientation) {
+          (screen as any).msLockOrientation('landscape');
+        }
+      } catch (err) {
+        console.warn('Orientation lock notice:', err);
+      }
+
+      setIsFullscreen(true);
     } else {
       if (doc.exitFullscreen) {
         doc.exitFullscreen().catch(() => {});
@@ -318,6 +335,18 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
       } else if (doc.msExitFullscreen) {
         doc.msExitFullscreen();
       }
+
+      try {
+        if (screen.orientation && screen.orientation.unlock) {
+          ((screen.orientation as any).unlock as any)();
+        } else if ((screen as any).unlockOrientation) {
+          (screen as any).unlockOrientation();
+        }
+      } catch (err) {
+        console.warn('Orientation unlock notice:', err);
+      }
+
+      setIsFullscreen(false);
     }
   }, [onFullscreenToggle]);
 
