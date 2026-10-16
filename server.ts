@@ -1,5 +1,5 @@
 import express from "express";
-import { exec, spawn } from "child_process";
+import { exec, spawn, execSync } from "child_process";
 import path from "path";
 import fs from "fs";
 import url from "url";
@@ -858,6 +858,25 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           }
         } catch (_) {}
 
+        // Check if ffmpeg binary exists on this environment (e.g. AI Studio vs Vercel Serverless)
+        let hasFfmpeg = true;
+        try {
+          execSync("ffmpeg -version", { stdio: "ignore" });
+        } catch (_) {
+          hasFfmpeg = false;
+        }
+
+        if (!hasFfmpeg) {
+          res.status(200).json({
+            ok: false,
+            fallbackClientSide: true,
+            streamUrl,
+            error: "FFMPEG_UNAVAILABLE_ON_SERVERLESS",
+            message: "FFmpeg binary is not installed on this serverless environment. Client-side HLS downloader will process this stream."
+          });
+          return;
+        }
+
         // Use ffmpeg to stream remuxed fragmented MP4
         res.setHeader("Content-Type", "video/mp4");
         res.setHeader("Content-Disposition", 'attachment; filename="maxplay_download.mp4"');
@@ -949,6 +968,47 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
   app.get(["/api/download-media", "/api/download-stream"], handleDownloadMedia);
   app.post(["/api/download-media", "/api/download-stream"], handleDownloadMedia);
+
+  // Lightweight CORS proxy for individual HLS segments & media requests (fast, <300ms, Vercel safe)
+  app.get(["/api/proxy", "/proxy"], async (req, res) => {
+    try {
+      const targetUrl = (req.query.url as string || "").trim();
+      if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        res.status(400).json({ error: "Missing or invalid url parameter" });
+        return;
+      }
+      const upstream = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "*/*"
+        }
+      });
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      if (upstream.headers.get("content-type")) {
+        res.setHeader("Content-Type", upstream.headers.get("content-type")!);
+      }
+      if (upstream.headers.get("content-length")) {
+        res.setHeader("Content-Length", upstream.headers.get("content-length")!);
+      }
+      if (upstream.headers.get("accept-ranges")) {
+        res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges")!);
+      }
+      const arrayBuf = await upstream.arrayBuffer();
+      res.status(upstream.status).send(Buffer.from(arrayBuf));
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message || "Proxy request failed" });
+      }
+    }
+  });
+  app.options(["/api/proxy", "/proxy"], (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.sendStatus(204);
+  });
 
   // TMDB Key Verification & Search Endpoints
   app.post("/api/tmdb/verify", async (req, res) => {

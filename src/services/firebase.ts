@@ -39,7 +39,7 @@
  * }
  */
 
-import { initializeApp, getApps, getApp, _getProvider, _addComponent, _components } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDoc, setLogLevel } from 'firebase/firestore';
 
@@ -72,27 +72,15 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 const dbId = firebaseConfig.firestoreDatabaseId;
 
-// Resilient Auth initialization ensuring the Auth component is registered with the app container
+// Resilient Auth initialization
 let authInstance: any;
 try {
-  const provider = (_getProvider as any)(app, 'auth');
-  if (provider && !provider.isComponentSet() && (_components as any)?.has('auth')) {
-    (_addComponent as any)(app, (_components as any).get('auth'));
-  }
   authInstance = getAuth(app);
 } catch (e: any) {
   try {
-    const provider = (_getProvider as any)(app, 'auth');
-    if (provider && !provider.isComponentSet() && (_components as any)?.has('auth')) {
-      (_addComponent as any)(app, (_components as any).get('auth'));
-    }
-    authInstance = getAuth(app);
+    authInstance = getAuth();
   } catch (err2) {
-    try {
-      authInstance = getAuth();
-    } catch (err3) {
-      console.warn('[Firebase] Auth initialization fallback:', err3);
-    }
+    console.warn('[Firebase] Auth initialization fallback:', err2);
   }
 }
 

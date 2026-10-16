@@ -3,6 +3,7 @@
 // and zero-network offline playback.
 
 import { SmartStreamService } from './smartStreamService';
+import { ClientHlsDownloader } from './clientHlsDownloader';
 import { saveVideoBlob, getVideoBlob, deleteVideoBlob, getStoredStorageUsage } from '../utils/offlineStorage';
 
 export interface DownloadTask {
@@ -173,96 +174,47 @@ class DownloadManager {
         throw new Error('No valid video URL available for download');
       }
 
-      // 2. Route all external HTTP(S) or HLS streams through real media downloader proxy to bypass CORS
-      let downloadFetchUrl = targetUrl;
-      if (
-        targetUrl.startsWith('http://') ||
-        targetUrl.startsWith('https://') ||
-        targetUrl.startsWith('//') ||
-        targetUrl.includes('.m3u8') ||
-        targetUrl.includes('m3u8') ||
-        SmartStreamService.isExtractableSource(targetUrl)
-      ) {
-        downloadFetchUrl = `/api/download-media?url=${encodeURIComponent(targetUrl)}&quality=${encodeURIComponent(task.quality || '720p')}`;
-      }
-
       const storageKey = task.storageKey || (task.episodeId
         ? `video_${task.contentId}_${task.episodeId}_${task.quality}`
         : `video_${task.contentId}_${task.quality}`);
       task.storageKey = storageKey;
+      task.mimeType = 'video/mp4';
 
-      // 3. Fetch the real binary video stream
-      const response = await fetch(downloadFetchUrl, {
-        signal: abortController.signal,
-        headers: {
-          Accept: '*/*',
-        },
-      });
+      const isHls = targetUrl.includes('.m3u8') || targetUrl.includes('m3u8');
 
-      if (!response.ok) {
-        let errMessage = `Server returned HTTP ${response.status}`;
+      if (isHls) {
+        // High-performance client-side HLS downloader with mux.js transmuxing
+        // Works seamlessly on both Vercel (no serverless timeout, no ffmpeg required) and AI Studio
         try {
-          const errData = await response.json();
-          if (errData?.error) errMessage = errData.error;
-        } catch (_) {}
-        throw new Error(errMessage);
-      }
-
-      const contentLengthHeader = response.headers.get('content-length');
-      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (task.totalBytes || 250 * 1024 * 1024);
-      task.totalBytes = Math.max(1024 * 1024, totalBytes);
-      const mimeType = 'video/mp4';
-      task.mimeType = mimeType;
-
-      const body = response.body;
-      if (!body) {
-        // Fallback to arrayBuffer if ReadableStream body is unavailable
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength < 1024) {
-          throw new Error('Download failed: Incomplete stream received');
-        }
-        const blob = new Blob([buffer], { type: mimeType });
-        await saveVideoBlob(storageKey, blob);
-        task.bytesDownloaded = buffer.byteLength;
-        task.totalBytes = buffer.byteLength;
-      } else {
-        const reader = body.getReader();
-        const chunks: Uint8Array[] = [];
-        let receivedBytes = 0;
-        let lastReportTime = Date.now();
-        let bytesSinceLastReport = 0;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          if (value && value.length > 0) {
-            chunks.push(value);
-            receivedBytes += value.length;
-            task.bytesDownloaded = receivedBytes;
-            bytesSinceLastReport += value.length;
-
-            const now = Date.now();
-            if (now - lastReportTime >= 500) {
-              const elapsedSec = (now - lastReportTime) / 1000;
-              const speedMb = (bytesSinceLastReport / (1024 * 1024)) / elapsedSec;
-              task.downloadSpeedMb = parseFloat(speedMb.toFixed(1));
-              lastReportTime = now;
-              bytesSinceLastReport = 0;
+          const blob = await ClientHlsDownloader.downloadHlsStream(
+            targetUrl,
+            task.quality || '720p',
+            abortController.signal,
+            (progress) => {
+              task.bytesDownloaded = progress.downloadedBytes;
+              task.totalBytes = Math.max(progress.downloadedBytes, progress.totalEstimatedBytes);
+              task.downloadSpeedMb = progress.speedMb;
               this.notify();
             }
+          );
+
+          if (blob.size < 1024) {
+            throw new Error('Incomplete HLS stream received');
           }
-        }
 
-        if (receivedBytes < 1024) {
-          throw new Error('Download failed: Incomplete or empty video stream received');
-        }
+          await saveVideoBlob(storageKey, blob);
+          task.bytesDownloaded = blob.size;
+          task.totalBytes = blob.size;
+        } catch (clientHlsErr: any) {
+          if (abortController.signal.aborted) throw clientHlsErr;
+          console.warn('[DownloadManager] Client HLS download warning, attempting server proxy fallback:', clientHlsErr);
 
-        // Assemble chunks and save into IndexedDB
-        const finalBlob = new Blob(chunks as any[], { type: mimeType });
-        await saveVideoBlob(task.storageKey!, finalBlob);
-        task.bytesDownloaded = receivedBytes;
-        task.totalBytes = receivedBytes;
+          // Server proxy fallback (works if ffmpeg exists on server environment)
+          await this.downloadViaServerProxy(targetUrl, task, storageKey, abortController);
+        }
+      } else {
+        // Direct MP4 or direct video file stream
+        await this.downloadDirectOrProxyVideo(targetUrl, task, storageKey, abortController);
       }
 
       // Mark task completed
@@ -308,6 +260,182 @@ class DownloadManager {
       }
     } finally {
       this.activeAbortControllers.delete(task.taskId);
+    }
+  }
+
+  private async downloadViaServerProxy(
+    targetUrl: string,
+    task: DownloadTask,
+    storageKey: string,
+    abortController: AbortController
+  ): Promise<void> {
+    const downloadFetchUrl = `/api/download-media?url=${encodeURIComponent(targetUrl)}&quality=${encodeURIComponent(task.quality || '720p')}`;
+    const response = await fetch(downloadFetchUrl, {
+      signal: abortController.signal,
+      headers: {
+        Accept: '*/*',
+      },
+    });
+
+    if (!response.ok) {
+      let errMessage = `Server returned HTTP ${response.status}`;
+      try {
+        const errData = await response.json();
+        if (errData?.error) errMessage = errData.error;
+      } catch (_) {}
+      throw new Error(errMessage);
+    }
+
+    // Check if server indicated fallback (e.g. serverless without ffmpeg)
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      if (data?.fallbackClientSide && data?.streamUrl) {
+        const blob = await ClientHlsDownloader.downloadHlsStream(
+          data.streamUrl,
+          task.quality || '720p',
+          abortController.signal,
+          (progress) => {
+            task.bytesDownloaded = progress.downloadedBytes;
+            task.totalBytes = Math.max(progress.downloadedBytes, progress.totalEstimatedBytes);
+            task.downloadSpeedMb = progress.speedMb;
+            this.notify();
+          }
+        );
+        await saveVideoBlob(storageKey, blob);
+        task.bytesDownloaded = blob.size;
+        task.totalBytes = blob.size;
+        return;
+      }
+      throw new Error(data?.error || 'Server cannot process media stream');
+    }
+
+    const contentLengthHeader = response.headers.get('content-length');
+    const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (task.totalBytes || 250 * 1024 * 1024);
+    task.totalBytes = Math.max(1024 * 1024, totalBytes);
+
+    const body = response.body;
+    if (!body) {
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength < 1024) {
+        throw new Error('Download failed: Incomplete stream received');
+      }
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      await saveVideoBlob(storageKey, blob);
+      task.bytesDownloaded = buffer.byteLength;
+      task.totalBytes = buffer.byteLength;
+    } else {
+      const reader = body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      let lastReportTime = Date.now();
+      let bytesSinceLastReport = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value && value.length > 0) {
+          chunks.push(value);
+          receivedBytes += value.length;
+          task.bytesDownloaded = receivedBytes;
+          bytesSinceLastReport += value.length;
+
+          const now = Date.now();
+          if (now - lastReportTime >= 500) {
+            const elapsedSec = (now - lastReportTime) / 1000;
+            const speedMb = (bytesSinceLastReport / (1024 * 1024)) / elapsedSec;
+            task.downloadSpeedMb = parseFloat(speedMb.toFixed(1));
+            lastReportTime = now;
+            bytesSinceLastReport = 0;
+            this.notify();
+          }
+        }
+      }
+
+      if (receivedBytes < 1024) {
+        throw new Error('Download failed: Incomplete or empty video stream received');
+      }
+
+      const finalBlob = new Blob(chunks as any[], { type: 'video/mp4' });
+      await saveVideoBlob(storageKey, finalBlob);
+      task.bytesDownloaded = receivedBytes;
+      task.totalBytes = receivedBytes;
+    }
+  }
+
+  private async downloadDirectOrProxyVideo(
+    targetUrl: string,
+    task: DownloadTask,
+    storageKey: string,
+    abortController: AbortController
+  ): Promise<void> {
+    let fetchUrl = targetUrl;
+    let response: Response;
+    try {
+      response = await fetch(fetchUrl, {
+        signal: abortController.signal,
+        headers: { Accept: '*/*' },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (_) {
+      // Fallback via /api/proxy to bypass CORS
+      fetchUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+      response = await fetch(fetchUrl, {
+        signal: abortController.signal,
+        headers: { Accept: '*/*' },
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch direct video source (HTTP ${response.status})`);
+      }
+    }
+
+    const contentLengthHeader = response.headers.get('content-length');
+    const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (task.totalBytes || 100 * 1024 * 1024);
+    task.totalBytes = Math.max(1024 * 1024, totalBytes);
+
+    const body = response.body;
+    if (!body) {
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength < 1024) throw new Error('Incomplete direct video received');
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      await saveVideoBlob(storageKey, blob);
+      task.bytesDownloaded = buffer.byteLength;
+      task.totalBytes = buffer.byteLength;
+    } else {
+      const reader = body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      let lastReportTime = Date.now();
+      let bytesSinceLastReport = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value && value.length > 0) {
+          chunks.push(value);
+          receivedBytes += value.length;
+          task.bytesDownloaded = receivedBytes;
+          bytesSinceLastReport += value.length;
+
+          const now = Date.now();
+          if (now - lastReportTime >= 500) {
+            const elapsedSec = (now - lastReportTime) / 1000;
+            const speedMb = (bytesSinceLastReport / (1024 * 1024)) / elapsedSec;
+            task.downloadSpeedMb = parseFloat(speedMb.toFixed(1));
+            lastReportTime = now;
+            bytesSinceLastReport = 0;
+            this.notify();
+          }
+        }
+      }
+
+      if (receivedBytes < 1024) throw new Error('Incomplete direct video received');
+      const blob = new Blob(chunks as any[], { type: 'video/mp4' });
+      await saveVideoBlob(storageKey, blob);
+      task.bytesDownloaded = receivedBytes;
+      task.totalBytes = receivedBytes;
     }
   }
 

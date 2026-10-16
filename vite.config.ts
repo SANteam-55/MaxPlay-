@@ -20,6 +20,7 @@ export default defineConfig(() => {
         'lucide-react',
         'hls.js',
         'motion/react',
+        'mux.js',
       ],
     },
     resolve: {
