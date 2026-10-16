@@ -170,9 +170,12 @@ class DownloadManager {
         throw new Error('No valid video URL available for download');
       }
 
-      // 2. If it's an HLS stream (m3u8) or extractable hoster, route through real MP4 downloader endpoint
+      // 2. Route all external HTTP(S) or HLS streams through real media downloader proxy to bypass CORS
       let downloadFetchUrl = targetUrl;
       if (
+        targetUrl.startsWith('http://') ||
+        targetUrl.startsWith('https://') ||
+        targetUrl.startsWith('//') ||
         targetUrl.includes('.m3u8') ||
         targetUrl.includes('m3u8') ||
         SmartStreamService.isExtractableSource(targetUrl)
@@ -194,12 +197,17 @@ class DownloadManager {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}`);
+        let errMessage = `Server returned HTTP ${response.status}`;
+        try {
+          const errData = await response.json();
+          if (errData?.error) errMessage = errData.error;
+        } catch (_) {}
+        throw new Error(errMessage);
       }
 
       const contentLengthHeader = response.headers.get('content-length');
       const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : (task.totalBytes || 250 * 1024 * 1024);
-      task.totalBytes = totalBytes;
+      task.totalBytes = Math.max(1024 * 1024, totalBytes);
       const mimeType = 'video/mp4';
       task.mimeType = mimeType;
 
@@ -207,6 +215,9 @@ class DownloadManager {
       if (!body) {
         // Fallback to arrayBuffer if ReadableStream body is unavailable
         const buffer = await response.arrayBuffer();
+        if (buffer.byteLength < 1024) {
+          throw new Error('Download failed: Incomplete stream received');
+        }
         const blob = new Blob([buffer], { type: mimeType });
         await saveVideoBlob(storageKey, blob);
         task.bytesDownloaded = buffer.byteLength;
@@ -222,14 +233,14 @@ class DownloadManager {
           const { done, value } = await reader.read();
           if (done) break;
 
-          if (value) {
+          if (value && value.length > 0) {
             chunks.push(value);
             receivedBytes += value.length;
             task.bytesDownloaded = receivedBytes;
             bytesSinceLastReport += value.length;
 
             const now = Date.now();
-            if (now - lastReportTime >= 600) {
+            if (now - lastReportTime >= 500) {
               const elapsedSec = (now - lastReportTime) / 1000;
               const speedMb = (bytesSinceLastReport / (1024 * 1024)) / elapsedSec;
               task.downloadSpeedMb = parseFloat(speedMb.toFixed(1));
@@ -238,6 +249,10 @@ class DownloadManager {
               this.notify();
             }
           }
+        }
+
+        if (receivedBytes < 1024) {
+          throw new Error('Download failed: Incomplete or empty video stream received');
         }
 
         // Assemble chunks and save into IndexedDB
@@ -355,6 +370,9 @@ class DownloadManager {
 
     this.tasks.unshift(newTask);
     this.notify();
+    setTimeout(() => {
+      this.processNextQueuedTask();
+    }, 50);
     return newTask.taskId;
   }
 
@@ -370,10 +388,15 @@ class DownloadManager {
       }
       task.status = 'paused';
       task.downloadSpeedMb = 0;
+      this.notify();
     } else if (task.status === 'paused' || task.status === 'failed') {
       task.status = 'queued';
+      task.errorMessage = undefined;
+      this.notify();
+      setTimeout(() => {
+        this.processNextQueuedTask();
+      }, 50);
     }
-    this.notify();
   }
 
   public cancelTask(taskId: string) {

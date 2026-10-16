@@ -39,9 +39,15 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  // Skip API routes, streaming proxies, and Firestore calls from SW cache
+  // Skip API routes, streaming proxies, Vite dev modules, and Firestore calls from SW cache
   if (
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/proxy/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.includes('vite') ||
+    url.search.includes('import') ||
     url.hostname.includes('firestore.googleapis.com') ||
     url.hostname.includes('firebaseio.com') ||
     url.hostname.includes('hf.space') ||

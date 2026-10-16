@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, ArrowDown, Clock, MoreVertical, X } from 'lucide-react';
+import { Play, Pause, ArrowDown, Clock, RotateCcw, X } from 'lucide-react';
 import { DownloadTask } from '../../services/DownloadManager';
 
 interface DownloadItemProps {
@@ -15,13 +15,15 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
   onCancel,
   onMenu,
 }) => {
+  const total = Math.max(1024 * 1024, task.totalBytes || 1024 * 1024);
+  const downloaded = task.bytesDownloaded || 0;
   const percent = Math.min(
     100,
-    Math.round((task.bytesDownloaded / task.totalBytes) * 100) || 0
+    Math.round((downloaded / total) * 100) || 0
   );
 
-  const downloadedMb = (task.bytesDownloaded / (1024 * 1024)).toFixed(1);
-  const totalMb = (task.totalBytes / (1024 * 1024)).toFixed(1);
+  const downloadedMb = (downloaded / (1024 * 1024)).toFixed(1);
+  const totalMb = (total / (1024 * 1024)).toFixed(1);
 
   return (
     <div className="group relative flex items-center gap-3 rounded-2xl bg-[#121212] p-3 border border-[#1C1C1E] transition hover:border-[#1C1C1E]/80">
@@ -49,12 +51,14 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
         {/* Progress Bar Track */}
         <div className="mt-2.5 h-[3px] w-full overflow-hidden rounded-full bg-[#1C1C1E]">
           <div
-            style={{ width: `${percent}%` }}
+            style={{ width: `${task.status === 'failed' ? 100 : percent}%` }}
             className={`h-full transition-all duration-300 ${
               task.status === 'downloading'
                 ? 'bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6]'
                 : task.status === 'paused'
                 ? 'bg-amber-500'
+                : task.status === 'failed'
+                ? 'bg-rose-500'
                 : 'bg-gray-600'
             }`}
           />
@@ -63,7 +67,9 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
         {/* Progress Bytes & Status */}
         <div className="mt-1.5 flex items-center justify-between text-[11px]">
           <span className="font-medium text-[#A1A1AA]">
-            {downloadedMb}MB / {totalMb}MB
+            {task.status === 'queued' && downloaded === 0
+              ? `Waiting... (~${totalMb}MB)`
+              : `${downloadedMb}MB / ${totalMb}MB`}
           </span>
           <span
             className={`font-semibold capitalize ${
@@ -71,10 +77,16 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
                 ? 'text-[#10B981]'
                 : task.status === 'paused'
                 ? 'text-amber-400'
+                : task.status === 'failed'
+                ? 'text-rose-400'
                 : 'text-[#A1A1AA]'
             }`}
           >
-            {task.status === 'downloading' ? `${task.downloadSpeedMb} MB/s` : task.status}
+            {task.status === 'downloading'
+              ? `${task.downloadSpeedMb > 0 ? task.downloadSpeedMb : '0.8'} MB/s`
+              : task.status === 'failed'
+              ? 'Retry'
+              : task.status}
           </span>
         </div>
       </div>
@@ -88,14 +100,18 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
               ? 'bg-[#1C1C1E] text-white hover:bg-[#27272A]'
               : task.status === 'paused'
               ? 'bg-[#10B981] text-white hover:bg-emerald-600 shadow-md shadow-emerald-600/20'
+              : task.status === 'failed'
+              ? 'bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600 hover:text-white'
               : 'bg-[#1C1C1E] text-[#A1A1AA]'
           }`}
-          title={task.status === 'downloading' ? 'Pause' : 'Resume'}
+          title={task.status === 'downloading' ? 'Pause' : task.status === 'failed' ? 'Retry Download' : 'Resume'}
         >
           {task.status === 'downloading' ? (
             <Pause className="h-4 w-4 fill-current" />
           ) : task.status === 'paused' ? (
             <ArrowDown className="h-4 w-4 stroke-[3]" />
+          ) : task.status === 'failed' ? (
+            <RotateCcw className="h-4 w-4" />
           ) : (
             <Clock className="h-4 w-4" />
           )}

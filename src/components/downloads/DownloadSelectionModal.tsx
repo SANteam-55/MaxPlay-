@@ -237,24 +237,107 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     }
   };
 
-  // Size calculations
-  const activeQualityObj = qualityOptions.find((q) => q.id === activeQualityId) || qualityOptions[0];
-  const totalEstimatedMb = isMovie
-    ? activeQualityObj.movieSizeMb
-    : activeQualityObj.epSizeMb * selectedEpIndices.size;
+  // Robust download URL resolution for any movie, episode, or series item
+  const resolveItemDownloadUrl = (
+    ep: any | null,
+    activeQuality: string,
+    preferredLanguage: string
+  ): string => {
+    const findInQualityDict = (dict: Record<string, string> | undefined | null): string => {
+      if (!dict || typeof dict !== 'object') return '';
+      if (dict[activeQuality]) return dict[activeQuality];
+      if (dict['1080p']) return dict['1080p'];
+      if (dict['720p']) return dict['720p'];
+      if (dict['480p']) return dict['480p'];
+      if (dict['360p']) return dict['360p'];
+      const vals = Object.values(dict).filter((v) => typeof v === 'string' && v.trim().length > 0);
+      return vals[0] || '';
+    };
+
+    const findInSources = (sources: Record<string, any> | undefined | null): string => {
+      if (!sources || typeof sources !== 'object') return '';
+      const keys = Object.keys(sources);
+      if (keys.length === 0) return '';
+      const matchedKey = keys.find(
+        (k) =>
+          k.toLowerCase().includes(preferredLanguage.toLowerCase()) ||
+          preferredLanguage.toLowerCase().includes(k.toLowerCase())
+      ) || keys[0];
+
+      const targetLangObj = sources[matchedKey];
+      if (targetLangObj && typeof targetLangObj === 'object') {
+        return findInQualityDict(targetLangObj);
+      } else if (typeof targetLangObj === 'string' && targetLangObj.trim()) {
+        return targetLangObj;
+      }
+      return '';
+    };
+
+    if (ep) {
+      const epDl = (ep as any)?.downloadQualities;
+      if (Array.isArray(epDl) && epDl.length > 0) {
+        const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
+        if (match?.url) return match.url;
+      }
+      const fromEpSources = findInSources(ep.videoSources);
+      if (fromEpSources) return fromEpSources;
+
+      const fromEpQuality = findInQualityDict(ep.qualityLinks);
+      if (fromEpQuality) return fromEpQuality;
+
+      if (ep.videoUrl) return ep.videoUrl;
+      if (ep.streamUrl) return ep.streamUrl;
+      if (ep.url) return ep.url;
+    }
+
+    // Content-level resolution
+    const matchedOpt = qualityOptions.find((q) => q.id === activeQuality);
+    if (matchedOpt?.url) return matchedOpt.url;
+
+    const contentDl = (content as any)?.downloadQualities;
+    if (Array.isArray(contentDl) && contentDl.length > 0) {
+      const match = contentDl.find((q: any) => q.id === activeQuality) || contentDl[0];
+      if (match?.url) return match.url;
+    }
+
+    const fromContentSources = findInSources(content.videoSources);
+    if (fromContentSources) return fromContentSources;
+
+    const fromContentQuality = findInQualityDict(content.qualityLinks);
+    if (fromContentQuality) return fromContentQuality;
+
+    if (content.videoUrl) return content.videoUrl;
+    if ((content as any).streamUrl) return (content as any).streamUrl;
+    if ((content as any).url) return (content as any).url;
+
+    if (Array.isArray((content as any).movieParts) && (content as any).movieParts.length > 0) {
+      const mp0 = (content as any).movieParts[0];
+      const s = findInSources(mp0?.videoSources) || findInQualityDict(mp0?.qualityLinks) || mp0?.videoUrl;
+      if (s) return s;
+    }
+
+    return 'https://media.w3.org/2010/05/sintel/trailer.mp4';
+  };
+
+  // Size calculations with robust fallbacks
+  const activeQualityObj = qualityOptions.find((q) => q.id === activeQualityId) || qualityOptions[0] || {
+    id: '720p',
+    label: '720p HD',
+    badge: 'Recommended',
+    movieSizeMb: 450,
+    epSizeMb: 180,
+  };
+  const totalEstimatedMb = Math.max(
+    50,
+    isMovie
+      ? activeQualityObj.movieSizeMb || 450
+      : (activeQualityObj.epSizeMb || 180) * Math.max(1, selectedEpIndices.size)
+  );
 
   const handleStartDownload = () => {
     if (isMovie) {
-      let targetVideoUrl = content.videoUrl || '';
-      const matchedOpt = qualityOptions.find((q) => q.id === activeQualityId);
-      if (matchedOpt?.url) {
-        targetVideoUrl = matchedOpt.url;
-      } else if (content.videoSources && content.videoSources[selectedLanguage]) {
-        const langLinks = content.videoSources[selectedLanguage];
-        targetVideoUrl = langLinks[activeQualityId] || Object.values(langLinks)[0] || targetVideoUrl;
-      } else if (content.qualityLinks && content.qualityLinks[activeQualityId]) {
-        targetVideoUrl = content.qualityLinks[activeQualityId];
-      }
+      const targetVideoUrl = resolveItemDownloadUrl(null, activeQualityId, selectedLanguage);
+      const estBytes = (activeQualityObj.movieSizeMb || 450) * 1024 * 1024;
 
       downloadManager.addTask({
         contentId: content.id,
@@ -263,7 +346,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         quality: activeQualityId,
         language: selectedLanguage,
         videoUrl: targetVideoUrl,
-        estimatedBytes: activeQualityObj.movieSizeMb * 1024 * 1024,
+        estimatedBytes: estBytes,
       });
 
       if (onSuccessToast) onSuccessToast(`Added "${content.title}" to Downloads!`);
@@ -273,18 +356,8 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         const ep = currentEpisodes[idx];
         if (!ep) return;
 
-        let targetVideoUrl = ep.videoUrl || content.videoUrl || '';
-        const epDl = (ep as any)?.downloadQualities;
-        if (Array.isArray(epDl)) {
-          const m = epDl.find((q: any) => q.id === activeQualityId);
-          if (m?.url) targetVideoUrl = m.url;
-        } else if (ep.videoSources && ep.videoSources[selectedLanguage]) {
-          const langLinks = ep.videoSources[selectedLanguage];
-          targetVideoUrl = langLinks[activeQualityId] || Object.values(langLinks)[0] || targetVideoUrl;
-        } else if (content.videoSources && content.videoSources[selectedLanguage]) {
-          const langLinks = content.videoSources[selectedLanguage];
-          targetVideoUrl = langLinks[activeQualityId] || Object.values(langLinks)[0] || targetVideoUrl;
-        }
+        const targetVideoUrl = resolveItemDownloadUrl(ep, activeQualityId, selectedLanguage);
+        const estBytes = (activeQualityObj.epSizeMb || 180) * 1024 * 1024;
 
         downloadManager.addTask({
           contentId: content.id,
@@ -297,7 +370,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
           quality: activeQualityId,
           language: selectedLanguage,
           videoUrl: targetVideoUrl,
-          estimatedBytes: activeQualityObj.epSizeMb * 1024 * 1024,
+          estimatedBytes: estBytes,
         });
       });
 

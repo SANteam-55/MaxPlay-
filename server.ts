@@ -864,8 +864,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           "-y",
           "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
           "-i", streamUrl,
-          "-c", "copy",
-          "-bsf:a", "aac_adtstoasc",
+          "-c:v", "copy",
+          "-c:a", "aac",
+          "-b:a", "128k",
           "-movflags", "frag_keyframe+empty_moov+default_base_moof",
           "-f", "mp4",
           "pipe:1"
@@ -879,18 +880,36 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
         ffmpegProc.stdout.pipe(res);
 
-        ffmpegProc.stderr.on("data", () => {});
+        let stderrLog = "";
+        ffmpegProc.stderr.on("data", (chunk) => {
+          stderrLog += chunk.toString();
+        });
+        ffmpegProc.on("close", (code) => {
+          if (code !== 0 && !res.writableEnded && !res.headersSent) {
+            console.error(`[DownloadMedia] FFmpeg exited with code ${code}: ${stderrLog.slice(-300)}`);
+            res.status(500).json({ error: "FFmpeg conversion error" });
+          }
+        });
         ffmpegProc.on("error", (err) => {
-          console.error("[DownloadMedia] FFmpeg error:", err);
+          console.error("[DownloadMedia] FFmpeg spawn error:", err);
           if (!res.headersSent) {
             res.status(500).json({ error: "FFmpeg streaming error" });
           }
         });
       } else {
         // Direct MP4 or video source
-        const directResp = await fetch(streamUrl);
+        let directResp = await fetch(streamUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*"
+          }
+        });
+        if (!directResp.ok && (directResp.status === 403 || directResp.status === 401)) {
+          // Retry with bare fetch if server blocks custom headers
+          directResp = await fetch(streamUrl);
+        }
         if (!directResp.ok) {
-          res.status(directResp.status).send("Failed to fetch direct video source");
+          res.status(directResp.status).json({ error: `Failed to fetch direct video source (HTTP ${directResp.status})` });
           return;
         }
         res.setHeader("Content-Type", directResp.headers.get("content-type") || "video/mp4");
@@ -3253,7 +3272,8 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
   let vitePromise: Promise<any> | null = null;
   let viteMiddleware: any = null;
 
-  if (!isVercel && (process.env.NODE_ENV !== "production" || !hasDist)) {
+  if (!isVercel && process.env.NODE_ENV !== "production") {
+    // Development mode: always use Vite middleware and dynamic index.html transformation
     vitePromise = createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -3286,11 +3306,34 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
       }
       next();
     });
-  } else if (hasDist) {
-    app.use(express.static(distPath));
-  }
 
-  if (!isVercel) {
+    app.get("*", async (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path.startsWith("/proxy/")) {
+        return next();
+      }
+      try {
+        const vite = (await vitePromise);
+        if (vite) {
+          const template = fs.readFileSync(path.join(process.cwd(), "index.html"), "utf-8");
+          const html = await vite.transformIndexHtml(req.originalUrl, template);
+          res.status(200).set({ "Content-Type": "text/html" }).end(html);
+          return;
+        }
+      } catch (e) {
+        console.error("Vite index transform error:", e);
+      }
+      const rootIndex = path.join(process.cwd(), "index.html");
+      if (fs.existsSync(rootIndex)) {
+        res.sendFile(rootIndex);
+      } else {
+        next();
+      }
+    });
+  } else {
+    // Production mode: serve built dist static files
+    if (hasDist) {
+      app.use(express.static(distPath));
+    }
     app.get("*", (req, res, next) => {
       if (req.path.startsWith("/api/") || req.path.startsWith("/proxy/")) {
         return next();

@@ -43,7 +43,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   }, []);
 
   const activeDownloadingTasks = tasks.filter(
-    (t) => t.status === 'downloading' || t.status === 'paused' || t.status === 'queued'
+    (t) => t.status === 'downloading' || t.status === 'paused' || t.status === 'queued' || t.status === 'failed'
   );
 
   const filteredCompletedFiles = completedFiles.filter((f) => {
