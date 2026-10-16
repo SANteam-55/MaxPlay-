@@ -26,24 +26,29 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   // Content type evaluation - Precise Movie vs Series / Anime
   const isMovie = useMemo(() => {
     if (!content) return true;
-    if (
-      content.type === 'movie' ||
-      content.type === 'film' ||
-      (content as any).uploadMode === 'movie' ||
-      (content as any).category === 'movie'
-    ) {
+    const cType = (content.type || (content as any).media_type || (content as any).uploadMode || (content as any).category || '').toString().toLowerCase();
+
+    if (cType === 'movie' || cType === 'film' || cType === 'feature') {
       return true;
     }
+
     const seasons = content.seasonsData;
     const hasEpisodesInSeasons =
       Array.isArray(seasons) && seasons.some((s) => Array.isArray(s?.episodes) && s.episodes.length > 0);
     const hasEpisodesList = Array.isArray(content.episodesList) && content.episodesList.length > 0;
+
     if (hasEpisodesInSeasons || hasEpisodesList) {
       return false;
     }
-    if (content.type === 'series') {
+
+    if (cType === 'series' || cType === 'tv' || cType === 'anime' || cType === 'show') {
       return false;
     }
+
+    if (typeof content.episodes === 'number' && content.episodes > 1) {
+      return false;
+    }
+
     return true;
   }, [content]);
 

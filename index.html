@@ -40,15 +40,18 @@
   <body class="bg-[#0A0A0A] text-white antialiased selection:bg-[#8B5CF6] selection:text-white">
     <div id="root"></div>
     <script>
-      // In development / preview environments, unregister any stale service workers that could block Vite modules
+      // Register MaxPlay Offline PWA Service Worker
       if ('serviceWorker' in navigator) {
-        if (window.location.hostname === 'localhost' || window.location.hostname.includes('run.app') || window.location.hostname.includes('webcontainer')) {
-          navigator.serviceWorker.getRegistrations().then((registrations) => {
-            for (const registration of registrations) {
-              registration.unregister();
-            }
-          });
-        }
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/sw.js', { scope: '/' })
+            .then((reg) => {
+              console.log('[MaxPlay PWA] Service worker registered successfully:', reg.scope);
+            })
+            .catch((err) => {
+              console.warn('[MaxPlay PWA] Service worker registration warning:', err);
+            });
+        });
       }
     </script>
     <script type="module" src="/src/main.tsx"></script>
