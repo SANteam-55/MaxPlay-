@@ -53,22 +53,57 @@ export async function saveVideoBlob(key: string, blob: Blob): Promise<void> {
     const req = store.put(record);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
+    tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+    tx.onerror = () => reject(tx.error || new Error('Transaction error'));
   });
 }
 
 export async function getVideoBlob(key: string): Promise<Blob | null> {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.get(key);
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(key);
 
-    req.onsuccess = () => {
-      const result = req.result as StoredBlobRecord | undefined;
-      resolve(result ? result.blob : null);
-    };
-    req.onerror = () => reject(req.error);
-  });
+      req.onsuccess = () => {
+        const result = req.result as StoredBlobRecord | undefined;
+        if (result && result.blob && result.blob.size > 0) {
+          resolve(result.blob);
+          return;
+        }
+
+        // Fallback: search all records for matching key
+        const allReq = store.getAll();
+        allReq.onsuccess = () => {
+          const records = (allReq.result as StoredBlobRecord[]) || [];
+          const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const match = records.find((r) => {
+            if (!r || !r.key || !r.blob) return false;
+            if (r.key === key) return true;
+            const rClean = r.key.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return rClean.includes(cleanKey) || cleanKey.includes(rClean);
+          });
+          resolve(match && match.blob ? match.blob : null);
+        };
+        allReq.onerror = () => resolve(null);
+      };
+      req.onerror = () => resolve(null);
+      tx.onerror = () => resolve(null);
+    });
+  } catch (err) {
+    console.warn('Error reading from IndexedDB:', err);
+    return null;
+  }
+}
+
+export async function findStoredBlob(candidateKeys: string[]): Promise<Blob | null> {
+  for (const k of candidateKeys) {
+    if (!k) continue;
+    const blob = await getVideoBlob(k);
+    if (blob) return blob;
+  }
+  return null;
 }
 
 export async function deleteVideoBlob(key: string): Promise<void> {

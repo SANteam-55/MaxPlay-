@@ -4,7 +4,7 @@
 
 import { SmartStreamService } from './smartStreamService';
 import { ClientHlsDownloader } from './clientHlsDownloader';
-import { saveVideoBlob, getVideoBlob, deleteVideoBlob, getStoredStorageUsage } from '../utils/offlineStorage';
+import { saveVideoBlob, getVideoBlob, deleteVideoBlob, getStoredStorageUsage, findStoredBlob } from '../utils/offlineStorage';
 
 export interface DownloadTask {
   taskId: string;
@@ -48,6 +48,7 @@ export interface DownloadedFile {
   downloadedAt: string;
   storageKey?: string;
   mimeType?: string;
+  videoUrl?: string;
 }
 
 const STORAGE_KEY_TASKS = 'maxplay_download_tasks_v3';
@@ -242,6 +243,7 @@ class DownloadManager {
         downloadedAt: new Date().toISOString(),
         storageKey: task.storageKey,
         mimeType: task.mimeType || 'video/mp4',
+        videoUrl: task.videoUrl,
       };
 
       // Avoid duplicates
@@ -579,23 +581,45 @@ class DownloadManager {
       }
     }
 
-    if (!file || !file.storageKey) return null;
+    // Candidate storage keys to look up in IndexedDB
+    const candidateKeys: string[] = [];
+    if (file?.storageKey) candidateKeys.push(file.storageKey);
+    if (file?.contentId && file?.episodeId) {
+      candidateKeys.push(`video_${file.contentId}_${file.episodeId}_${file.quality || '720p'}`);
+      candidateKeys.push(`video_${file.contentId}_${file.episodeId}`);
+    }
+    if (file?.contentId) {
+      candidateKeys.push(`video_${file.contentId}_${file.quality || '720p'}`);
+      candidateKeys.push(`video_${file.contentId}`);
+    }
+    if (file?.id) candidateKeys.push(file.id);
+    if (contentIdOrTaskId) candidateKeys.push(contentIdOrTaskId);
 
-    if (this.offlineBlobUrls.has(file.storageKey)) {
-      return this.offlineBlobUrls.get(file.storageKey)!;
+    // Check if we already have an active Object URL cached
+    for (const key of candidateKeys) {
+      if (this.offlineBlobUrls.has(key)) {
+        return this.offlineBlobUrls.get(key)!;
+      }
     }
 
     try {
-      const blob = await getVideoBlob(file.storageKey);
-      if (!blob) return null;
-
-      const blobUrl = URL.createObjectURL(blob);
-      this.offlineBlobUrls.set(file.storageKey, blobUrl);
-      return blobUrl;
+      const blob = await findStoredBlob(candidateKeys);
+      if (blob && blob.size > 0) {
+        const blobUrl = URL.createObjectURL(blob);
+        const cacheKey = file?.storageKey || candidateKeys[0] || 'default';
+        this.offlineBlobUrls.set(cacheKey, blobUrl);
+        return blobUrl;
+      }
     } catch (err) {
-      console.error('Failed to get offline video blob:', err);
-      return null;
+      console.warn('Failed to get offline video blob:', err);
     }
+
+    // Fallback: if IndexedDB blob is missing or cleared but videoUrl is saved, return videoUrl
+    if (file && file.videoUrl) {
+      return file.videoUrl;
+    }
+
+    return null;
   }
 
   public isContentDownloaded(contentId: string, episodeId?: string, episodeIndex?: number): boolean {

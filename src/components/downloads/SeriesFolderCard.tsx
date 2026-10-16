@@ -150,16 +150,17 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
             return (
               <div
                 key={ep.id}
-                className="flex items-center justify-between p-3 px-4 hover:bg-white/[0.03] transition group text-left"
+                onClick={() => onPlayEpisode(ep)}
+                className="flex items-center justify-between p-3 px-4 hover:bg-white/[0.06] transition group text-left cursor-pointer"
               >
                 <div className="flex items-center gap-3 min-w-0 pr-2">
                   {/* Episode Number Badge */}
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#1C1C24] border border-white/10 font-mono text-xs font-black text-purple-400 group-hover:border-purple-500/40 transition">
+                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#1C1C24] border border-white/10 font-mono text-xs font-black text-purple-400 group-hover:border-purple-500/40 group-hover:bg-purple-500/20 transition">
                     E{epNum}
                   </div>
 
                   <div className="flex flex-col min-w-0">
-                    <span className="text-xs sm:text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md">
+                    <span className="text-xs sm:text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md group-hover:text-purple-300 transition">
                       {ep.subtitle?.split('•')[0]?.trim() || `Episode ${epNum}`}
                     </span>
                     <div className="flex items-center gap-2 mt-0.5 text-[10px] text-[#A1A1AA]">
@@ -182,7 +183,10 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <button
                     type="button"
-                    onClick={() => onPlayEpisode(ep)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPlayEpisode(ep);
+                    }}
                     className="flex items-center gap-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 text-[11px] font-bold text-white hover:opacity-90 active:scale-95 transition cursor-pointer"
                   >
                     <Play className="h-3 w-3 fill-current" />
@@ -191,7 +195,10 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onDeleteEpisode(ep.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteEpisode(ep.id);
+                    }}
                     className="flex h-7 w-7 items-center justify-center rounded-lg text-[#71717A] hover:bg-red-500/20 hover:text-red-400 transition cursor-pointer"
                     title={`Delete Episode ${epNum}`}
                   >

@@ -4,7 +4,7 @@ import { downloadManager, DownloadTask, DownloadedFile } from '../../services/Do
 import { DownloadItem } from '../../components/downloads/DownloadItem';
 import { DownloadedItem } from '../../components/downloads/DownloadedItem';
 import { SeriesFolderCard } from '../../components/downloads/SeriesFolderCard';
-import { OfflineCustomPlayerModal } from '../../components/player/OfflineCustomPlayerModal';
+import { OfflineDetailScreen } from '../content/OfflineDetailScreen';
 import { ContentCard } from '../../components/common/ContentCard';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 
@@ -89,25 +89,21 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   const [offlinePlayingEpisodes, setOfflinePlayingEpisodes] = useState<DownloadedFile[]>([]);
 
   const handlePlayItem = async (file: DownloadedFile, episodesList?: DownloadedFile[]) => {
+    const eps = episodesList && episodesList.length > 0
+      ? episodesList
+      : groupedCompleted.seriesList.find((s) => s.contentId === file.contentId)?.episodes || [file];
+
+    // Immediately open OfflineDetailScreen
+    setOfflinePlayingFile(file);
+    setOfflinePlayingEpisodes(eps);
+
     try {
       const blobUrl = await downloadManager.getOfflineVideoUrl(file.id, file.episodeId, file.episodeIndex);
       if (blobUrl) {
         setOfflineBlobUrl(blobUrl);
-        setOfflinePlayingFile(file);
-        setOfflinePlayingEpisodes(episodesList || []);
-        return;
       }
     } catch (e) {
-      console.warn('Could not load offline blob:', e);
-    }
-
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      triggerToast('Offline video file not found in device storage. Please re-download.');
-      return;
-    }
-
-    if (onPlayContent) {
-      onPlayContent(file.contentId);
+      console.warn('Could not load offline blob eagerly:', e);
     }
   };
 
@@ -340,14 +336,13 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         </div>
       )}
 
-      {/* Offline Custom MaxPlay Video Player Modal */}
-      {offlinePlayingFile && offlineBlobUrl && (
-        <OfflineCustomPlayerModal
-          file={offlinePlayingFile}
-          blobUrl={offlineBlobUrl}
-          allEpisodes={offlinePlayingEpisodes}
-          onSelectEpisode={(nextEp) => handlePlayItem(nextEp, offlinePlayingEpisodes)}
-          onClose={() => {
+      {/* Offline MaxPlay Detail Screen with Top Player & Episode Grid */}
+      {offlinePlayingFile && (
+        <OfflineDetailScreen
+          initialFile={offlinePlayingFile}
+          initialBlobUrl={offlineBlobUrl || undefined}
+          allDownloadedEpisodes={offlinePlayingEpisodes}
+          onBack={() => {
             setOfflinePlayingFile(null);
             setOfflineBlobUrl(null);
             setOfflinePlayingEpisodes([]);
