@@ -16,6 +16,7 @@ import { QualityDrawer } from './QualityDrawer';
 import { AudioLangDrawer } from './AudioLangDrawer';
 import { SpeedCapsuleHUD } from './SpeedCapsuleHUD';
 import { DownloadedFile } from '../../services/DownloadManager';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface OfflinePlayerProps {
   file: DownloadedFile;
@@ -309,7 +310,8 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
         el.msRequestFullscreen();
       }
 
-      // Lock screen orientation to landscape / horizontal mode
+      // Lock screen orientation to landscape / horizontal mode (Native Kotlin + Web API)
+      NativeBridgeService.setNativeLandscapeOrientation(true);
       try {
         if (screen.orientation && (screen.orientation as any).lock) {
           ((screen.orientation as any).lock as any)('landscape').catch(() => {});
@@ -336,6 +338,7 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
         doc.msExitFullscreen();
       }
 
+      NativeBridgeService.setNativeLandscapeOrientation(false);
       try {
         if (screen.orientation && screen.orientation.unlock) {
           ((screen.orientation as any).unlock as any)();

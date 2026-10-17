@@ -1,4 +1,5 @@
 import muxjs from 'mux.js';
+import { NativeBridgeService } from './nativeBridgeService';
 
 export interface HlsDownloadProgress {
   downloadedBytes: number;
@@ -24,10 +25,34 @@ interface SegmentInfo {
  * - Automatically falls back to lightweight /api/proxy if direct CDN CORS is blocked.
  */
 export class ClientHlsDownloader {
+  private static proxyRequiredHosts = new Set<string>();
+
   private static async fetchWithCorsFallback(
     targetUrl: string,
     options: RequestInit = {}
   ): Promise<Response> {
+    let host = '';
+    try {
+      host = new URL(targetUrl).host;
+    } catch (_) {}
+
+    // If running inside Native Kotlin APK, fetch directly via Native OkHttp (Zero CORS)
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      const nativeBody = await NativeBridgeService.fetchTextCorsFree(
+        targetUrl,
+        (options.headers as Record<string, string>) || {}
+      );
+      if (nativeBody !== null) {
+        return new Response(nativeBody, { status: 200 });
+      }
+    }
+
+    // If host is already known to require proxy due to CORS/auth headers, bypass direct fetch timeout immediately!
+    if (host && this.proxyRequiredHosts.has(host)) {
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+      return fetch(proxyUrl, options);
+    }
+
     try {
       const resp = await fetch(targetUrl, {
         ...options,
@@ -43,6 +68,9 @@ export class ClientHlsDownloader {
       return resp;
     } catch (err: any) {
       if (options.signal?.aborted) throw err;
+      if (host) {
+        this.proxyRequiredHosts.add(host);
+      }
       // Fallback via lightweight /api/proxy to bypass CORS
       const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
       return fetch(proxyUrl, options);
@@ -242,8 +270,8 @@ export class ClientHlsDownloader {
       }
     }
 
-    // 5. High-Speed Concurrent Segment Download Pipeline with In-Order Transmuxing (5x–10x Faster)
-    const CONCURRENCY = 5;
+    // 5. High-Speed Concurrent Segment Download Pipeline with In-Order Transmuxing (8 Workers)
+    const CONCURRENCY = 8;
     let totalDownloadedBytes = 0;
     let completedSegmentsCount = 0;
     let lastReportTime = Date.now();
@@ -258,7 +286,7 @@ export class ClientHlsDownloader {
     let nextSegmentToAssemble = 0;
     let workerError: Error | null = null;
 
-    // Ordered Assembly Drain: strictly feeds transmuxer in 0, 1, 2, ... sequence
+    // Ordered Assembly Drain: strictly feeds transmuxer in 0, 1, 2, ... sequence without premature flush
     const drainAssemblyQueue = () => {
       while (downloadedSegments.has(nextSegmentToAssemble)) {
         const segBytes = downloadedSegments.get(nextSegmentToAssemble)!;
@@ -267,13 +295,61 @@ export class ClientHlsDownloader {
         const isMpegTs = segBytes.length > 0 && segBytes[0] === 0x47;
         if (isMpegTs) {
           transmuxer.push(segBytes);
-          transmuxer.flush();
         } else {
           isPureFmp4 = true;
           videoParts.push(segBytes);
         }
         nextSegmentToAssemble++;
       }
+    };
+
+    // Robust Segment Fetcher with 3 Retries via Server Proxy / Direct CDN
+    const fetchSegmentWithRetry = async (segUrl: string, headers: Record<string, string>, retries = 3): Promise<Uint8Array> => {
+      let lastErr: any = null;
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(segUrl)}`;
+
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        if (signal?.aborted) throw new Error('Download aborted by user');
+
+        // Priority 0 (Android APK): Native Kotlin OkHttp Direct Binary Fetch (Zero CORS, Zero Proxy Overhead)
+        if (NativeBridgeService.isRunningInKotlinApp()) {
+          try {
+            const nativeBytes = await NativeBridgeService.fetchBytesCorsFree(segUrl, headers);
+            if (nativeBytes && nativeBytes.byteLength > 0) {
+              return nativeBytes;
+            }
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+
+        try {
+          // Primary: Proxy download for guaranteed CORS-free & headers-compliant fetch
+          const resp = await fetch(proxyUrl, { signal, headers });
+          if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf.byteLength > 0) return new Uint8Array(buf);
+          }
+        } catch (e) {
+          lastErr = e;
+        }
+
+        try {
+          // Fallback: Direct CDN fetch
+          const directResp = await fetch(segUrl, { signal, headers });
+          if (directResp.ok) {
+            const buf = await directResp.arrayBuffer();
+            if (buf.byteLength > 0) return new Uint8Array(buf);
+          }
+        } catch (e) {
+          lastErr = e;
+        }
+
+        // Brief delay before retry
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
+
+      throw new Error(lastErr?.message || 'Segment download failed after retries');
     };
 
     const worker = async () => {
@@ -290,28 +366,17 @@ export class ClientHlsDownloader {
           headers['Range'] = `bytes=${seg.byteRange.offset}-${seg.byteRange.offset + seg.byteRange.length - 1}`;
         }
 
-        let segResp: Response;
+        let segBytes: Uint8Array;
         try {
-          segResp = await this.fetchWithCorsFallback(seg.url, { signal, headers });
-          if (!segResp.ok) throw new Error(`HTTP ${segResp.status}`);
+          segBytes = await fetchSegmentWithRetry(seg.url, headers, 3);
         } catch (fetchErr: any) {
           if (signal?.aborted) {
             workerError = new Error('Download aborted by user');
             break;
           }
-          // Single retry with fallback proxy if direct CDN network flickers
-          try {
-            const proxyUrl = `/api/proxy?url=${encodeURIComponent(seg.url)}`;
-            segResp = await fetch(proxyUrl, { signal, headers });
-            if (!segResp.ok) throw new Error(`Proxy HTTP ${segResp.status}`);
-          } catch (retryErr: any) {
-            workerError = new Error(`Failed downloading segment ${idx + 1}/${segments.length}: ${retryErr.message}`);
-            break;
-          }
+          workerError = new Error(`Failed downloading segment ${idx + 1}/${segments.length}: ${fetchErr.message}`);
+          break;
         }
-
-        const arrayBuf = await segResp.arrayBuffer();
-        const segBytes = new Uint8Array(arrayBuf);
 
         totalDownloadedBytes += segBytes.byteLength;
         bytesSinceLastReport += segBytes.byteLength;
@@ -356,8 +421,13 @@ export class ClientHlsDownloader {
       throw workerError;
     }
 
-    // Final drain check to ensure all segments flushed
+    // Final drain check to ensure all segments pushed to transmuxer
     drainAssemblyQueue();
+
+    // Flush transmuxer ONCE at the end to generate 1 single clean MP4 container
+    if (!isPureFmp4) {
+      transmuxer.flush();
+    }
 
     // 6. Build final MP4 Blob
     onProgress?.({

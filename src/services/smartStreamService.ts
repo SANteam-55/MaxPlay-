@@ -6,6 +6,8 @@
  * and local caching without exposing secret master credentials in the browser.
  */
 
+import { NativeBridgeService } from "./nativeBridgeService";
+
 interface ClientCachedStream {
   m3u8Url: string;
   expiresAt: number;
@@ -32,7 +34,12 @@ export class SmartStreamService {
       lower.includes("voe.") ||
       lower.includes("voe-network") ||
       lower.includes("cloudwindow-route") ||
-      lower.includes("node=h0ke")
+      lower.includes("node=h0ke") ||
+      lower.includes("filemoon.") ||
+      lower.includes("streamwish.") ||
+      lower.includes("vidhide.") ||
+      lower.includes("dood.") ||
+      lower.includes("streamtape.")
     ) {
       return true;
     }
@@ -195,6 +202,27 @@ export class SmartStreamService {
           isEmbed: false,
           expiresAt: cached.expiresAt
         };
+      }
+    }
+
+    // 1.5 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Headless Sniffer (Zero CORS)
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      try {
+        const nativeRes = await NativeBridgeService.extractStreamNative(trimmed);
+        if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
+          const ttlMs = 170 * 60 * 1000;
+          const expiresAt = Date.now() + ttlMs;
+          this.setClientCache(trimmed, nativeRes.m3u8Url, expiresAt);
+          return {
+            streamUrl: nativeRes.m3u8Url,
+            isExtracted: true,
+            cached: false,
+            isEmbed: false,
+            expiresAt
+          };
+        }
+      } catch (nativeErr) {
+        console.warn("[SmartStreamService] Native Kotlin scraper fallback to server:", nativeErr);
       }
     }
 

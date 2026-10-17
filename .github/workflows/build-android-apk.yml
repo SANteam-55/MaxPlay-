@@ -1,0 +1,47 @@
+name: Build MaxPlay Native Kotlin APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Web Dependencies & Build MaxPlay Frontend Bundle
+        run: |
+          npm install
+          npx vite build
+          mkdir -p android-kotlin/app/src/main/assets/webapp
+          cp -r dist/* android-kotlin/app/src/main/assets/webapp/
+
+      - name: Setup JDK 17 for Kotlin Android Build
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK & Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Compile MaxPlay Debug APK
+        working-directory: ./android-kotlin
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload Ready-to-Install MaxPlay APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaxPlay-Android-Kotlin-APK
+          path: android-kotlin/app/build/outputs/apk/debug/app-debug.apk
