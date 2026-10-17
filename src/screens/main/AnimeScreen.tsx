@@ -23,8 +23,11 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
   const [activeSort, setActiveSort] = useState<'rating' | 'newest' | 'trending'>('rating');
 
   const handleContentClick = (item: ContentItem) => {
-    adManager.handleContentCardClick(!!user?.isPremium);
     onSelectContent?.(item);
+    const isPrem = !!user?.isPremium;
+    setTimeout(() => {
+      adManager.handleContentCardClick(isPrem);
+    }, 50);
   };
 
   // Filter items that are anime

@@ -12,8 +12,10 @@ import org.json.JSONObject
  * MaxPlay Native Kotlin Bridge (`window.MaxPlayNative`)
  * ----------------------------------------------------------------------
  * Exposes Native Android OS capabilities directly to the MaxPlay React Frontend:
- * - `extractStreamNative(sourceUrl, headersJson)` -> Runs InbuiltStreamScraper
- * - `sniffStreamAsync(sourceUrl, callbackId, timeoutMs)` -> Runs Headless WebView Sniffer
+ * - `extractStreamNativeAsync(sourceUrl, headersJson, callbackId)` -> Non-blocking Stage 1 Scraper
+ * - `extractStreamNative(sourceUrl, headersJson)` -> Synchronous Stage 1 Scraper (backward compatible)
+ * - `sniffStreamAsync(sourceUrl, callbackId, timeoutMs)` -> Stage 2 Offscreen WebView Sniffer
+ * - `fetchUrlCorsFreeAsync(targetUrl, headersJson, callbackId)` -> Non-blocking CORS-free text/playlist fetch
  * - `fetchUrlCorsFree(targetUrl, headersJson)` -> CORS-free text/playlist fetch via OkHttp
  * - `fetchBytesBase64CorsFree(targetUrl, headersJson)` -> CORS-free binary segment fetch via OkHttp
  * - `setLandscapeOrientation(locked)` -> Hardware sensor landscape lock for fullscreen player
@@ -22,20 +24,19 @@ class MaxPlayNativeBridge(
     private val activity: Activity,
     private val webView: WebView
 ) {
-    private val scraper = InbuiltStreamScraper(activity)
+    private val scraper = InbuiltStreamScraper(activity, webView)
 
     @JavascriptInterface
     fun isNativeApp(): Boolean = true
 
     @JavascriptInterface
-    fun getAppVersion(): String = "1.0.0-kotlin-native"
+    fun getAppVersion(): String = "1.1.0-kotlin-native"
 
     @JavascriptInterface
     fun extractStreamNative(sourceUrl: String, headersJson: String?): String {
         val headersMap = parseHeadersJson(headersJson)
         val resultJson = scraper.scrapeStreamSync(sourceUrl, headersMap)
 
-        // Register discovered Referer for seamless WebView playback
         if (resultJson.optBoolean("ok")) {
             val m3u8Url = resultJson.optString("m3u8Url")
             val ref = resultJson.optJSONObject("headers")?.optString("Referer") ?: ""
@@ -45,6 +46,28 @@ class MaxPlayNativeBridge(
         }
 
         return resultJson.toString()
+    }
+
+    @JavascriptInterface
+    fun extractStreamNativeAsync(sourceUrl: String, headersJson: String?, callbackId: String) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val headersMap = parseHeadersJson(headersJson)
+            val resultJson = scraper.scrapeStreamSync(sourceUrl, headersMap)
+
+            if (resultJson.optBoolean("ok")) {
+                val m3u8Url = resultJson.optString("m3u8Url")
+                val ref = resultJson.optJSONObject("headers")?.optString("Referer") ?: ""
+                if (m3u8Url.isNotEmpty() && ref.isNotEmpty()) {
+                    CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                }
+            }
+
+            val escapedJson = JSONObject.quote(resultJson.toString())
+            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+            activity.runOnUiThread {
+                webView.evaluateJavascript(jsCode, null)
+            }
+        }
     }
 
     @JavascriptInterface
@@ -94,6 +117,18 @@ class MaxPlayNativeBridge(
             out.put("error", e.message ?: "OkHttp fetch failed")
         }
         return out.toString()
+    }
+
+    @JavascriptInterface
+    fun fetchUrlCorsFreeAsync(targetUrl: String, headersJson: String?, callbackId: String) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val resStr = fetchUrlCorsFree(targetUrl, headersJson)
+            val escapedJson = JSONObject.quote(resStr)
+            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+            activity.runOnUiThread {
+                webView.evaluateJavascript(jsCode, null)
+            }
+        }
     }
 
     @JavascriptInterface

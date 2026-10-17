@@ -14,10 +14,11 @@ import java.io.ByteArrayInputStream
 //    (https://appassets.androidplatform.net/) so Vite ES Modules,
 //    Tailwind CSS, Firebase Auth/Firestore, and IndexedDB work
 //    with 100% compatibility and 0 black screen issues.
-// 2. Intercepts /api/proxy?url=... locally on the Android device via OkHttp
-//    so video segments download directly to the phone with 0% server timeout.
-// 3. Intercepts cross-origin media playlists (.m3u8) & video segments (.ts, .m4s)
-//    and injects Access-Control-Allow-Origin: *.
+// 2. Fast-paths all Firebase, Google APIs, and image/poster/font requests
+//    directly through Chromium's native HTTP/2 & disk-cache pipeline for
+//    instant poster loading and zero UI lag.
+// 3. Intercepts /api/proxy?url=... and cross-origin HLS streams (.m3u8, .ts, .m4s)
+//    with matched Referer/Origin and Access-Control-Allow-Origin: *.
 class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
     companion object {
@@ -69,35 +70,36 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         request: WebResourceRequest?
     ): WebResourceResponse? {
         val uri = request?.url ?: return super.shouldInterceptRequest(view, request)
+        val host = (uri.host ?: "").lowercase()
+        val path = (uri.path ?: "/").lowercase()
         val reqUrl = uri.toString()
         val method = request.method?.uppercase() ?: "GET"
 
-        // 1. Handle CORS Preflight OPTIONS immediately with 200 OK
-        if (method == "OPTIONS") {
-            return WebResourceResponse(
-                "text/plain",
-                "UTF-8",
-                200,
-                "OK",
-                buildCorsHeaders("text/plain"),
-                ByteArrayInputStream(ByteArray(0))
-            )
-        }
+        // 1. Serve Local Bundled WebApp & Native Proxy on https://appassets.androidplatform.net
+        if (host == VIRTUAL_ASSET_HOST) {
+            if (method == "OPTIONS") {
+                return WebResourceResponse(
+                    "text/plain",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders("text/plain"),
+                    ByteArrayInputStream(ByteArray(0))
+                )
+            }
 
-        // 2. Serve Local Bundled WebApp & Native Proxy on https://appassets.androidplatform.net
-        if (uri.host == VIRTUAL_ASSET_HOST) {
-            val path = uri.path ?: "/"
+            val rawPath = uri.path ?: "/"
 
-            // 2a. Native on-device /api/proxy?url=... handler (Zero CORS, Zero Cloud Timeout!)
-            if (path == "/api/proxy") {
+            // 1a. Native on-device /api/proxy?url=... handler (Zero CORS, Zero Cloud Timeout!)
+            if (rawPath == "/api/proxy") {
                 val targetUrl = uri.getQueryParameter("url")
                 if (!targetUrl.isNullOrBlank()) {
                     return proxyExternalUrlWithOkHttp(targetUrl, request)
                 }
             }
 
-            // 2b. Disable PWA sw.js inside native APK since assets are already 100% local in APK
-            if (path == "/sw.js") {
+            // 1b. Disable PWA sw.js inside native APK since assets are already 100% local in APK
+            if (rawPath == "/sw.js") {
                 val noopSw = "// Native Android APK Asset Loader active".toByteArray(Charsets.UTF_8)
                 return WebResourceResponse(
                     "application/javascript",
@@ -109,11 +111,11 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 )
             }
 
-            // 2c. Serve static file from assets/webapp/...
-            val cleanPath = if (path == "/" || path.isEmpty()) {
+            // 1c. Serve static file from assets/webapp/...
+            val cleanPath = if (rawPath == "/" || rawPath.isEmpty()) {
                 "index.html"
             } else {
-                path.removePrefix("/")
+                rawPath.removePrefix("/")
             }
 
             return try {
@@ -149,21 +151,60 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
         }
 
-        // 3. Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s) to strip CORS blocks
+        // 2. FAST-PATH BYPASS: Never intercept Firebase, Google APIs, or Images/Posters/Fonts!
+        //    Letting Chromium's native C++ HTTP/2 engine & disk cache handle these directly
+        //    eliminates worker-thread bottlenecks and makes posters & Firestore data load instantly.
+        if (host.contains("googleapis.com") ||
+            host.contains("firebaseio.com") ||
+            host.contains("firebaseapp.com") ||
+            host.contains("gstatic.com") ||
+            host.contains("google.com") ||
+            host.contains("googleusercontent.com") ||
+            host.contains("tmdb.org") ||
+            host.contains("imgur.com") ||
+            host.contains("ibb.co") ||
+            host.contains("postimg.cc") ||
+            host.contains("cloudinary.com") ||
+            path.endsWith(".jpg") ||
+            path.endsWith(".jpeg") ||
+            path.endsWith(".png") ||
+            path.endsWith(".webp") ||
+            path.endsWith(".avif") ||
+            path.endsWith(".gif") ||
+            path.endsWith(".svg") ||
+            path.endsWith(".ico") ||
+            path.endsWith(".woff") ||
+            path.endsWith(".woff2") ||
+            path.endsWith(".ttf")
+        ) {
+            return null
+        }
+
+        // 3. Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s) to inject Referer & CORS headers
         val lower = reqUrl.lowercase()
         val isHlsOrSegment =
             lower.contains(".m3u8") ||
-                lower.contains(".ts") ||
-                lower.contains(".m4s") ||
+                path.endsWith(".ts") ||
+                path.endsWith(".m4s") ||
                 lower.contains("master.txt") ||
                 lower.contains("urlset")
 
         if (isHlsOrSegment && (lower.startsWith("http://") || lower.startsWith("https://"))) {
+            if (method == "OPTIONS") {
+                return WebResourceResponse(
+                    "text/plain",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders("text/plain"),
+                    ByteArrayInputStream(ByteArray(0))
+                )
+            }
             val proxied = proxyExternalUrlWithOkHttp(reqUrl, request)
             if (proxied != null) return proxied
         }
 
-        return super.shouldInterceptRequest(view, request)
+        return null
     }
 
     private fun proxyExternalUrlWithOkHttp(

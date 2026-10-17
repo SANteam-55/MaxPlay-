@@ -1,8 +1,6 @@
 import React from 'react';
 import { Star, Pencil } from 'lucide-react';
 import { ContentItem } from '../../types';
-import { triggerCardPopunder } from '../../utils/adsHelper';
-import { useAuth } from '../../hooks/useAuth';
 
 interface ContentCardProps {
   item: ContentItem;
@@ -12,21 +10,19 @@ interface ContentCardProps {
   height?: number;
 }
 
-export const ContentCard: React.FC<ContentCardProps> = ({
+export const ContentCard: React.FC<ContentCardProps> = React.memo(({
   item,
   onPress,
   onEdit,
   width = 120,
   height = 180,
 }) => {
-  const { user } = useAuth();
   return (
     <div
       onClick={() => {
-        triggerCardPopunder(!!user?.isPremium);
         onPress?.(item);
       }}
-      className="group relative cursor-pointer flex-shrink-0 transition-transform duration-200 active:scale-95"
+      className="group relative cursor-pointer flex-shrink-0 transition-transform duration-150 active:scale-95 touch-manipulation"
       style={{ width }}
     >
       {/* Poster Container */}
@@ -39,6 +35,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
           alt={(item as any).customTitle || item.title}
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           loading="lazy"
+          decoding="async"
         />
 
         {/* Edit Button (if onEdit callback provided) */}
@@ -49,7 +46,7 @@ export const ContentCard: React.FC<ContentCardProps> = ({
               e.stopPropagation();
               onEdit(item);
             }}
-            className="absolute top-2 left-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-[#8B5CF6] text-white shadow-lg hover:bg-[#7C3AED] transition active:scale-90 cursor-pointer"
+            className="absolute top-2 left-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-[#8B5CF6] text-white shadow-lg hover:bg-[#7C3AED] transition active:scale-90 cursor-pointer touch-manipulation"
             title="Edit Content Details"
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -58,13 +55,13 @@ export const ContentCard: React.FC<ContentCardProps> = ({
 
         {/* Language Badge (top right) */}
         {item.language && (
-          <div className="absolute top-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-xs">
+          <div className="absolute top-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
             {item.language}
           </div>
         )}
 
         {/* Rating Badge (bottom left) */}
-        <div className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white backdrop-blur-xs">
+        <div className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
           <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
           <span>{Number(item.rating || 9.0).toFixed(1)}</span>
         </div>
@@ -81,4 +78,4 @@ export const ContentCard: React.FC<ContentCardProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -25,8 +25,11 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   const { contentList, loading } = useContent();
 
   const handleContentClick = (item: ContentItem) => {
-    adManager.handleContentCardClick(!!user?.isPremium);
     onSelectContent?.(item);
+    const isPrem = !!user?.isPremium;
+    setTimeout(() => {
+      adManager.handleContentCardClick(isPrem);
+    }, 50);
   };
   const [query, setQuery] = useState('');
   const [recentSearches, setRecentSearches] = useState<string[]>([]);

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="maxplay-bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF2E93" />
+      <stop offset="25%" stop-color="#D946EF" />
+      <stop offset="60%" stop-color="#8B5CF6" />
+      <stop offset="100%" stop-color="#4F46E5" />
+    </linearGradient>
+    <filter id="maxplay-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.28" />
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="url(#maxplay-bg-grad)" />
+  <g filter="url(#maxplay-glow)">
+    <path
+      d="M 216 386 C 166 410, 144 374, 144 338 L 144 186 C 144 136, 180 120, 220 146 L 370 232 C 400 250, 400 274, 370 292 L 220 378 C 192 396, 198 368, 198 338 L 198 216 C 198 196, 208 190, 224 200 L 316 253 C 330 261, 330 263, 316 271 L 254 307"
+      fill="none"
+      stroke="#FFFFFF"
+      stroke-width="38"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

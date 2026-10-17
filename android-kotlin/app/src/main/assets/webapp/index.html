@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>MaxPlay - Stream Movies, Shows & Anime</title>
+    
+    <!-- Primary Meta Tags -->
+    <meta name="title" content="MaxPlay - Stream Movies, Shows & Anime" />
+    <meta name="description" content="Watch unlimited movies, TV shows, and anime in HD with fast multi-audio streaming, adaptive bitrates, offline downloads, and cloud sync on MaxPlay." />
+    <meta name="keywords" content="MaxPlay, streaming, movies, TV series, anime, Hindi dub, offline downloads, 4K streaming" />
+    <meta name="author" content="SAN TEAM" />
+    <meta name="theme-color" content="#8B5CF6" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MaxPlay" />
+
+    <!-- Favicon & Icons -->
+    <link rel="icon" type="image/png" href="https://i.ibb.co/G4bcVYwY/Picsart-26-07-03-00-56-20-216-removebg-preview.png" />
+    <link rel="apple-touch-icon" href="https://i.ibb.co/G4bcVYwY/Picsart-26-07-03-00-56-20-216-removebg-preview.png" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Open Graph / Facebook / WhatsApp -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://maxplay.app" />
+    <meta property="og:title" content="MaxPlay - Stream Movies, Shows & Anime" />
+    <meta property="og:description" content="Stream the best movies, web series, and anime with multi-language audio and seamless video playback." />
+    <meta property="og:image" content="https://i.ibb.co/G4bcVYwY/Picsart-26-07-03-00-56-20-216-removebg-preview.png" />
+
+    <!-- Twitter Cards -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="MaxPlay - Stream Movies, Shows & Anime" />
+    <meta property="twitter:description" content="Stream the best movies, web series, and anime with multi-language audio and seamless video playback." />
+    <meta property="twitter:image" content="/logo.svg" />
+
+    <!-- Preconnect Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <script type="module" crossorigin src="/assets/index-BTzrSn8z.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DTHN2saM.css">
+  </head>
+  <body class="bg-[#0A0A0A] text-white antialiased selection:bg-[#8B5CF6] selection:text-white">
+    <div id="root"></div>
+    <script>
+      // Register MaxPlay Offline PWA Service Worker
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/sw.js', { scope: '/' })
+            .then((reg) => {
+              console.log('[MaxPlay PWA] Service worker registered successfully:', reg.scope);
+            })
+            .catch((err) => {
+              console.warn('[MaxPlay PWA] Service worker registration warning:', err);
+            });
+        });
+      }
+    </script>
+  </body>
+</html>

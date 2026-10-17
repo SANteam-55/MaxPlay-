@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Bell, Flame, Sparkles, Film, Filter, ArrowUp, Tv, Clapperboard, Swords, Smile, Heart, Zap, Star, Trophy, Crown, Clock, Compass, Rocket, PlaySquare, Gamepad2, Ghost, Map as MapIcon, PlayCircle } from 'lucide-react';
 import { LogoPlaceholder } from '../../components/common/LogoPlaceholder';
@@ -38,10 +38,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const { heroBanner, trending, cinema, forYou, categories, screensCategories, homeRowsByScreen, contentList, loading } = useContent();
   const [activeTab, setActiveTab] = useState('Trending');
   
-  const handleContentClick = (item: ContentItem) => {
-    adManager.handleContentCardClick(!!user?.isPremium);
+  const handleContentClick = useCallback((item: ContentItem) => {
     onSelectContent?.(item);
-  };
+    const isPrem = !!user?.isPremium;
+    setTimeout(() => {
+      adManager.handleContentCardClick(isPrem);
+    }, 50);
+  }, [onSelectContent, user?.isPremium]);
   const [isScrolled, setIsScrolled] = useState(false);
   
   // Dynamic color palette matching current hero banner image (default neutral cinema tone to prevent flash)
@@ -110,18 +113,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     ? searchTags[tagIndex % searchTags.length]
     : 'Search movies, series & anime...';
 
-  // Handle scroll event to toggle sticky header background
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const scrollTop = e.currentTarget.scrollTop;
-    if (scrollTop > 80) {
-      setIsScrolled(true);
-    } else {
-      setIsScrolled(false);
-    }
-  };
+  // Handle scroll event to toggle sticky header background without redundant state updates
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const nextScrolled = e.currentTarget.scrollTop > 80;
+    setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+  }, []);
 
   // Filter content based on active tab
-  const getFilteredContent = (list: ContentItem[]) => {
+  const getFilteredContent = useCallback((list: ContentItem[]) => {
     if (!list) return [];
     if (activeTab === 'Trending') return list;
     
@@ -162,18 +161,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
     // Graceful fallback if no content has been tagged specifically for this screen yet
     return list;
-  };
+  }, [activeTab]);
 
-  let filteredHeroBanner = (heroBanner as any[]).filter(b => b.screenCategory === activeTab || (!b.screenCategory && activeTab === "Trending")).slice(0, 5);
-  
-  if (filteredHeroBanner.length === 0 && (heroBanner as any[]).length > 0) {
-     // If no specific banners for this tab, fallback to all available hero banners
-     filteredHeroBanner = (heroBanner as any[]).slice(0, 5);
-  }
-  const filteredContentList = getFilteredContent(contentList as ContentItem[]);
-  const filteredTrending = getFilteredContent(trending as ContentItem[]);
-  const filteredCinema = getFilteredContent(cinema as ContentItem[]);
-  const filteredForYou = getFilteredContent(forYou as ContentItem[]);
+  const filteredHeroBanner = useMemo(() => {
+    let banners = (heroBanner as any[]).filter(
+      (b) => b.screenCategory === activeTab || (!b.screenCategory && activeTab === 'Trending')
+    ).slice(0, 5);
+    if (banners.length === 0 && (heroBanner as any[]).length > 0) {
+      banners = (heroBanner as any[]).slice(0, 5);
+    }
+    return banners;
+  }, [heroBanner, activeTab]);
+
+  const filteredContentList = useMemo(() => getFilteredContent(contentList as ContentItem[]), [getFilteredContent, contentList]);
+  const filteredTrending = useMemo(() => getFilteredContent(trending as ContentItem[]), [getFilteredContent, trending]);
+  const filteredCinema = useMemo(() => getFilteredContent(cinema as ContentItem[]), [getFilteredContent, cinema]);
+  const filteredForYou = useMemo(() => getFilteredContent(forYou as ContentItem[]), [getFilteredContent, forYou]);
 
   // Only activate banner color fade when data is loaded, hero banner exists, and page is not scrolled
   const hasBannerData = !loading && filteredHeroBanner.length > 0;

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Advertisement</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; margin: 0; padding: 0; background: transparent; overflow: hidden; }
+      #container-06b7881a58031e798d9d74f29f7f7f86 { width: 100% !important; display: block !important; margin: 0 auto; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <!-- Official Adsterra Native Banner Code -->
+    <script async="async" data-cfasync="false" src="https://pl31325139.profitableratecpmnetwork.com/06b7881a58031e798d9d74f29f7f7f86/invoke.js"></script>
+    <div id="container-06b7881a58031e798d9d74f29f7f7f86"></div>
+
+    <script type="text/javascript">
+      (function() {
+        var lastH = -1;
+        function checkHeight() {
+          try {
+            var h = document.body.scrollHeight;
+            // Native ads usually take at least 50px space. 
+            if (h > 30 && Math.abs(h - lastH) > 3) {
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'MAXPLAY_NATIVE_AD_RESIZE', height: h }, '*');
+                lastH = h;
+              }
+            }
+          } catch (e) {}
+        }
+        
+        // Listen for DOM changes as Adsterra injects elements
+        if (window.MutationObserver) {
+          var observer = new MutationObserver(checkHeight);
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+        }
+        
+        window.addEventListener('load', checkHeight);
+        setInterval(checkHeight, 1000);
+      })();
+    </script>
+  </body>
+</html>

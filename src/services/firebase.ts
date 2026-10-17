@@ -41,7 +41,16 @@
 
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, getFirestore, memoryLocalCache, doc, getDoc, setLogLevel } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  getFirestore,
+  memoryLocalCache,
+  persistentLocalCache,
+  persistentSingleTabManager,
+  doc,
+  getDoc,
+  setLogLevel,
+} from 'firebase/firestore';
 
 // Safe non-sensitive public default configuration to prevent Git leakage alerts on GitHub
 // Overridden securely using environment variables at build-time in production (Vercel/Cloud Run)
@@ -86,18 +95,46 @@ try {
 
 export const auth = authInstance;
 
-// Use initializeFirestore with memoryLocalCache to prevent IndexedDB closing/hidden errors in iframes and preview environments
+// Use persistentLocalCache on Android APK / top-level window for instant <10ms cached reads,
+// and fallback to memoryLocalCache inside cross-origin preview iframes
+const canUsePersistentCache = (() => {
+  try {
+    if (typeof window === 'undefined' || !('indexedDB' in window)) return false;
+    if ((window as any).MaxPlayNative) return true;
+    return window.self === window.top;
+  } catch {
+    return false;
+  }
+})();
+
 let firestoreDb;
 try {
-  firestoreDb = initializeFirestore(app, {
-    localCache: memoryLocalCache(),
-    ignoreUndefinedProperties: true,
-  }, dbId);
+  firestoreDb = initializeFirestore(
+    app,
+    {
+      localCache: canUsePersistentCache
+        ? persistentLocalCache({ tabManager: persistentSingleTabManager(undefined) })
+        : memoryLocalCache(),
+      ignoreUndefinedProperties: true,
+    },
+    dbId
+  );
 } catch (e) {
   try {
-    firestoreDb = getFirestore(app, dbId);
+    firestoreDb = initializeFirestore(
+      app,
+      {
+        localCache: memoryLocalCache(),
+        ignoreUndefinedProperties: true,
+      },
+      dbId
+    );
   } catch (err2) {
-    firestoreDb = getFirestore(app);
+    try {
+      firestoreDb = getFirestore(app, dbId);
+    } catch {
+      firestoreDb = getFirestore(app);
+    }
   }
 }
 
