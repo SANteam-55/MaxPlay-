@@ -1,5 +1,6 @@
 package com.maxplay.app
 
+import android.content.Context
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -8,18 +9,23 @@ import okhttp3.Request
 import java.io.ByteArrayInputStream
 
 /**
- * MaxPlay CORS-Free WebViewClient
+ * MaxPlay CORS-Free WebViewClient & HTTPS Local Asset Server
  * ----------------------------------------------------------------------
- * Intercepts cross-origin media playlists (.m3u8), video segments (.ts, .m4s),
- * and external stream host requests from the WebView, executes them via Native
- * Android OkHttp, and injects `Access-Control-Allow-Origin: *` headers.
- *
- * Result: Standard `fetch()`, `XMLHttpRequest`, `hls.js`, and `ClientHlsDownloader`
- * inside the MaxPlay Web App work with 0% CORS restrictions!
+ * 1. Serves bundled `assets/webapp/` files over a real HTTPS virtual origin
+ *    (`https://appassets.androidplatform.net/`) so Vite ES Modules (`/assets/*.js`),
+ *    Tailwind CSS (`/assets/*.css`), Firebase Auth/Firestore, and IndexedDB work
+ *    with 100% compatibility and 0 black screen issues.
+ * 2. Intercepts `/api/proxy?url=...` locally on the Android device via OkHttp
+ *    so video segments download directly to the phone with 0% server timeout.
+ * 3. Intercepts cross-origin media playlists (.m3u8) & video segments (.ts, .m4s)
+ *    and injects `Access-Control-Allow-Origin: *`.
  */
-class CorsFreeWebViewClient : WebViewClient() {
+class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
     companion object {
+        const val VIRTUAL_ASSET_HOST = "appassets.androidplatform.net"
+        const val VIRTUAL_ASSET_ORIGIN = "https://appassets.androidplatform.net"
+
         // Stores custom Referer/Origin headers discovered per stream host domain
         val hostRefererMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     }
@@ -28,10 +34,11 @@ class CorsFreeWebViewClient : WebViewClient() {
         view: WebView?,
         request: WebResourceRequest?
     ): WebResourceResponse? {
-        val reqUrl = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+        val uri = request?.url ?: return super.shouldInterceptRequest(view, request)
+        val reqUrl = uri.toString()
         val method = request.method?.uppercase() ?: "GET"
 
-        // Handle CORS Preflight OPTIONS immediately with 200 OK
+        // 1. Handle CORS Preflight OPTIONS immediately with 200 OK
         if (method == "OPTIONS") {
             return WebResourceResponse(
                 "text/plain",
@@ -43,7 +50,72 @@ class CorsFreeWebViewClient : WebViewClient() {
             )
         }
 
-        // Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s) to strip CORS blocks
+        // 2. Serve Local Bundled WebApp & Native Proxy on https://appassets.androidplatform.net
+        if (uri.host == VIRTUAL_ASSET_HOST) {
+            val path = uri.path ?: "/"
+
+            // 2a. Native on-device /api/proxy?url=... handler (Zero CORS, Zero Cloud Timeout!)
+            if (path == "/api/proxy") {
+                val targetUrl = uri.getQueryParameter("url")
+                if (!targetUrl.isNullOrBlank()) {
+                    return proxyExternalUrlWithOkHttp(targetUrl, request)
+                }
+            }
+
+            // 2b. Disable PWA sw.js inside native APK since assets are already 100% local in APK
+            if (path == "/sw.js") {
+                val noopSw = "// Native Android APK Asset Loader active".toByteArray(Charsets.UTF_8)
+                return WebResourceResponse(
+                    "application/javascript",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders("application/javascript"),
+                    ByteArrayInputStream(noopSw)
+                )
+            }
+
+            // 2c. Serve static file from assets/webapp/...
+            val cleanPath = if (path == "/" || path.isEmpty()) {
+                "index.html"
+            } else {
+                path.removePrefix("/")
+            }
+
+            return try {
+                val inputStream = context.assets.open("webapp/$cleanPath")
+                val mime = getAssetMimeType(cleanPath)
+                WebResourceResponse(
+                    mime,
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders(mime),
+                    inputStream
+                )
+            } catch (_: Exception) {
+                // SPA Route fallback: if path has no file extension, serve webapp/index.html
+                if (!cleanPath.substringAfterLast('/').contains('.')) {
+                    try {
+                        val indexStream = context.assets.open("webapp/index.html")
+                        WebResourceResponse(
+                            "text/html",
+                            "UTF-8",
+                            200,
+                            "OK",
+                            buildCorsHeaders("text/html"),
+                            indexStream
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+            }
+        }
+
+        // 3. Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s) to strip CORS blocks
         val lower = reqUrl.lowercase()
         val isHlsOrSegment =
             lower.contains(".m3u8") ||
@@ -53,49 +125,82 @@ class CorsFreeWebViewClient : WebViewClient() {
                 lower.contains("urlset")
 
         if (isHlsOrSegment && (lower.startsWith("http://") || lower.startsWith("https://"))) {
-            try {
-                val host = request.url.host ?: ""
-                val customReferer = hostRefererMap[host] ?: "${request.url.scheme}://${request.url.host}/"
-
-                val okReqBuilder = Request.Builder()
-                    .url(reqUrl)
-                    .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
-                    .header("Accept", "*/*")
-                    .header("Referer", customReferer)
-
-                request.requestHeaders?.get("Range")?.let { rangeHeader ->
-                    okReqBuilder.header("Range", rangeHeader)
-                }
-
-                val response = InbuiltStreamScraper.okHttpClient.newCall(okReqBuilder.build()).execute()
-                val statusCode = response.code
-                val contentTypeRaw = response.header("Content-Type") ?: guessMimeType(lower)
-                val mimeType = contentTypeRaw.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
-
-                val responseHeaders = buildCorsHeaders(mimeType).toMutableMap()
-                response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
-                response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
-                response.header("Accept-Ranges")?.let { responseHeaders["Accept-Ranges"] = it }
-
-                val bodyStream = response.body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
-
-                return WebResourceResponse(
-                    mimeType,
-                    "UTF-8",
-                    statusCode,
-                    response.message.ifEmpty { "OK" },
-                    responseHeaders,
-                    bodyStream
-                )
-            } catch (_: Exception) {
-                // Fall back to default WebView networking if custom interception fails
-            }
+            val proxied = proxyExternalUrlWithOkHttp(reqUrl, request)
+            if (proxied != null) return proxied
         }
 
         return super.shouldInterceptRequest(view, request)
     }
 
-    private fun guessMimeType(lowerUrl: String): String {
+    private fun proxyExternalUrlWithOkHttp(
+        targetUrl: String,
+        request: WebResourceRequest
+    ): WebResourceResponse? {
+        return try {
+            val parsedTarget = android.net.Uri.parse(targetUrl)
+            val host = parsedTarget.host ?: ""
+            val scheme = parsedTarget.scheme ?: "https"
+            val customReferer = hostRefererMap[host] ?: "$scheme://$host/"
+
+            val okReqBuilder = Request.Builder()
+                .url(targetUrl)
+                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("Accept", "*/*")
+                .header("Referer", customReferer)
+
+            request.requestHeaders?.get("Range")?.let { rangeHeader ->
+                okReqBuilder.header("Range", rangeHeader)
+            }
+
+            val response = InbuiltStreamScraper.okHttpClient.newCall(okReqBuilder.build()).execute()
+            val statusCode = response.code
+            val lowerUrl = targetUrl.lowercase()
+            val contentTypeRaw = response.header("Content-Type") ?: guessMediaMimeType(lowerUrl)
+            val mimeType = contentTypeRaw.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
+
+            val responseHeaders = buildCorsHeaders(mimeType).toMutableMap()
+            response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
+            response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
+            response.header("Accept-Ranges")?.let { responseHeaders["Accept-Ranges"] = it }
+
+            val bodyStream = response.body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
+
+            WebResourceResponse(
+                mimeType,
+                "UTF-8",
+                statusCode,
+                response.message.ifEmpty { "OK" },
+                responseHeaders,
+                bodyStream
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun getAssetMimeType(filePath: String): String {
+        val ext = filePath.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "html", "htm" -> "text/html"
+            "js", "mjs" -> "application/javascript"
+            "css" -> "text/css"
+            "json", "map" -> "application/json"
+            "svg" -> "image/svg+xml"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "ico" -> "image/x-icon"
+            "woff" -> "font/woff"
+            "woff2" -> "font/woff2"
+            "ttf" -> "font/ttf"
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun guessMediaMimeType(lowerUrl: String): String {
         return when {
             lowerUrl.contains(".m3u8") -> "application/vnd.apple.mpegurl"
             lowerUrl.contains(".ts") -> "video/mp2t"

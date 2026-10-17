@@ -35,8 +35,8 @@ class MainActivity : AppCompatActivity() {
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
     companion object {
-        // Primary entry: bundled offline-capable web assets if packaged, or live server URL
-        const val LOCAL_BUNDLE_URL = "file:///android_asset/webapp/index.html"
+        // Primary entry: HTTPS virtual origin mapped to assets/webapp/ inside APK (avoids file:// ES module & path block!)
+        const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"
         const val LIVE_APP_URL = "https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app"
     }
 
@@ -70,7 +70,7 @@ class MainActivity : AppCompatActivity() {
 
         configureCorsFreeWebView()
 
-        // Load bundled webapp assets if present in APK, otherwise load live MaxPlay URL
+        // Load bundled webapp assets over HTTPS virtual origin if present in APK, otherwise load live MaxPlay URL
         val hasLocalBundle = try {
             assets.list("webapp")?.contains("index.html") == true
         } catch (_: Exception) {
@@ -126,8 +126,8 @@ class MainActivity : AppCompatActivity() {
         // Attach Native Kotlin Bridge (`window.MaxPlayNative`)
         webView.addJavascriptInterface(MaxPlayNativeBridge(this, webView), "MaxPlayNative")
 
-        // Attach CORS-Free OkHttp Interceptor Client
-        webView.webViewClient = CorsFreeWebViewClient()
+        // Attach CORS-Free OkHttp Interceptor & HTTPS Local Asset Client
+        webView.webViewClient = CorsFreeWebViewClient(this)
 
         // Fullscreen HTML5 Video & Orientation Handler
         webView.webChromeClient = object : WebChromeClient() {
