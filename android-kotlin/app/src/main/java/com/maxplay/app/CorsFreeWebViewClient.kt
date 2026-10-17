@@ -8,18 +8,16 @@ import android.webkit.WebViewClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
 
-/**
- * MaxPlay CORS-Free WebViewClient & HTTPS Local Asset Server
- * ----------------------------------------------------------------------
- * 1. Serves bundled `assets/webapp/` files over a real HTTPS virtual origin
- *    (`https://appassets.androidplatform.net/`) so Vite ES Modules (`/assets/*.js`),
- *    Tailwind CSS (`/assets/*.css`), Firebase Auth/Firestore, and IndexedDB work
- *    with 100% compatibility and 0 black screen issues.
- * 2. Intercepts `/api/proxy?url=...` locally on the Android device via OkHttp
- *    so video segments download directly to the phone with 0% server timeout.
- * 3. Intercepts cross-origin media playlists (.m3u8) & video segments (.ts, .m4s)
- *    and injects `Access-Control-Allow-Origin: *`.
- */
+// MaxPlay CORS-Free WebViewClient & HTTPS Local Asset Server
+// ----------------------------------------------------------------------
+// 1. Serves bundled assets/webapp/ files over a real HTTPS virtual origin
+//    (https://appassets.androidplatform.net/) so Vite ES Modules,
+//    Tailwind CSS, Firebase Auth/Firestore, and IndexedDB work
+//    with 100% compatibility and 0 black screen issues.
+// 2. Intercepts /api/proxy?url=... locally on the Android device via OkHttp
+//    so video segments download directly to the phone with 0% server timeout.
+// 3. Intercepts cross-origin media playlists (.m3u8) & video segments (.ts, .m4s)
+//    and injects Access-Control-Allow-Origin: *.
 class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
     companion object {

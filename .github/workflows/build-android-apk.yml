@@ -39,6 +39,7 @@ jobs:
       - name: Generate Release Keystore & Compile Signed MaxPlay Release APK
         working-directory: ./android-kotlin
         run: |
+          rm -f app/release.keystore
           keytool -genkeypair -v -keystore app/release.keystore -alias maxplay -keyalg RSA -keysize 2048 -validity 10000 -storepass maxplay123 -keypass maxplay123 -dname "CN=MaxPlay, OU=App, O=MaxPlay, L=Mumbai, S=MH, C=IN"
           gradle assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/MaxPlay.apk
