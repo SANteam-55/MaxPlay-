@@ -10,6 +10,8 @@
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
         android:label="MaxPlay"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
