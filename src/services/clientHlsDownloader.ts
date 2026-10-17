@@ -270,8 +270,8 @@ export class ClientHlsDownloader {
       }
     }
 
-    // 5. High-Speed Concurrent Segment Download Pipeline with In-Order Transmuxing (8 Workers)
-    const CONCURRENCY = 8;
+    // 5. Smooth Concurrent Segment Download Pipeline with Non-Blocking Transmuxing (3 Workers)
+    const CONCURRENCY = 3;
     let totalDownloadedBytes = 0;
     let completedSegmentsCount = 0;
     let lastReportTime = Date.now();
@@ -287,10 +287,13 @@ export class ClientHlsDownloader {
     let workerError: Error | null = null;
 
     // Ordered Assembly Drain: strictly feeds transmuxer in 0, 1, 2, ... sequence without premature flush
-    const drainAssemblyQueue = () => {
+    const drainAssemblyQueue = async () => {
       while (downloadedSegments.has(nextSegmentToAssemble)) {
         const segBytes = downloadedSegments.get(nextSegmentToAssemble)!;
         downloadedSegments.delete(nextSegmentToAssemble); // free raw buffer immediately from RAM
+
+        // Yield to UI event loop before synchronous mux.js push so touch events remain 100% responsive
+        await new Promise((r) => setTimeout(r, 0));
 
         const isMpegTs = segBytes.length > 0 && segBytes[0] === 0x47;
         if (isMpegTs) {
@@ -303,7 +306,7 @@ export class ClientHlsDownloader {
       }
     };
 
-    // Robust Segment Fetcher with 3 Retries via Server Proxy / Direct CDN
+    // Robust Segment Fetcher with 3 Retries via Native /api/proxy Stream or Direct CDN
     const fetchSegmentWithRetry = async (segUrl: string, headers: Record<string, string>, retries = 3): Promise<Uint8Array> => {
       let lastErr: any = null;
       const proxyUrl = `/api/proxy?url=${encodeURIComponent(segUrl)}`;
@@ -311,20 +314,8 @@ export class ClientHlsDownloader {
       for (let attempt = 1; attempt <= retries; attempt++) {
         if (signal?.aborted) throw new Error('Download aborted by user');
 
-        // Priority 0 (Android APK): Native Kotlin OkHttp Direct Binary Fetch (Zero CORS, Zero Proxy Overhead)
-        if (NativeBridgeService.isRunningInKotlinApp()) {
-          try {
-            const nativeBytes = await NativeBridgeService.fetchBytesCorsFree(segUrl, headers);
-            if (nativeBytes && nativeBytes.byteLength > 0) {
-              return nativeBytes;
-            }
-          } catch (e) {
-            lastErr = e;
-          }
-        }
-
         try {
-          // Primary: Proxy download for guaranteed CORS-free & headers-compliant fetch
+          // Primary: /api/proxy (On Android APK, intercepted natively by CorsFreeWebViewClient on background IO thread!)
           const resp = await fetch(proxyUrl, { signal, headers });
           if (resp.ok) {
             const buf = await resp.arrayBuffer();
@@ -382,9 +373,9 @@ export class ClientHlsDownloader {
         bytesSinceLastReport += segBytes.byteLength;
         completedSegmentsCount++;
 
-        // Store into ordered map & drain sequentially into transmuxer
+        // Store into ordered map & drain sequentially into transmuxer with UI yield
         downloadedSegments.set(idx, segBytes);
-        drainAssemblyQueue();
+        await drainAssemblyQueue();
 
         if (completedSegmentsCount === 4) {
           const avgPerSeg = totalDownloadedBytes / 4;
@@ -392,7 +383,7 @@ export class ClientHlsDownloader {
         }
 
         const now = Date.now();
-        if (now - lastReportTime >= 300 || completedSegmentsCount === segments.length) {
+        if (now - lastReportTime >= 600 || completedSegmentsCount === segments.length) {
           const elapsedSec = (now - lastReportTime) / 1000;
           if (elapsedSec > 0) {
             currentSpeedMb = parseFloat(((bytesSinceLastReport / (1024 * 1024)) / elapsedSec).toFixed(1));
@@ -412,7 +403,7 @@ export class ClientHlsDownloader {
       }
     };
 
-    // Run CONCURRENCY workers simultaneously for maximum network bandwidth
+    // Run CONCURRENCY workers simultaneously
     const workersCount = Math.min(CONCURRENCY, segments.length);
     const workerPromises = Array.from({ length: workersCount }, () => worker());
     await Promise.all(workerPromises);
@@ -422,7 +413,7 @@ export class ClientHlsDownloader {
     }
 
     // Final drain check to ensure all segments pushed to transmuxer
-    drainAssemblyQueue();
+    await drainAssemblyQueue();
 
     // Flush transmuxer ONCE at the end to generate 1 single clean MP4 container
     if (!isPureFmp4) {

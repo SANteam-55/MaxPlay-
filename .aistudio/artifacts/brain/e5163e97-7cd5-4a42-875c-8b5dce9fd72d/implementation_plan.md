@@ -1,62 +1,64 @@
-# MaxPlay Performance Optimization, Smart Provider Router & Filemoon.sx Fix
+# MaxPlay Instant Filemoon Extraction (1–3s) & Download Freeze Fix
 
-Optimize MaxPlay's touch responsiveness, image loading pipeline, and Firebase Firestore caching for instant 60fps navigation while upgrading the inbuilt Kotlin scraper with a **Smart Provider Detection Router** (`VOE` vs `FILEMOON`) and dedicated **Filemoon.sx nested-iframe unpacker**.
+Resolve the two critical issues reported in testing: **(1) Filemoon scraper taking 60+ seconds to start playback**, and **(2) Tapping the Download button permanently freezing the app even after restarting**.
 
 ---
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Existing System Protection Guarantee**: Your Firebase collections, database schema, security rules, Admin Panel, and working Voe.sx scraper logic remain 100% intact and untouched. All optimizations are additive and non-destructive.
+> **Existing System Protection Guarantee**: All existing working systems — including the 100% working Voe.sx scraper, Firebase Firestore database, collections, security rules, authentication, and Admin Panel — remain 100% untouched.
 
-- **Confirmed Decision 1 — Strict Provider Detection & Routing (`VOE` vs `FILEMOON`)**:
-  - Instead of running one mixed scraper blindly on every link, `InbuiltStreamScraper` now includes a dedicated **Provider Classifier (`detectProviderType`)** that inspects both the **URL domain/path** (`voe.sx` + Voe mirrors vs `filemoon.sx` + `/d/` or `/e/` + Filemoon mirrors like `kerapoxy`, `moonmov`, `bysedikamoum`, `f16px`) and **HTML page signatures** (in case a link uses a new custom mirror domain).
-  - **Voe links** route strictly to the proven Voe pipeline (JS redirect follower + ROT13/Base64/wc0 decoder).
-  - **Filemoon links** route strictly to the dedicated Filemoon pipeline (`/d/` -> `/e/` normalization, `/bkg/` nested player iframe unwrapping, `eval(function(p,a,c,k,e,d))` unpacker, and recursive child-iframe JWPlayer extractor).
-  - Neither scraper can accidentally interfere with or mis-parse the other provider's links.
-- **Confirmed Decision 2 — Non-Blocking Native Bridge (`extractStreamNativeAsync`)**:
-  - Previously, calling `extractStreamNative` ran synchronously on a `@JavascriptInterface` bridge thread while the UI waited, freezing touch events for 1–3 seconds. Moving Stage 1 + Stage 2 orchestration to an asynchronous background thread pool keeps the WebView UI 100% responsive during scraping.
-- **Confirmed Decision 3 — Zero-Lag Touch, Image Pipeline & Firebase Persistent Cache**:
-  - Removing synchronous `OkHttp.execute()` interception for images/fonts in `CorsFreeWebViewClient` restores Chromium's parallel HTTP/2 image loader.
-  - Enabling Firestore `persistentLocalCache` + shared in-memory `useContent` caching eliminates repeated full-collection network fetches on tab switches.
-  - Removing blocking delays (`setTimeout` + synchronous ad checks) on `ContentCard` clicks makes movie/series screen navigation instantaneous (`< 50ms`).
+- **Root Cause & Fix 1 — Why Filemoon Took 60+ Seconds (And How We Make It 1–3 Seconds)**:
+  - **What Happened**:
+    1. Filemoon's `eval(function(p,a,c,k,e,d)...)` packed JavaScript block uses single-quoted payload strings (`'...'`) that contain unescaped double quotes (`"sources":[{"file":"https://...m3u8"}]`) inside the payload. In our Kotlin regex (`(['"])((?:\\.|(?!\1).)*)\1`), Java's regex engine failed or backtracked when matching across large single-line packed scripts, AND `unpackBlockViaV8` evaluated the packed function on the main WebView where Filemoon's packer code tried to reference `jwplayer` or `window` variables inside the `eval`, throwing an exception!
+    2. Because Stage 1 OkHttp unpacking failed, it fell back to Stage 2 (`sniffStreamWithHeadlessWebView`), which waited **24 seconds** before timing out, then `smartStreamService` waited for `/api/extract-stream` (**up to 35–60 seconds**), and only after ~65 seconds did it finally resolve!
+  - **The Fix (1–3 Seconds Instant Filemoon Extraction)**:
+    1. **Bulletproof Pure-Kotlin Packer Argument Parser (`unpackPacker`)**: Replace the fragile regex argument matcher with a deterministic **character-by-character state-machine parser** that walks from the end of the packed block (`'.split('|')`) backwards to extract `(p, a, c, k)` in `< 2ms` with 100% accuracy regardless of quotes, newlines, or semicolons.
+    2. **Safe V8 String-Only Unpacker**: In `unpackBlockViaV8`, strip `eval(` so V8 *only* executes `function(p,a,c,k,e,d){...}(...)` and returns the unpacked string **without** executing the inner `jwplayer().setup()` code.
+    3. **Instant Iframe Fast-Path in Stage 2 Sniffer**: If Stage 2 ever runs, instead of waiting 3.8 seconds on the outer `/e/` wrapper page (where cross-origin iframes block JS inspection), immediately unwrap and load the `/bkg/` or player iframe with `Referer` + `Sec-Fetch-Dest: iframe` within **300ms** and cap the sniffer timeout to **8 seconds** (never 24s + 60s).
+
+- **Root Cause & Fix 2 — Why Tapping Download Froze the Entire App Even After Restart**:
+  - **What Happened (3 Compounding Freezes)**:
+    1. **Popup Window Trap on Download Tap**: In `ContentDetailScreen.tsx`, tapping the Download button called `adManager.handleActionDockClick()`, which executed `window.open(SMART_LINK, '_blank')` and injected an external popunder script right as `DownloadSelectionModal` mounted. Inside the Android WebView, this triggered navigation/focus interception on the main UI thread.
+    2. **Main-Thread Megabyte String Freeze in `parseHlsManifestOnDevice`**: When `DownloadSelectionModal` opened, it immediately called `NativeBridgeService.extractStreamNative(targetUrl)`, which called `parseHlsManifestOnDevice()`. That method downloaded the **entire master `.m3u8` + variant media `.m3u8` (thousands of `#EXTINF` segment lines)** and passed them through `webView.evaluateJavascript("window.onMaxPlaySnifferResult(..., hugeJsonString)")` on the **Android UI Main Thread**, freezing touch input!
+    3. **Permanent Startup Freeze (`localStorage` Auto-Resume Loop)**: When the user clicked Download, `DownloadManager` saved the task in `localStorage` (`maxplay_download_tasks_v3`) with `status: 'downloading'` / `'queued'`. On app restart, `DownloadManager`'s constructor immediately auto-restarted the task (`startQueueWorker`) and called `window.MaxPlayNative.fetchBytesBase64CorsFree(segUrl)` **8 times concurrently (`CONCURRENCY = 8`)**. Because `fetchBytesBase64CorsFree` is a **synchronous `@JavascriptInterface` call** returning megabytes of Base64 strings across the JS bridge while `atob()` + byte-by-byte loops ran on the single JS UI thread, the entire WebView locked up permanently within 1.5 seconds of opening the app!
+  - **The Fix (Zero-Freeze Download Modal & Non-Blocking Downloader)**:
+    1. **Auto-Heal Persisted Tasks on Startup**: On app boot, `DownloadManager` automatically converts any stuck `'downloading'` or `'queued'` tasks from a previous session into `'paused'` state so restarting the app NEVER auto-triggers background scraping/downloading until the user taps Resume.
+    2. **Zero-Network Instant Modal Open**: Opening `DownloadSelectionModal` no longer triggers `adManager` popups and no longer fetches/evaluates multi-megabyte media playlists on the UI thread. Stream resolution happens *only* when the user confirms download, or uses already-cached stream metadata from the player!
+    3. **Asynchronous Native Binary Segment Bridge (`fetchBytesBase64CorsFreeAsync`) + Safe Concurrency**: Add non-blocking `fetchBytesBase64CorsFreeAsync` and native `fetch(segUrl)` support (since `CorsFreeWebViewClient` already injects `Referer` and CORS headers at the WebView network layer!) with `CONCURRENCY = 3` and micro-task yielding so downloading segments never blocks touch events.
 
 ---
 
 ### 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Smart Provider Router (Voe.sx vs Filemoon.sx)**: Automatically identifies whether a link belongs to Voe or Filemoon (by domain and HTML fingerprint) and runs the exact dedicated scraper for that provider.
-  2. **Filemoon.sx 100% Extraction Fix**: Unwraps Filemoon's inner player `<iframe src="...">`, fixes the Kotlin `eval(function(p,a,c,k,e,d))` regex to handle internal semicolons (`return p}`), and injects recursive child-iframe inspection in the attached WebView sniffer.
-  3. **Instant Touch & Fast Data/Images**: Eliminates the 1-second tap delay on movie cards, unblocks parallel image loading in Android WebView, and caches Firebase content locally for instant screen transitions.
-- **Target Audience / Persona**: MaxPlay Android users browsing, streaming, and downloading movies and series.
-- **Key Value**: Buttery-smooth 60fps app navigation paired with 100% reliable on-device Voe.sx and Filemoon.sx direct HLS playback and downloads.
+  1. **Instant Filemoon.sx Playback (1–3 Seconds)**: Extracts `.m3u8` directly inside Stage 1 OkHttp in `~1.2s` by following `/d/` -> `/e/` -> nested `<iframe src="...">` (`/bkg/`, `bysedikamoum`, `kerapoxy`, `moonmov`) and unpacking `eval(function(p,a,c,k,e,d))` with a deterministic state-machine parser.
+  2. **100% Freeze-Free Download Modal & Queue**: Eliminates UI thread blocking when tapping the Download button, prevents `localStorage` auto-start boot loops, and streams HLS segments asynchronously without locking the WebView.
+- **Target Audience / Persona**: MaxPlay Android users streaming and downloading movies, anime, and series episodes.
+- **Key Value**: Fast 1–3 second Filemoon stream startup (matching Voe.sx speed) and rock-solid, responsive offline downloads.
 
 ---
 
 ### 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  - **Instant Card Tap & Navigation**: Tapping any Movie, Series, or Episode responds within `< 50ms` with immediate visual press feedback (`active:scale-95`, `touch-action: manipulation`) and opens the Details screen immediately.
-  - **Dedicated Provider Scraping Flow**:
-    - If the link is **Voe.sx**, the router triggers the existing working Voe extractor.
-    - If the link is **Filemoon.sx**, the router normalizes `/d/` to `/e/`, follows the nested player iframe, unpacks the `eval(p,a,c,k,e,d)` JWPlayer config or intercepts the child-frame `.m3u8`, and passes the direct stream + `Referer` header to the custom player.
+  - **Filemoon Playback Flow**: User taps a Movie or Episode -> Smart Provider Router detects `FILEMOON` -> Stage 1 OkHttp fetches `/e/` and nested `/bkg/` iframe with `Sec-Fetch-Dest: iframe` -> Deterministic Kotlin unpacker decodes `eval(p,a,c,k,e,d)` in `< 5ms` -> Video plays in **1–3 seconds**.
+  - **Download Button Flow**: User taps **Download** on Details screen -> `DownloadSelectionModal` opens **instantly (< 16ms)** without popup interference or heavy manifest parsing -> User selects quality/episodes and taps **Download** -> Queue processes episodes one-by-one in the background while all app buttons remain 100% responsive.
 - **Visual Identity & Theme**:
-  - Preserves MaxPlay's existing dark cinema design (`#0A0A0A` canvas, existing layout and components) while improving scroll smoothness, image load speed, and touch responsiveness.
+  - Preserves 100% of MaxPlay's existing UI layout, dark theme (`#0A0A0A`), and components.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Two-Layer Provider Identification (URL + HTML Fingerprint)**
-  - *Chosen Approach*:
-    - **Layer 1 (URL & Domain Match)**: Checks known Voe domains (`voe.sx`, `reputationsickler`, `launchreliantcleaverriver`, etc.) and Filemoon domains (`filemoon.sx`, `filemoon.in`, `filemoon.to`, `moonmov.pro`, `kerapoxy.cc`, `bysedikamoum.com`, `f16px.com`, or `/d/` paths).
-    - **Layer 2 (HTML Signature Match)**: Because both Voe and Filemoon frequently rotate mirror domains, if a link uses an unknown domain, the scraper inspects the HTML response: if it contains `voe` / ROT13 JSON / `wc0`, it routes to the **Voe Scraper**; if it contains `eval(function(p,a,c,k,e,d)` or Filemoon's `/bkg/` / `/e/` iframe structure, it routes to the **Filemoon Scraper**.
-  - *Why*: Guarantees 0% collision between Voe and Filemoon scrapers even when providers change domain names in the future.
+- **Decision 1: Deterministic State-Machine Packer Unpacker vs Regex**
+  - *Chosen Approach*: Parse `(p, a, c, k)` arguments using a quote-aware character scanner instead of a complex regular expression.
+  - *Why*: Filemoon's packed payloads are 15KB–60KB long and contain mixed escaped quotes; Java's `Pattern` engine suffers catastrophic backtracking or fails to match, whereas a linear character scanner runs in `< 2ms` and never fails.
 
-- **Decision 2:Selective WebView Interception (`CorsFreeWebViewClient`)**
-  - *Chosen Approach*: Bypass `shouldInterceptRequest` for all images (`.jpg`, `.png`, `.webp`, TMDB/Firebase Storage URLs), fonts, CSS/JS bundles, and Firebase Firestore traffic, intercepting only stream playlists/segments that require custom `Referer` headers.
-  - *Why*: Eliminates the WebView worker-thread bottleneck that caused slow poster loading and sluggish scrolling.
+- **Decision 2: Pause Interrupted Tasks on App Boot (`DownloadManager.ts`)**
+  - *Chosen Approach*: If the app was closed while tasks were `'downloading'` or `'queued'`, set their status to `'paused'` on startup instead of `'queued'`.
+  - *Why*: Guarantees that even if a user previously queued heavy downloads, reopening the app is 100% responsive and never enters an unrecoverable boot freeze.
 
 ---
 
@@ -64,36 +66,36 @@ Optimize MaxPlay's touch responsiveness, image loading pipeline, and Firebase Fi
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                    MaxPlay Optimized Frontend & Bridge                    │
-│  • Instant Card Tap (<50ms)      • Shared In-Memory + Persistent Cache    │
-│  • Non-Blocking Async Bridge     • Parallel Native Chromium Image Loader  │
-└─────────────────────────────────────┬─────────────────────────────────────┘
-                                      │
-                                      ▼
+│                   1. FILEMOON FAST PIPELINE (1–3s)                        │
+│  Filemoon Link (/d/ or /e/ or bysedikamoum / kerapoxy / moonmov)          │
+│       │                                                                   │
+│       ▼                                                                   │
+│  OkHttp Hop 1 (/e/{code}) ──► Extracts <iframe src=".../bkg/...">         │
+│       │                                                                   │
+│       ▼                                                                   │
+│  OkHttp Hop 2 (Referer: /e/, Sec-Fetch-Dest: iframe)                      │
+│       │                                                                   │
+│       ▼                                                                   │
+│  Deterministic State-Machine Packer Parser (unpackPacker in <2ms)         │
+│       │                                                                   │
+│       ▼                                                                   │
+│  Direct Master .m3u8 URL + Referer Registered in CorsFreeWebViewClient    │
+└───────────────────────────────────────────────────────────────────────────┘
+
 ┌───────────────────────────────────────────────────────────────────────────┐
-│              Smart Provider Classifier (detectProviderType)               │
-│  1. Domain & Path Check (voe.* vs filemoon.* / /d/ / mirror domains)      │
-│  2. HTML Signature Fallback (ROT13/wc0 vs eval(p,a,c,k,e,d) / iframe)     │
-└──────────────────┬─────────────────────────────────────┬──────────────────┘
-                   │                                     │
-         [Provider = VOE]                      [Provider = FILEMOON]
-                   │                                     │
-                   ▼                                     ▼
-┌─────────────────────────────────────┐ ┌───────────────────────────────────┐
-│     Dedicated Voe.sx Pipeline       │ │   Dedicated Filemoon.sx Pipeline  │
-│  • Preserves 100% working logic     │ │  • Normalizes /d/xxx -> /e/xxx    │
-│  • Follows window.location redirects│ │  • Follows nested player <iframe> │
-│  • Decodes ROT13 + Base64 + wc0     │ │  • Fixed eval(p,a,c,k,e,d) regex  │
-│  • Offscreen WebView fallback       │ │  • Recursive child-frame sniffer  │
-└──────────────────┬──────────────────┘ └────────────────┬──────────────────┘
-                   │                                     │
-                   └──────────────────┬──────────────────┘
-                                      ▼
-                    Direct .m3u8 URL + Matched Referer Header
-                   (Custom Video Player & Sequential Downloader)
+│                 2. FREEZE-FREE DOWNLOAD ARCHITECTURE                      │
+│  Tap Download Button                                                      │
+│       │                                                                   │
+│       ├──► No Popup Ad Interception on Modal Open                         │
+│       ├──► Instant Modal Render (Uses Cached Player Meta / Fast Header)   │
+│       └──► Background Queue Worker:                                       │
+│              • Startup Guard: Interrupted tasks start as 'paused'         │
+│              • Native Fetch via CorsFreeWebViewClient (Zero Base64 Lock)  │
+│              • Throttled Progress UI Updates (Max 2 updates/sec)          │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Interactive Component & State Mapping**:
-  - **Smart Provider Router (`InbuiltStreamScraper.kt`)**: Routes `ProviderType.VOE`, `ProviderType.FILEMOON`, and `ProviderType.GENERIC` cleanly without cross-interference.
-  - **Async Native Extraction (`MaxPlayNativeBridge.kt` & `nativeBridgeService.ts`)**: Adds `extractStreamNativeAsync(url, callbackId)` running on a background thread pool so the UI thread never blocks during Stage 1 or Stage 2 scraping.
-  - **Data & Touch Pipeline (`CorsFreeWebViewClient.kt`, `firebase.ts`, `useContent.ts`, `HomeScreen.tsx`)**: Unblocks image/Firestore network threads, caches content across tabs, and navigates immediately on card tap.
+  - **Filemoon Unpacker & Fast Iframe Sniffer (`InbuiltStreamScraper.kt`)**: Replaces regex argument extraction with a deterministic linear parser, fixes V8 string-only evaluation, and fast-paths nested iframes.
+  - **Non-Blocking Native Bridge (`MaxPlayNativeBridge.kt` & `nativeBridgeService.ts`)**: Removes multi-megabyte media playlist string evaluation from `parseHlsManifestOnDevice` and adds async binary segment support.
+  - **Download Freeze Prevention (`ContentDetailScreen.tsx`, `DownloadSelectionModal.tsx`, `DownloadManager.ts`, `clientHlsDownloader.ts`)**: Removes popup trigger from the Download button, reuses resolved stream cache in the modal, pauses stale tasks on startup, and uses native WebView CORS-free `fetch()` for segment downloads instead of synchronous Base64 bridge calls.

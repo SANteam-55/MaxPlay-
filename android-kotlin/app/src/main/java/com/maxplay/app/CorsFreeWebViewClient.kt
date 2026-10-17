@@ -90,11 +90,15 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
             val rawPath = uri.path ?: "/"
 
-            // 1a. Native on-device /api/proxy?url=... handler (Zero CORS, Zero Cloud Timeout!)
+            // 1a. Native on-device /api/proxy?url=... handler (Zero CORS, Zero Cloud Timeout, Zero UI Thread Lock!)
             if (rawPath == "/api/proxy") {
                 val targetUrl = uri.getQueryParameter("url")
+                val explicitReferer = uri.getQueryParameter("referer")
                 if (!targetUrl.isNullOrBlank()) {
-                    return proxyExternalUrlWithOkHttp(targetUrl, request)
+                    if (!explicitReferer.isNullOrBlank()) {
+                        registerStreamReferer(targetUrl, explicitReferer)
+                    }
+                    return proxyExternalUrlWithOkHttp(targetUrl, request, explicitReferer)
                 }
             }
 
@@ -209,13 +213,18 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
     private fun proxyExternalUrlWithOkHttp(
         targetUrl: String,
-        request: WebResourceRequest
+        request: WebResourceRequest,
+        explicitReferer: String? = null
     ): WebResourceResponse? {
         return try {
             val parsedTarget = android.net.Uri.parse(targetUrl)
             val host = parsedTarget.host ?: ""
             val scheme = parsedTarget.scheme ?: "https"
-            val customReferer = resolveRefererForHost(host, scheme)
+            val customReferer = if (!explicitReferer.isNullOrBlank()) {
+                explicitReferer
+            } else {
+                resolveRefererForHost(host, scheme)
+            }
             val customOrigin = try {
                 val refUri = android.net.Uri.parse(customReferer)
                 "${refUri.scheme ?: "https"}://${refUri.host ?: host}"

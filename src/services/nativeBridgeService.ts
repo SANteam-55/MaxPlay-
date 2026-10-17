@@ -103,6 +103,23 @@ export class NativeBridgeService {
       return null;
     }
     try {
+      // Priority 1: Stream directly through CorsFreeWebViewClient's /api/proxy (runs 100% on Chromium IO thread, zero evaluateJavascript UI overhead!)
+      try {
+        const refParam = headers['Referer'] || headers['referer']
+          ? `&referer=${encodeURIComponent(headers['Referer'] || headers['referer'])}`
+          : '';
+        const proxyResp = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}${refParam}`, {
+          headers,
+        });
+        if (proxyResp.ok) {
+          const text = await proxyResp.text();
+          if (text && text.length > 0) {
+            return text;
+          }
+        }
+      } catch {}
+
+      // Priority 2: Fallback to async JavascriptInterface callback
       let rawJson: string | null = null;
       if (typeof window.MaxPlayNative.fetchUrlCorsFreeAsync === 'function') {
         rawJson = await new Promise<string | null>((resolve) => {
@@ -112,7 +129,7 @@ export class NativeBridgeService {
               delete window.__maxplaySnifferCallbacks[cbId];
             }
             resolve(null);
-          }, 15000);
+          }, 8000);
 
           window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
             clearTimeout(timer);
@@ -125,11 +142,6 @@ export class NativeBridgeService {
             cbId
           );
         });
-      } else if (typeof window.MaxPlayNative.fetchUrlCorsFree === 'function') {
-        rawJson = window.MaxPlayNative.fetchUrlCorsFree(
-          targetUrl,
-          JSON.stringify(headers)
-        );
       }
 
       if (!rawJson) return null;
@@ -145,30 +157,30 @@ export class NativeBridgeService {
   }
 
   /**
-   * Fetches binary video segment (.ts / .m4s) via Kotlin OkHttp with zero CORS restrictions.
+   * Fetches binary video segment (.ts / .m4s) asynchronously via CorsFreeWebViewClient's native OkHttp stream
+   * (100% off the UI thread, zero synchronous Base64 / atob freeze!).
    */
   public static async fetchBytesCorsFree(
     targetUrl: string,
     headers: Record<string, string> = {}
   ): Promise<Uint8Array | null> {
-    if (!this.isRunningInKotlinApp() || !window.MaxPlayNative?.fetchBytesBase64CorsFree) {
+    if (!this.isRunningInKotlinApp()) {
       return null;
     }
     try {
-      const b64 = window.MaxPlayNative.fetchBytesBase64CorsFree(
-        targetUrl,
-        JSON.stringify(headers)
-      );
-      if (!b64 || b64.startsWith('ERROR:')) {
-        return null;
+      const refParam = headers['Referer'] || headers['referer']
+        ? `&referer=${encodeURIComponent(headers['Referer'] || headers['referer'])}`
+        : '';
+      const resp = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}${refParam}`, {
+        headers,
+      });
+      if (resp.ok) {
+        const buf = await resp.arrayBuffer();
+        if (buf.byteLength > 0) {
+          return new Uint8Array(buf);
+        }
       }
-      const binaryString = atob(b64);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes.byteLength > 0 ? bytes : null;
+      return null;
     } catch (err) {
       console.warn('[NativeBridge] fetchBytesCorsFree error:', err);
       return null;
@@ -176,7 +188,7 @@ export class NativeBridgeService {
   }
 
   /**
-   * Runs the inbuilt Kotlin stream scraper (OkHttp + V8 Unpacker + Headless WebView Sniffer fallback)
+   * Runs the inbuilt Kotlin stream scraper (OkHttp + Deterministic Packer Unpacker + Headless WebView Sniffer fallback)
    * completely asynchronously so the UI never freezes.
    */
   public static async extractStreamNative(
@@ -188,7 +200,7 @@ export class NativeBridgeService {
     }
 
     try {
-      // Step 1: Non-blocking Native OkHttp + V8 Unpacker Scrape
+      // Step 1: Non-blocking Native OkHttp + Deterministic Packer Unpacker Scrape (1-3s)
       let scrapeData: any = null;
       if (typeof window.MaxPlayNative.extractStreamNativeAsync === 'function') {
         scrapeData = await new Promise<any>((resolve) => {
@@ -198,7 +210,7 @@ export class NativeBridgeService {
               delete window.__maxplaySnifferCallbacks[cbId];
             }
             resolve(null);
-          }, 16000);
+          }, 9000);
 
           window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
             clearTimeout(timer);
@@ -218,7 +230,7 @@ export class NativeBridgeService {
         }
       }
 
-      // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution
+      // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution (capped at 9s)
       if ((!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) && window.MaxPlayNative.sniffStreamAsync) {
         scrapeData = await new Promise<any>((resolve) => {
           const cbId = 'sniff_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -227,7 +239,7 @@ export class NativeBridgeService {
               delete window.__maxplaySnifferCallbacks[cbId];
             }
             resolve(null);
-          }, 25000);
+          }, 9500);
 
           window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
             clearTimeout(timer);
@@ -238,7 +250,7 @@ export class NativeBridgeService {
             }
           };
 
-          window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 24000);
+          window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 9000);
         });
       }
 
@@ -249,7 +261,7 @@ export class NativeBridgeService {
       const masterUrl: string = scrapeData.m3u8Url;
       const customHeaders: Record<string, string> = scrapeData.headers || {};
 
-      // Step 3: Parse Master HLS Playlist directly via Native CORS-free OkHttp
+      // Step 3: Parse Master HLS Playlist directly via Native CORS-free stream
       const meta = await this.parseHlsManifestOnDevice(
         masterUrl,
         customHeaders,
@@ -274,7 +286,7 @@ export class NativeBridgeService {
   }
 
   /**
-   * Parses HLS Master & Media Playlists on the user's device without CORS limits.
+   * Parses HLS Master Playlist on the user's device without CORS limits and without fetching heavy sub-playlists.
    */
   public static async parseHlsManifestOnDevice(
     m3u8Url: string,
@@ -397,19 +409,13 @@ export class NativeBridgeService {
         }
       }
 
-      // Duration calculation
+      // Fast duration calculation without downloading a second 1MB media playlist
       let detectedDuration = durationSec > 0 ? durationSec : 0;
-      let sampleMediaPlaylist = text.includes('#EXTINF:') ? text : '';
-      if (!sampleMediaPlaylist && Object.values(qualityLinks).length > 0) {
-        const subText = await this.fetchTextCorsFree(Object.values(qualityLinks)[0], headers);
-        if (subText) sampleMediaPlaylist = subText;
-      }
-
-      if (sampleMediaPlaylist) {
+      if (text.includes('#EXTINF:')) {
         let segSum = 0;
         const extinfRegex = /#EXTINF:(\d+(?:\.\d+)?)/g;
         let eMatch: RegExpExecArray | null;
-        while ((eMatch = extinfRegex.exec(sampleMediaPlaylist)) !== null) {
+        while ((eMatch = extinfRegex.exec(text)) !== null) {
           segSum += parseFloat(eMatch[1]);
         }
         if (segSum > 5) {

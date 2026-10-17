@@ -2140,7 +2140,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             return (
               <button 
                 onClick={() => {
-                  adManager.handleActionDockClick(!!user?.isPremium);
                   if (!isContentHlsSupported) {
                     setToastMessage("Download is only available for HLS Mode content. Normal links do not support offline downloading.");
                     setTimeout(() => setToastMessage(null), 3500);

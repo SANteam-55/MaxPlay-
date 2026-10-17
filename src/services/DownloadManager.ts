@@ -72,14 +72,23 @@ class DownloadManager {
     try {
       const savedTasks = localStorage.getItem(STORAGE_KEY_TASKS);
       if (savedTasks) {
-        this.tasks = JSON.parse(savedTasks);
-        // Reset any interrupted 'downloading' tasks to 'queued' on page reload
-        this.tasks.forEach((t) => {
-          if (t.status === 'downloading') {
-            t.status = 'queued';
-            t.downloadSpeedMb = 0;
+        const parsed = JSON.parse(savedTasks);
+        if (Array.isArray(parsed)) {
+          this.tasks = parsed;
+          // Auto-heal on startup: pause any interrupted 'downloading' or 'queued' tasks from a previous session
+          // so reopening the app NEVER auto-starts heavy background scraping/downloads on boot.
+          let healed = false;
+          this.tasks.forEach((t) => {
+            if (t.status === 'downloading' || t.status === 'queued') {
+              t.status = 'paused';
+              t.downloadSpeedMb = 0;
+              healed = true;
+            }
+          });
+          if (healed) {
+            localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(this.tasks));
           }
-        });
+        }
       }
       const savedCompleted = localStorage.getItem(STORAGE_KEY_COMPLETED);
       if (savedCompleted) {
@@ -112,7 +121,8 @@ class DownloadManager {
 
   private notify() {
     this.saveToStorage();
-    this.listeners.forEach((cb) => cb([...this.tasks]));
+    const snapshot = [...this.tasks];
+    this.listeners.forEach((cb) => cb(snapshot));
   }
 
   private startQueueWorker() {

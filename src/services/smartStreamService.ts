@@ -192,6 +192,15 @@ export class SmartStreamService {
   }
 
   /**
+   * Public synchronous lookup for already-resolved cached stream URL (0ms for Download Modal).
+   */
+  public static getCachedStreamUrl(sourceUrl: string): string | null {
+    if (!sourceUrl || !sourceUrl.trim()) return null;
+    const cached = this.getClientCache(sourceUrl.trim());
+    return cached?.m3u8Url || null;
+  }
+
+  /**
    * Invalidate cached token for a source URL (e.g. when playback error happens).
    */
   public static clearClientCache(sourceUrl: string): void {
@@ -204,10 +213,18 @@ export class SmartStreamService {
     }
   }
 
+  private static inFlightMap = new Map<string, Promise<{
+    streamUrl: string;
+    isExtracted: boolean;
+    cached: boolean;
+    isEmbed?: boolean;
+    expiresAt?: number;
+  }>>();
+
   /**
    * Resolves a video source URL into a playable Master m3u8 URL.
    * If the URL is already an m3u8 or mp4, it returns it directly.
-   * If it is an extractable source (e.g. VOE), it calls the MaxPlay backend proxy.
+   * If it is an extractable source (e.g. VOE / Filemoon), it uses the on-device scraper or backend proxy.
    */
   public static async resolveStream(
     sourceUrl: string,
@@ -247,8 +264,32 @@ export class SmartStreamService {
           expiresAt: cached.expiresAt
         };
       }
+
+      const existingInFlight = this.inFlightMap.get(trimmed);
+      if (existingInFlight) {
+        return existingInFlight;
+      }
     }
 
+    const taskPromise = this.resolveStreamInternal(trimmed, options);
+    this.inFlightMap.set(trimmed, taskPromise);
+    try {
+      return await taskPromise;
+    } finally {
+      this.inFlightMap.delete(trimmed);
+    }
+  }
+
+  private static async resolveStreamInternal(
+    trimmed: string,
+    options: { forceRefresh?: boolean } = {}
+  ): Promise<{
+    streamUrl: string;
+    isExtracted: boolean;
+    cached: boolean;
+    isEmbed?: boolean;
+    expiresAt?: number;
+  }> {
     // 1.5 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Headless Sniffer (Zero CORS)
     if (NativeBridgeService.isRunningInKotlinApp()) {
       try {

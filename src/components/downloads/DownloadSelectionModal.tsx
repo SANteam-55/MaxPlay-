@@ -135,10 +135,27 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     if (!targetUrl || typeof targetUrl !== 'string') return;
 
     const requestedDur = Number(activeEp?.duration || content.duration || 0);
-    setIsProbing(true);
 
-    const runProbe = async () => {
+    // Defer probe by 300ms so modal open animation and touch listeners mount with 0ms delay
+    const deferTimer = setTimeout(async () => {
+      if (isCancelled) return;
+      setIsProbing(true);
       try {
+        // Fast-Path 0: Reuse already-resolved .m3u8 URL from SmartStreamService cache if player already extracted it!
+        const cachedM3u8 = SmartStreamService.getCachedStreamUrl(targetUrl);
+        if (cachedM3u8 && NativeBridgeService.isRunningInKotlinApp()) {
+          const fastMeta = await NativeBridgeService.parseHlsManifestOnDevice(cachedM3u8, {}, requestedDur);
+          if (!isCancelled && fastMeta) {
+            setExtractedMeta({
+              audioTracks: fastMeta.audioTracks,
+              qualities: fastMeta.qualities,
+              downloadQualities: fastMeta.downloadQualities,
+              duration: fastMeta.duration,
+            });
+            return;
+          }
+        }
+
         // Priority 1: Inbuilt Native Kotlin Scraper on Android APK (100% on-device, zero server/IP mismatch)
         if (NativeBridgeService.isRunningInKotlinApp()) {
           const nativeMeta = await NativeBridgeService.extractStreamNative(targetUrl, requestedDur);
@@ -177,12 +194,11 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       } finally {
         if (!isCancelled) setIsProbing(false);
       }
-    };
-
-    runProbe();
+    }, 300);
 
     return () => {
       isCancelled = true;
+      clearTimeout(deferTimer);
     };
   }, [content, isSeries, focusedEpisodeIdx, currentEpisodes]);
 

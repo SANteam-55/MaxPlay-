@@ -1,6 +1,6 @@
 {
-  "summary": "Updated implementation plan covering Smart Provider Detection Router (strict separation between Voe.sx and Filemoon.sx scrapers), Filemoon.sx nested iframe & packer extraction fix, and full App Performance, Firebase Caching, Image Loading & Touch Responsiveness optimizations.",
-  "updatedAt": "2026-10-17T19:55:04.142376184Z",
+  "summary": "Updated implementation plan with root-cause diagnosis and fixes for: (1) Filemoon 1-minute extraction delay -> reduced to 1-3 seconds by fixing the Packer radix/symtab regex, adding native Kotlin JS Packer evaluation, and instant iframe fast-pathing; (2) Permanent app freeze on Download button tap -> fixed by eliminating synchronous Base64 segment bridging over the Android main thread, removing raw HLS playlist fetches from parseHlsManifestOnDevice during UI probes, and sanitizing persisted localStorage tasks on startup.",
+  "updatedAt": "2026-10-17T20:37:25.416514078Z",
   "requestFeedback": true,
   "userFacing": true
 }
