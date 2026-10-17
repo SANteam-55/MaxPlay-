@@ -24,8 +24,44 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         const val VIRTUAL_ASSET_HOST = "appassets.androidplatform.net"
         const val VIRTUAL_ASSET_ORIGIN = "https://appassets.androidplatform.net"
 
-        // Stores custom Referer/Origin headers discovered per stream host domain
+        // Stores custom Referer/Origin headers discovered per stream host domain & root domain
         val hostRefererMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+        @Volatile
+        var lastActiveReferer: String? = null
+
+        fun registerStreamReferer(streamUrl: String, refererUrl: String) {
+            if (refererUrl.isBlank()) return
+            lastActiveReferer = refererUrl
+            try {
+                val host = android.net.Uri.parse(streamUrl).host?.lowercase() ?: return
+                hostRefererMap[host] = refererUrl
+                val root = extractRootDomain(host)
+                if (root.isNotEmpty()) {
+                    hostRefererMap[root] = refererUrl
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        fun resolveRefererForHost(host: String, fallbackScheme: String = "https"): String {
+            val cleanHost = host.lowercase()
+            hostRefererMap[cleanHost]?.let { return it }
+            val root = extractRootDomain(cleanHost)
+            if (root.isNotEmpty()) {
+                hostRefererMap[root]?.let { return it }
+            }
+            return lastActiveReferer ?: "$fallbackScheme://$host/"
+        }
+
+        private fun extractRootDomain(host: String): String {
+            val parts = host.split(".")
+            return if (parts.size >= 2) {
+                parts.takeLast(2).joinToString(".")
+            } else {
+                host
+            }
+        }
     }
 
     override fun shouldInterceptRequest(
@@ -138,13 +174,20 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val parsedTarget = android.net.Uri.parse(targetUrl)
             val host = parsedTarget.host ?: ""
             val scheme = parsedTarget.scheme ?: "https"
-            val customReferer = hostRefererMap[host] ?: "$scheme://$host/"
+            val customReferer = resolveRefererForHost(host, scheme)
+            val customOrigin = try {
+                val refUri = android.net.Uri.parse(customReferer)
+                "${refUri.scheme ?: "https"}://${refUri.host ?: host}"
+            } catch (_: Exception) {
+                "$scheme://$host"
+            }
 
             val okReqBuilder = Request.Builder()
                 .url(targetUrl)
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
                 .header("Accept", "*/*")
                 .header("Referer", customReferer)
+                .header("Origin", customOrigin)
 
             request.requestHeaders?.get("Range")?.let { rangeHeader ->
                 okReqBuilder.header("Range", rangeHeader)

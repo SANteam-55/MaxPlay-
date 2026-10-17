@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for adding a dedicated Native Kotlin Android wrapper and Inbuilt CORS-Free Stream Scraper & Extractor Bridge while keeping the existing MaxPlay Web App 100% untouched and protected.",
-  "updatedAt": "2026-10-17T15:25:40.121318053Z",
+  "summary": "Detailed implementation plan for MaxPlay's Inbuilt Kotlin Direct HLS Scraper (Voe.sx & Filemoon.sx) with zero proxy/playlist rewriting, attached offscreen WebView engine, automatic click/player polling, and sequential offline episode downloading.",
+  "updatedAt": "2026-10-17T18:33:05.915628968Z",
   "requestFeedback": true,
   "userFacing": true
 }

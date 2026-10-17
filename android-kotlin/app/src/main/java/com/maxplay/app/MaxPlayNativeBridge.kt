@@ -39,12 +39,9 @@ class MaxPlayNativeBridge(
         if (resultJson.optBoolean("ok")) {
             val m3u8Url = resultJson.optString("m3u8Url")
             val ref = resultJson.optJSONObject("headers")?.optString("Referer") ?: ""
-            try {
-                val host = java.net.URL(m3u8Url).host
-                if (host.isNotEmpty() && ref.isNotEmpty()) {
-                    CorsFreeWebViewClient.hostRefererMap[host] = ref
-                }
-            } catch (_: Exception) {}
+            if (m3u8Url.isNotEmpty() && ref.isNotEmpty()) {
+                CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+            }
         }
 
         return resultJson.toString()
@@ -56,12 +53,9 @@ class MaxPlayNativeBridge(
             if (resultJson.optBoolean("ok")) {
                 val m3u8Url = resultJson.optString("m3u8Url")
                 val ref = resultJson.optJSONObject("headers")?.optString("Referer") ?: ""
-                try {
-                    val host = java.net.URL(m3u8Url).host
-                    if (host.isNotEmpty() && ref.isNotEmpty()) {
-                        CorsFreeWebViewClient.hostRefererMap[host] = ref
-                    }
-                } catch (_: Exception) {}
+                if (m3u8Url.isNotEmpty() && ref.isNotEmpty()) {
+                    CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                }
             }
 
             val escapedJson = JSONObject.quote(resultJson.toString())
@@ -78,7 +72,7 @@ class MaxPlayNativeBridge(
         try {
             val headersMap = parseHeadersJson(headersJson)
             val host = try { java.net.URL(targetUrl).host } catch (_: Exception) { "" }
-            val defaultRef = CorsFreeWebViewClient.hostRefererMap[host] ?: "https://$host/"
+            val defaultRef = CorsFreeWebViewClient.resolveRefererForHost(host)
 
             val reqBuilder = Request.Builder()
                 .url(targetUrl)
@@ -107,7 +101,7 @@ class MaxPlayNativeBridge(
         return try {
             val headersMap = parseHeadersJson(headersJson)
             val host = try { java.net.URL(targetUrl).host } catch (_: Exception) { "" }
-            val defaultRef = CorsFreeWebViewClient.hostRefererMap[host] ?: "https://$host/"
+            val defaultRef = CorsFreeWebViewClient.resolveRefererForHost(host)
 
             val reqBuilder = Request.Builder()
                 .url(targetUrl)

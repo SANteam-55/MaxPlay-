@@ -25,21 +25,41 @@ export class SmartStreamService {
     if (!url || typeof url !== "string") return false;
     const lower = url.toLowerCase().trim();
 
-    // Already a direct MaxPlay backend proxy
-    if (lower.includes("/proxy/m3u8")) return false;
-    
-    // Recognised video hosters that require extraction
+    // Already a direct HLS master/media stream, MP4, blob, or MaxPlay backend proxy
+    if (
+      lower.includes("/proxy/m3u8") ||
+      lower.includes(".m3u8") ||
+      lower.includes(".mp4") ||
+      lower.startsWith("blob:")
+    ) {
+      return false;
+    }
+
+    // Recognised video hosters that require extraction (Voe, Filemoon, StreamWish, VidHide, etc.)
     if (
       lower.includes("voe.sx") ||
       lower.includes("voe.") ||
       lower.includes("voe-network") ||
       lower.includes("cloudwindow-route") ||
+      lower.includes("reputationsickler") ||
+      lower.includes("turtledoveconsequent") ||
+      lower.includes("launchreliantcleaverriver") ||
+      lower.includes("fraudclatterflyingcar") ||
+      lower.includes("321naturelikefur") ||
+      lower.includes("ralphysuccessfull") ||
       lower.includes("node=h0ke") ||
       lower.includes("filemoon.") ||
+      lower.includes("moonmov.") ||
+      lower.includes("kerapoxy.") ||
+      lower.includes("bysedikamoum.") ||
+      lower.includes("f16px.") ||
       lower.includes("streamwish.") ||
+      lower.includes("hlswish.") ||
+      lower.includes("playerwish.") ||
       lower.includes("vidhide.") ||
       lower.includes("dood.") ||
-      lower.includes("streamtape.")
+      lower.includes("streamtape.") ||
+      /https?:\/\/[^\/]+\/(?:e|d)\/[a-z0-9_-]{6,}/i.test(lower)
     ) {
       return true;
     }
@@ -52,7 +72,7 @@ export class SmartStreamService {
   }
 
   /**
-   * Helper to retrieve iframe embed URL for external hosters like VOE.
+   * Helper to retrieve iframe embed URL for external hosters like VOE / Filemoon.
    */
   public static getEmbedUrl(sourceUrl?: string): string | null {
     if (!sourceUrl || typeof sourceUrl !== "string") return null;
@@ -60,12 +80,26 @@ export class SmartStreamService {
     const lower = trimmed.toLowerCase();
 
     if (
+      lower.includes("filemoon.") ||
+      lower.includes("moonmov.") ||
+      lower.includes("kerapoxy.") ||
+      lower.includes("bysedikamoum.") ||
+      lower.includes("f16px.")
+    ) {
+      return trimmed.replace(/\/d\//i, "/e/");
+    }
+
+    if (
       lower.includes("voe.sx") ||
       lower.includes("voe.") ||
       lower.includes("voe-network") ||
       lower.includes("cloudwindow-route") ||
       lower.includes("reputationsickler") ||
-      lower.includes("turtledoveconsequent")
+      lower.includes("turtledoveconsequent") ||
+      lower.includes("launchreliantcleaverriver") ||
+      lower.includes("fraudclatterflyingcar") ||
+      lower.includes("321naturelikefur") ||
+      lower.includes("ralphysuccessfull")
     ) {
       if (trimmed.includes("/e/")) return trimmed;
       const match = trimmed.match(/https?:\/\/[^\/]+\/([a-zA-Z0-9_-]+)/);
@@ -115,6 +149,16 @@ export class SmartStreamService {
 
       const data: ClientCachedStream = JSON.parse(raw);
       const now = Date.now();
+
+      // In Kotlin native app, never reuse old server-proxied (/proxy/m3u8) URLs; always use direct .m3u8
+      if (
+        NativeBridgeService.isRunningInKotlinApp() &&
+        data?.m3u8Url &&
+        data.m3u8Url.includes("/proxy/m3u8")
+      ) {
+        this.clearClientCache(sourceUrl);
+        return null;
+      }
 
       // Ensure at least 5 minutes buffer before expiry
       if (data && data.m3u8Url && data.expiresAt > now + 5 * 60 * 1000) {

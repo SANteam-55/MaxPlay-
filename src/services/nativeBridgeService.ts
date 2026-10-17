@@ -179,7 +179,7 @@ export class NativeBridgeService {
               delete window.__maxplaySnifferCallbacks[cbId];
             }
             resolve(null);
-          }, 12000);
+          }, 25000);
 
           window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
             clearTimeout(timer);
@@ -190,7 +190,7 @@ export class NativeBridgeService {
             }
           };
 
-          window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 11000);
+          window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 24000);
         });
       }
 

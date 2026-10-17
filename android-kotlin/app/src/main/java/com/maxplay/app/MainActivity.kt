@@ -34,6 +34,8 @@ class MainActivity : AppCompatActivity() {
     private var customFullscreenView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
+    fun getScraperContainer(): ViewGroup = rootContainer
+
     companion object {
         // Primary entry: HTTPS virtual origin mapped to assets/webapp/ inside APK (avoids file:// ES module & path block!)
         const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"

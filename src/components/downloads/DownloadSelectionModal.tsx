@@ -3,6 +3,7 @@ import { X, Download, Check, Sparkles, Film, Tv, HardDrive, CheckSquare, Square,
 import { ContentItem } from '../../types';
 import { downloadManager } from '../../services/DownloadManager';
 import { SmartStreamService } from '../../services/smartStreamService';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface DownloadSelectionModalProps {
   visible: boolean;
@@ -133,18 +134,36 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
     if (!targetUrl || typeof targetUrl !== 'string') return;
 
+    const requestedDur = Number(activeEp?.duration || content.duration || 0);
     setIsProbing(true);
-    fetch('/api/extract-stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: targetUrl,
-        duration: activeEp?.duration || content.duration || 0,
-        forceRefresh: false,
-      }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
+
+    const runProbe = async () => {
+      try {
+        // Priority 1: Inbuilt Native Kotlin Scraper on Android APK (100% on-device, zero server/IP mismatch)
+        if (NativeBridgeService.isRunningInKotlinApp()) {
+          const nativeMeta = await NativeBridgeService.extractStreamNative(targetUrl, requestedDur);
+          if (!isCancelled && nativeMeta && nativeMeta.ok) {
+            setExtractedMeta({
+              audioTracks: nativeMeta.audioTracks,
+              qualities: nativeMeta.qualities,
+              downloadQualities: nativeMeta.downloadQualities,
+              duration: nativeMeta.duration,
+            });
+            return;
+          }
+        }
+
+        // Priority 2: Server endpoint fallback (for Web Browser)
+        const res = await fetch('/api/extract-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: targetUrl,
+            duration: requestedDur,
+            forceRefresh: false,
+          }),
+        });
+        const data = await res.json();
         if (!isCancelled && data.ok) {
           setExtractedMeta({
             audioTracks: data.audioTracks,
@@ -153,13 +172,14 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
             duration: data.duration,
           });
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[DownloadModal] Stream probe warning:', err);
-      })
-      .finally(() => {
+      } finally {
         if (!isCancelled) setIsProbing(false);
-      });
+      }
+    };
+
+    runProbe();
 
     return () => {
       isCancelled = true;
