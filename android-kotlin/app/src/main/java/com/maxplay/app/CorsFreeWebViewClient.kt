@@ -184,12 +184,15 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             return null
         }
 
-        // 3. Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s) to inject Referer & CORS headers
+        // 3. Intercept external HLS manifests (.m3u8) and segments (.ts, .m4s, /hls2/) to inject Referer & CORS headers
         val lower = reqUrl.lowercase()
         val isHlsOrSegment =
             lower.contains(".m3u8") ||
                 path.endsWith(".ts") ||
                 path.endsWith(".m4s") ||
+                lower.contains("/hls2/") ||
+                host.contains("sprintcdn") ||
+                host.contains("owphbf") ||
                 lower.contains("master.txt") ||
                 lower.contains("urlset")
 

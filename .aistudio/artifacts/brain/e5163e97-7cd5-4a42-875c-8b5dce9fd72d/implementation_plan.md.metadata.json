@@ -1,6 +1,6 @@
 {
-  "summary": "Updated implementation plan with root-cause diagnosis and fixes for: (1) Filemoon 1-minute extraction delay -> reduced to 1-3 seconds by fixing the Packer radix/symtab regex, adding native Kotlin JS Packer evaluation, and instant iframe fast-pathing; (2) Permanent app freeze on Download button tap -> fixed by eliminating synchronous Base64 segment bridging over the Android main thread, removing raw HLS playlist fetches from parseHlsManifestOnDevice during UI probes, and sanitizing persisted localStorage tasks on startup.",
-  "updatedAt": "2026-10-17T20:37:25.416514078Z",
+  "summary": "Implementation plan for Filemoon Byse/F16Px AES-GCM + Packer Scraper Engine, Content Detail Screen Button #4 Server Selector (Server 1 Voe.sx / Server 2 Filemoon), and Admin Panel Dual-Server Episode & Movie Link Inputs.",
+  "updatedAt": "2026-10-18T07:54:18.982339452Z",
   "requestFeedback": true,
   "userFacing": true
 }

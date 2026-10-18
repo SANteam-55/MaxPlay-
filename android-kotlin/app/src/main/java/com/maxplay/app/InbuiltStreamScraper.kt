@@ -17,22 +17,35 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLDecoder
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.KeyPairGenerator
+import java.security.SecureRandom
+import java.security.Signature
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
- * MaxPlay Inbuilt Kotlin Direct Stream Scraper Engine (Voe.sx & Filemoon.sx)
+ * MaxPlay Inbuilt Kotlin Direct Stream Scraper Engine (Voe.sx & Filemoon.sx / Byse)
  * ----------------------------------------------------------------------
  * Includes a 2-Layer Smart Provider Detection Router (`ProviderType.VOE` vs `ProviderType.FILEMOON`)
- * so Voe.sx links and Filemoon.sx links never collide and always execute their dedicated pipeline:
+ * so Voe.sx links and Filemoon.sx / Byse links never collide and always execute their dedicated pipeline:
  *
  * 1. VOE.SX Dedicated Pipeline (100% Preserved & Verified):
  *    - Normalizes /{code} -> /e/{code} across voe.sx and rotating Voe mirror domains
@@ -40,14 +53,13 @@ import java.util.regex.Pattern
  *    - Decodes VOE ROT13 + symbol-strip + Base64 + charShift(-3) + reverse + Base64 JSON payloads
  *    - Decodes wc0 / Base64 JSON configs
  *
- * 2. FILEMOON.SX Dedicated Pipeline (Upgraded with V8 Packer Unpacker + Iframe Unwrapper):
- *    - Normalizes /d/{code} -> /e/{code} across filemoon.sx and Filemoon mirror domains
- *    - Follows nested player <iframe src="..."> (/bkg/, kerapoxy, moonmov, bysedikamoum, f16px)
- *      with Sec-Fetch-Dest: iframe & Referer headers
- *    - Unpacks eval(function(p,a,c,k,e,d)...) using BOTH real V8 JS evaluation (`eval(block.replace(/^eval/, ''))`)
- *      and escaped-quote-safe Kotlin regex unpacker
- *    - Stage 2 640x360 Offscreen WebView Sniffer preserves child iframe hierarchy (window.top !== window.self),
- *      strips ad overlays, clicks (320, 180), intercepts .m3u8 & ?mu= requests, and inspects JWPlayer
+ * 2. FILEMOON.SX / BYSE Dedicated Pipeline (Byse API + ECDSA + PoW + AES-256-GCM + V8 Packer + Iframe):
+ *    - Stage 2A (Byse / F16Px / byseraguci.com / n1mwq.org API):
+ *      Calls /api/videos/{code}/embed/details -> ECDSA P-256 /access/challenge & /access/attest ->
+ *      /embed/playback (with automatic deterministic ChaCha-like PoW captcha solver if HTTP 428) ->
+ *      AES-256-GCM payload decryption -> Direct Master .m3u8 URL in ~0.8s-2.0s!
+ *    - Stage 2B (Classic Filemoon /e/ -> /bkg/ + V8 / Kotlin Packer Unpacker)
+ *    - Stage 2C (640x360 Offscreen WebView Sniffer fallback)
  */
 class InbuiltStreamScraper(
     private val activity: Activity,
@@ -73,6 +85,9 @@ class InbuiltStreamScraper(
 
         val backgroundExecutor = Executors.newCachedThreadPool()
 
+        // Caches Byse ECDSA attestation fingerprint JSON per embedOrigin for 4 minutes
+        private val byseAttestCache = ConcurrentHashMap<String, Pair<JSONObject, Long>>()
+
         private val VOE_DOMAIN_KEYWORDS = listOf(
             "voe.sx", "voe.", "reputationsickler", "turtledoveconsequent",
             "launchreliantcleaverriver", "fraudclatterflyingcar", "321naturelikefur",
@@ -83,8 +98,8 @@ class InbuiltStreamScraper(
         )
 
         private val FILEMOON_DOMAIN_KEYWORDS = listOf(
-            "filemoon", "moonmov", "kerapoxy", "bysedikamoum",
-            "f16px", "1azayf9w", "8mhlloqo", "96ar.com", "xcoic.com", "l1afav.net"
+            "filemoon", "moonmov", "kerapoxy", "bysedikamoum", "byseraguci",
+            "byse", "n1mwq", "f16px", "1azayf9w", "8mhlloqo", "96ar.com", "xcoic.com", "l1afav.net"
         )
 
         private val AD_KEYWORDS = listOf(
@@ -115,10 +130,11 @@ class InbuiltStreamScraper(
                 return ProviderType.VOE
             }
 
-            // Layer 1B: Explicit Filemoon domain or /d/ or /bkg/ path match
+            // Layer 1B: Explicit Filemoon / Byse domain or /d/, /bkg/, /wz28/ path match
             if (FILEMOON_DOMAIN_KEYWORDS.any { host.contains(it) } ||
                 path.startsWith("/d/") ||
-                path.startsWith("/bkg/")
+                path.startsWith("/bkg/") ||
+                path.startsWith("/wz28/")
             ) {
                 return ProviderType.FILEMOON
             }
@@ -138,6 +154,7 @@ class InbuiltStreamScraper(
             val hasFilemoonSignature =
                 html.contains("eval(function(p,a,c,k,e,") ||
                     lowerHtml.contains("filemoon") ||
+                    lowerHtml.contains("byse") ||
                     lowerHtml.contains("/bkg/") ||
                     lowerHtml.contains("jwplayer")
 
@@ -289,10 +306,19 @@ class InbuiltStreamScraper(
 
     /**
      * =========================================================================
-     * PIPELINE 2: DEDICATED FILEMOON.SX SCRAPER (Iframe Unwrap + V8 Packer)
+     * PIPELINE 2: DEDICATED FILEMOON.SX / BYSE SCRAPER
+     * Stage 2A: Byse / F16Px API + ECDSA P-256 Attestation + PoW + AES-256-GCM
+     * Stage 2B: Classic Filemoon /e/ -> /bkg/ + V8 / Kotlin Packer Unpacker
      * =========================================================================
      */
     private fun scrapeFilemoonPipeline(sourceUrl: String, customHeaders: Map<String, String>): JSONObject {
+        // STAGE 2A: Try Byse / F16Px API Direct Decryption first (~0.8s - 2.0s)
+        val byseRes = extractByseApiStream(sourceUrl)
+        if (byseRes != null) {
+            return byseRes
+        }
+
+        // STAGE 2B: Classic Filemoon HTML /e/ -> /bkg/ + V8 Packer Unpacker
         val normalizedUrl = normalizeProviderUrl(sourceUrl, ProviderType.FILEMOON)
         try {
             var currentUrl = normalizedUrl
@@ -331,6 +357,12 @@ class InbuiltStreamScraper(
                 if (html.isBlank()) break
 
                 currentUrl = finalHopUrl
+
+                // If redirected to a new Byse mirror domain, try Byse API on finalHopUrl
+                val hopByseRes = extractByseApiStream(currentUrl)
+                if (hopByseRes != null) {
+                    return hopByseRes
+                }
 
                 // Try extracting Filemoon .m3u8 on the current page (via V8 Packer + Kotlin Packer + direct regex)
                 val extractedNow = extractFilemoonM3u8FromHtml(html, currentUrl)
@@ -377,6 +409,520 @@ class InbuiltStreamScraper(
                 put("error", e.message ?: "Filemoon OkHttp exception")
             }
         }
+    }
+
+    /**
+     * Direct Byse / Filemoon (byseraguci.com / n1mwq.org / f16px.com) API Extractor:
+     * Performs ECDSA P-256 Attestation + Deterministic ChaCha-like PoW Captcha Solver + AES-256-GCM Decryption.
+     */
+    private fun extractByseApiStream(sourceUrl: String): JSONObject? {
+        return try {
+            val uri = android.net.Uri.parse(sourceUrl.trim())
+            val scheme = uri.scheme ?: "https"
+            val host = uri.host ?: return null
+            val origin = "$scheme://$host"
+            val segs = (uri.path ?: "").split("/").filter { it.isNotBlank() }
+            if (segs.isEmpty()) return null
+            val code = if (segs.size >= 2 && segs[0].lowercase() in listOf("d", "e", "g", "bkg", "wz28")) {
+                segs[1]
+            } else {
+                segs.last()
+            }
+            if (code.length < 6 || code.contains(".")) return null
+
+            val detailsReq = Request.Builder()
+                .url("$origin/api/videos/$code/embed/details")
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .header("Accept", "application/json")
+                .header("Referer", "$origin/e/$code")
+                .build()
+
+            val detailsResp = okHttpClient.newCall(detailsReq).execute()
+            if (!detailsResp.isSuccessful) return null
+            val detailsStr = detailsResp.body?.string() ?: return null
+            val detailsJson = JSONObject(detailsStr)
+
+            val embedFrameUrl = detailsJson.optString("embed_frame_url", "$origin/e/$code")
+            val embedUri = android.net.Uri.parse(embedFrameUrl)
+            val embedOrigin = "${embedUri.scheme ?: "https"}://${embedUri.host ?: host}"
+
+            val now = System.currentTimeMillis()
+            val cachedAttest = byseAttestCache[embedOrigin]
+            var fingerprint: JSONObject? = if (cachedAttest != null && cachedAttest.second > now) {
+                cachedAttest.first
+            } else {
+                null
+            }
+
+            val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+            if (fingerprint == null) {
+                val kpg = KeyPairGenerator.getInstance("EC")
+                kpg.initialize(ECGenParameterSpec("secp256r1"))
+                val kp = kpg.generateKeyPair()
+                val ecPub = kp.public as ECPublicKey
+                val xBytes = bigIntTo32Bytes(ecPub.w.affineX)
+                val yBytes = bigIntTo32Bytes(ecPub.w.affineY)
+                val rawPub = ByteArray(65)
+                rawPub[0] = 0x04
+                System.arraycopy(xBytes, 0, rawPub, 1, 32)
+                System.arraycopy(yBytes, 0, rawPub, 33, 32)
+                val pubKeyB64Url = b64UrlEncode(rawPub)
+
+                val sr = SecureRandom()
+                val devBytes = ByteArray(16).also { sr.nextBytes(it) }
+                val viewBytes = ByteArray(16).also { sr.nextBytes(it) }
+                val deviceId = b64UrlEncode(devBytes)
+                val viewerId = b64UrlEncode(viewBytes)
+
+                val chBody = JSONObject().apply {
+                    put("device_id", deviceId)
+                    put("public_key", pubKeyB64Url)
+                    put("purpose", "watch")
+                }.toString().toRequestBody(jsonMediaType)
+
+                val chReq = Request.Builder()
+                    .url("$embedOrigin/api/videos/access/challenge")
+                    .post(chBody)
+                    .header("User-Agent", DEFAULT_USER_AGENT)
+                    .header("Origin", embedOrigin)
+                    .header("Referer", embedFrameUrl)
+                    .build()
+
+                val chResp = okHttpClient.newCall(chReq).execute()
+                if (chResp.isSuccessful) {
+                    val chJson = JSONObject(chResp.body?.string() ?: "{}")
+                    val challengeStr = chJson.optString("challenge", "")
+                    if (challengeStr.isNotEmpty()) {
+                        val signer = Signature.getInstance("SHA256withECDSA")
+                        signer.initSign(kp.private)
+                        signer.update(challengeStr.toByteArray(Charsets.UTF_8))
+                        val derSig = signer.sign()
+                        val p1363Sig = derToP1363(derSig)
+                        val sigB64Url = b64UrlEncode(p1363Sig)
+
+                        val signals = JSONObject().apply {
+                            put("platform", "Win32")
+                            put("language", "en-US")
+                            put("languages", org.json.JSONArray().put("en-US").put("en"))
+                            put("timezone", "Asia/Kolkata")
+                            put("tz_offset", -330)
+                            put("hw_concurrency", 8)
+                            put("device_memory", 8)
+                            put("screen_w", 1920)
+                            put("screen_h", 1080)
+                            put("avail_w", 1920)
+                            put("avail_h", 1040)
+                            put("color_depth", 24)
+                            put("pixel_ratio", 1)
+                            put("max_touch", 0)
+                            put("touch_event", false)
+                            put("has_coarse_pointer", false)
+                            put("has_hover", true)
+                            put("cookie_enabled", true)
+                            put("do_not_track", "")
+                            put("pdf_viewer", true)
+                            put("webdriver", false)
+                            put("ua_ch_mobile", false)
+                            put("ua_ch_platform", "Windows")
+                            put("ua_ch_brands", "Chromium:124,Google Chrome:124,Not-A.Brand:99")
+                            put("ua_ch_arch", "x86")
+                            put("ua_ch_bitness", "64")
+                            put("ua_ch_model", "")
+                            put("ua_ch_platform_version", "15.0.0")
+                            put("brand_full_versions", "Chromium:124.0.6367.118,Google Chrome:124.0.6367.118,Not-A.Brand:99.0.0.0")
+                            put("webgl_vendor", "Google Inc. (NVIDIA)")
+                            put("webgl_renderer", "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)")
+                            put("webgl_version", "WebGL 1.0 (OpenGL ES 2.0 Chromium)")
+                            put("webgl_shading", "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)")
+                            put("webgl_ext_count", 38)
+                            put("webgl_max_texture", 16384)
+                            put("canvas_hash", "7f4e9a2c")
+                            put("audio_hash", "124.04347527516074")
+                            put("math_hash", "a91c3e08")
+                            put("speech_voices", 4)
+                            put("media_Summary", "ai:1,ao:1,vi:1")
+                            put("storage_quota_mb", 299985)
+                            put("heap_limit_mb", 4096)
+                            put("conn_type", "4g")
+                            put("conn_downlink", 10)
+                            put("conn_rtt", 50)
+                            put("conn_save_data", false)
+                            put("prefers_dark", true)
+                            put("prefers_reduced_motion", false)
+                            put("forced_colors", false)
+                            put("color_gamut", "srgb")
+                            put("hdr", false)
+                            put("automation_flags", org.json.JSONArray())
+                            put("headless_hints", org.json.JSONArray())
+                            put("in_iframe", true)
+                            put("outer_zero", false)
+                            put("outer_diff_w", 0)
+                            put("outer_diff_h", 40)
+                            put("screen_avail_gt", false)
+                            put("has_chrome_obj", true)
+                            put("has_chrome_runtime", false)
+                            put("plugins_len", 5)
+                            put("mime_types_len", 2)
+                            put("perm_notif", "default")
+                            put("doc_hidden", false)
+                            put("visibility", "visible")
+                            put("history_len", 2)
+                        }
+
+                        val attBody = JSONObject().apply {
+                            put("challenge", challengeStr)
+                            put("signature", sigB64Url)
+                            put("purpose", "watch")
+                            put("viewer_id", viewerId)
+                            put("device_id", deviceId)
+                            put("public_key", pubKeyB64Url)
+                            put("signals", signals)
+                        }.toString().toRequestBody(jsonMediaType)
+
+                        val attReq = Request.Builder()
+                            .url("$embedOrigin/api/videos/access/attest")
+                            .post(attBody)
+                            .header("User-Agent", DEFAULT_USER_AGENT)
+                            .header("Origin", embedOrigin)
+                            .header("Referer", embedFrameUrl)
+                            .build()
+
+                        val attResp = okHttpClient.newCall(attReq).execute()
+                        if (attResp.isSuccessful) {
+                            val attJson = JSONObject(attResp.body?.string() ?: "{}")
+                            fingerprint = JSONObject().apply {
+                                put("viewer_id", attJson.optString("viewer_id", viewerId))
+                                put("device_id", attJson.optString("device_id", deviceId))
+                                put("confidence", attJson.optDouble("confidence", 0.9))
+                                put("token", attJson.optString("token", ""))
+                            }
+                            byseAttestCache[embedOrigin] = Pair(fingerprint!!, now + 4 * 60 * 1000L)
+                        }
+                    }
+                }
+            }
+
+            if (fingerprint == null) return null
+
+            val pbPayloadStr = JSONObject().apply {
+                put("fingerprint", fingerprint)
+            }.toString()
+
+            var pbReq = Request.Builder()
+                .url("$embedOrigin/api/videos/$code/embed/playback")
+                .post(pbPayloadStr.toRequestBody(jsonMediaType))
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .header("Origin", embedOrigin)
+                .header("Referer", embedFrameUrl)
+                .build()
+
+            var pbResp = okHttpClient.newCall(pbReq).execute()
+            var pbBodyStr = pbResp.body?.string() ?: "{}"
+            var pbJson = JSONObject(pbBodyStr)
+
+            // Handle HTTP 428 Captcha PoW Challenge automatically
+            if (pbResp.code == 428 || pbJson.optString("error") == "captcha_required") {
+                val capChBody = JSONObject().apply {
+                    put("purpose", "embed")
+                    put("viewer_id", fingerprint.optString("viewer_id"))
+                    put("device_id", fingerprint.optString("device_id"))
+                }.toString().toRequestBody(jsonMediaType)
+
+                val capChReq = Request.Builder()
+                    .url("$embedOrigin/api/videos/$code/embed/captcha/challenge")
+                    .post(capChBody)
+                    .header("User-Agent", DEFAULT_USER_AGENT)
+                    .header("Origin", embedOrigin)
+                    .header("Referer", embedFrameUrl)
+                    .build()
+
+                val capChResp = okHttpClient.newCall(capChReq).execute()
+                if (capChResp.isSuccessful) {
+                    val capChJson = JSONObject(capChResp.body?.string() ?: "{}")
+                    val nonceB64 = capChJson.optString("nonce", "")
+                    val difficulty = capChJson.optInt("difficulty", 16)
+                    val challengeId = capChJson.optString("challenge_id", "")
+
+                    if (nonceB64.isNotEmpty() && challengeId.isNotEmpty()) {
+                        val solutionStr = solveBysePow(nonceB64, difficulty)
+                        val capVerBody = JSONObject().apply {
+                            put("challenge_id", challengeId)
+                            put("solution", solutionStr)
+                            put("purpose", "embed")
+                            put("viewer_id", fingerprint.optString("viewer_id"))
+                            put("device_id", fingerprint.optString("device_id"))
+                        }.toString().toRequestBody(jsonMediaType)
+
+                        val capVerReq = Request.Builder()
+                            .url("$embedOrigin/api/videos/$code/embed/captcha/verify")
+                            .post(capVerBody)
+                            .header("User-Agent", DEFAULT_USER_AGENT)
+                            .header("Origin", embedOrigin)
+                            .header("Referer", embedFrameUrl)
+                            .build()
+
+                        val capVerResp = okHttpClient.newCall(capVerReq).execute()
+                        if (capVerResp.isSuccessful) {
+                            val capVerJson = JSONObject(capVerResp.body?.string() ?: "{}")
+                            val captchaToken = capVerJson.optString("captcha_token", "")
+                            if (captchaToken.isNotEmpty()) {
+                                pbReq = Request.Builder()
+                                    .url("$embedOrigin/api/videos/$code/embed/playback")
+                                    .post(pbPayloadStr.toRequestBody(jsonMediaType))
+                                    .header("User-Agent", DEFAULT_USER_AGENT)
+                                    .header("Origin", embedOrigin)
+                                    .header("Referer", embedFrameUrl)
+                                    .header("X-Captcha-Token", captchaToken)
+                                    .build()
+                                pbResp = okHttpClient.newCall(pbReq).execute()
+                                pbBodyStr = pbResp.body?.string() ?: "{}"
+                                pbJson = JSONObject(pbBodyStr)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val playbackObj = pbJson.optJSONObject("playback") ?: return null
+            val sourcesList = mutableListOf<String>()
+
+            fun extractSourcesFromDecrypted(decJson: JSONObject?) {
+                val arr = decJson?.optJSONArray("sources") ?: return
+                for (i in 0 until arr.length()) {
+                    val s = arr.optJSONObject(i)
+                    val u = s?.optString("url", "") ?: ""
+                    if (u.startsWith("http")) sourcesList.add(u)
+                }
+            }
+
+            val payload1 = playbackObj.optString("payload", "")
+            val iv1 = playbackObj.optString("iv", "")
+            val kp1 = playbackObj.optJSONArray("key_parts")
+            if (payload1.isNotEmpty() && iv1.isNotEmpty() && kp1 != null && kp1.length() >= 2) {
+                extractSourcesFromDecrypted(decryptByseAesGcm(payload1, iv1, kp1.optString(0), kp1.optString(1)))
+            }
+
+            val payload2 = playbackObj.optString("payload2", "")
+            val iv2 = playbackObj.optString("iv2", "")
+            val kp2 = playbackObj.optJSONArray("key_parts2")
+            if (payload2.isNotEmpty() && iv2.isNotEmpty() && kp2 != null && kp2.length() >= 2) {
+                extractSourcesFromDecrypted(decryptByseAesGcm(payload2, iv2, kp2.optString(0), kp2.optString(1)))
+            }
+
+            val bestM3u8 = sourcesList.firstOrNull { !it.lowercase().contains("byse") && it.lowercase().contains(".m3u8") }
+                ?: sourcesList.firstOrNull { it.lowercase().contains(".m3u8") }
+                ?: sourcesList.firstOrNull()
+
+            if (!bestM3u8.isNullOrBlank()) {
+                return buildSuccessResponse(bestM3u8, "$embedOrigin/", "kotlin_byse_aes_gcm", ProviderType.FILEMOON)
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decryptByseAesGcm(payloadB64: String, ivB64: String, kp0: String, kp1: String): JSONObject? {
+        return try {
+            val k0 = b64UrlDecode(kp0)
+            val k1 = b64UrlDecode(kp1)
+            val keyBytes = ByteArray(k0.size + k1.size)
+            System.arraycopy(k0, 0, keyBytes, 0, k0.size)
+            System.arraycopy(k1, 0, keyBytes, k0.size, k1.size)
+
+            val ivBytes = b64UrlDecode(ivB64)
+            val cipherBytes = b64UrlDecode(payloadB64)
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, ivBytes)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), spec)
+            val plainBytes = cipher.doFinal(cipherBytes)
+            JSONObject(String(plainBytes, Charsets.UTF_8))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun bigIntTo32Bytes(bi: java.math.BigInteger): ByteArray {
+        val raw = bi.toByteArray()
+        val out = ByteArray(32)
+        if (raw.size == 32) {
+            System.arraycopy(raw, 0, out, 0, 32)
+        } else if (raw.size > 32) {
+            System.arraycopy(raw, raw.size - 32, out, 0, 32)
+        } else {
+            System.arraycopy(raw, 0, out, 32 - raw.size, raw.size)
+        }
+        return out
+    }
+
+    private fun derToP1363(der: ByteArray): ByteArray {
+        val out = ByteArray(64)
+        var idx = 2
+        if (der[1].toInt() and 0x80 != 0) {
+            idx += (der[1].toInt() and 0x7f)
+        }
+        if (der[idx].toInt() != 0x02) return out
+        idx++
+        val rLen = der[idx].toInt() and 0xff
+        idx++
+        val rBytes = der.copyOfRange(idx, idx + rLen)
+        idx += rLen
+        if (der[idx].toInt() != 0x02) return out
+        idx++
+        val sLen = der[idx].toInt() and 0xff
+        idx++
+        val sBytes = der.copyOfRange(idx, idx + sLen)
+
+        if (rBytes.size >= 32) {
+            System.arraycopy(rBytes, rBytes.size - 32, out, 0, 32)
+        } else {
+            System.arraycopy(rBytes, 0, out, 32 - rBytes.size, rBytes.size)
+        }
+        if (sBytes.size >= 32) {
+            System.arraycopy(sBytes, sBytes.size - 32, out, 32, 32)
+        } else {
+            System.arraycopy(sBytes, 0, out, 64 - sBytes.size, sBytes.size)
+        }
+        return out
+    }
+
+    private fun b64UrlEncode(bytes: ByteArray): String {
+        return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    }
+
+    private fun b64UrlDecode(str: String): ByteArray {
+        val std = str.replace('-', '+').replace('_', '/')
+        val pad = (4 - std.length % 4) % 4
+        return Base64.decode(std + "=".repeat(pad), Base64.DEFAULT)
+    }
+
+    private fun rotl32(v: Int, bits: Int): Int {
+        return (v shl bits) or (v ushr (32 - bits))
+    }
+
+    private fun byseQuarterRound(t: IntArray) {
+        t[0] += t[1]; t[3] = rotl32(t[3] xor t[0], 16)
+        t[2] += t[3]; t[1] = rotl32(t[1] xor t[2], 12)
+        t[0] += t[1]; t[3] = rotl32(t[3] xor t[0], 8)
+        t[2] += t[3]; t[1] = rotl32(t[1] xor t[2], 7)
+
+        t[4] += t[5]; t[7] = rotl32(t[7] xor t[4], 16)
+        t[6] += t[7]; t[5] = rotl32(t[5] xor t[6], 12)
+        t[4] += t[5]; t[7] = rotl32(t[7] xor t[4], 8)
+        t[6] += t[7]; t[5] = rotl32(t[5] xor t[6], 7)
+
+        t[8] += t[9]; t[11] = rotl32(t[11] xor t[8], 16)
+        t[10] += t[11]; t[9] = rotl32(t[9] xor t[10], 12)
+        t[8] += t[9]; t[11] = rotl32(t[11] xor t[8], 8)
+        t[10] += t[11]; t[9] = rotl32(t[9] xor t[10], 7)
+
+        t[12] += t[13]; t[15] = rotl32(t[15] xor t[12], 16)
+        t[14] += t[15]; t[13] = rotl32(t[13] xor t[14], 12)
+        t[12] += t[13]; t[15] = rotl32(t[15] xor t[12], 8)
+        t[14] += t[15]; t[13] = rotl32(t[13] xor t[14], 7)
+
+        t[0] += t[5]; t[15] = rotl32(t[15] xor t[0], 16)
+        t[10] += t[15]; t[5] = rotl32(t[5] xor t[10], 12)
+        t[0] += t[5]; t[15] = rotl32(t[15] xor t[0], 8)
+        t[10] += t[15]; t[5] = rotl32(t[5] xor t[10], 7)
+
+        t[1] += t[6]; t[12] = rotl32(t[12] xor t[1], 16)
+        t[11] += t[12]; t[6] = rotl32(t[6] xor t[11], 12)
+        t[1] += t[6]; t[12] = rotl32(t[12] xor t[1], 8)
+        t[11] += t[12]; t[6] = rotl32(t[6] xor t[11], 7)
+
+        t[2] += t[7]; t[13] = rotl32(t[13] xor t[2], 16)
+        t[8] += t[13]; t[7] = rotl32(t[7] xor t[8], 12)
+        t[2] += t[7]; t[13] = rotl32(t[13] xor t[2], 8)
+        t[8] += t[13]; t[7] = rotl32(t[7] xor t[8], 7)
+
+        t[3] += t[4]; t[14] = rotl32(t[14] xor t[3], 16)
+        t[9] += t[14]; t[4] = rotl32(t[4] xor t[9], 12)
+        t[3] += t[4]; t[14] = rotl32(t[14] xor t[3], 8)
+        t[9] += t[14]; t[4] = rotl32(t[4] xor t[9], 7)
+    }
+
+    private fun byseMixRound(t: IntArray) {
+        for (e in 0 until 16) {
+            val n = t[e]
+            val r = t[(e + 1) and 15]
+            val i = t[(e + 7) and 15]
+            val a = (n xor rotl32(r, 13)) * -2048144777 // 2246822519 as signed 32-bit Int
+            val o = (a xor rotl32(i, 7)) * -1028477379 // 3266489917 as signed 32-bit Int
+            t[e] = rotl32(o, (e and 7) + 1)
+        }
+    }
+
+    private fun bysePowHash(input: ByteArray): ByteArray {
+        val e = intArrayOf(
+            1779033703, -1150833019, 1013904242, -1521486534,
+            1359893119, -1694144372, 528734635, 1541459225,
+            1634760805, 857760878, 2036477234, 1797285236,
+            1313757311, -1521486534, 1013904242, 1779033703
+        )
+        e[0] = e[0] xor input.size
+        var i = 0
+        while (i < input.size) {
+            for (a in 0 until 16) {
+                var o = 0
+                val s = i + a * 4
+                if (s < input.size) o = o or (input[s].toInt() and 0xff)
+                if (s + 1 < input.size) o = o or ((input[s + 1].toInt() and 0xff) shl 8)
+                if (s + 2 < input.size) o = o or ((input[s + 2].toInt() and 0xff) shl 16)
+                if (s + 3 < input.size) o = o or ((input[s + 3].toInt() and 0xff) shl 24)
+                e[a] = e[a] xor o
+            }
+            for (a in 0 until 8) {
+                byseQuarterRound(e)
+                byseMixRound(e)
+            }
+            i += 64
+        }
+        byseQuarterRound(e)
+        val out = ByteArray(32)
+        for (k in 0 until 8) {
+            val a = e[k]
+            out[k * 4] = (a and 0xff).toByte()
+            out[k * 4 + 1] = ((a ushr 8) and 0xff).toByte()
+            out[k * 4 + 2] = ((a ushr 16) and 0xff).toByte()
+            out[k * 4 + 3] = ((a ushr 24) and 0xff).toByte()
+        }
+        return out
+    }
+
+    private fun solveBysePow(nonceB64: String, difficulty: Int): String {
+        val nonceBytes = b64UrlDecode(nonceB64)
+        val targetBytes = IntArray(32) { 255 }
+        val fullZeroBytes = difficulty / 8
+        val remZeroBits = difficulty % 8
+        for (u in 0 until fullZeroBytes) targetBytes[u] = 0
+        if (remZeroBits > 0 && fullZeroBytes < 32) {
+            targetBytes[fullZeroBytes] = 255 ushr remZeroBits
+        }
+
+        val buf = ByteArray(nonceBytes.size + 8)
+        System.arraycopy(nonceBytes, 0, buf, 0, nonceBytes.size)
+        val bb = ByteBuffer.wrap(buf, nonceBytes.size, 8).order(ByteOrder.LITTLE_ENDIAN)
+
+        var counter = 0L
+        while (counter < 20_000_000L) {
+            bb.putLong(0, counter)
+            val h = bysePowHash(buf)
+            var ok = true
+            for (c in 0 until 32) {
+                val hc = h[c].toInt() and 0xff
+                if (hc < targetBytes[c]) break
+                if (hc > targetBytes[c]) {
+                    ok = false
+                    break
+                }
+            }
+            if (ok) return counter.toString()
+            counter++
+        }
+        return "0"
     }
 
     /**

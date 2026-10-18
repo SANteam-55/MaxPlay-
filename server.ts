@@ -3,6 +3,7 @@ import { exec, spawn, execSync } from "child_process";
 import path from "path";
 import fs from "fs";
 import url from "url";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Modality } from "@google/genai";
 import dotenv from "dotenv";
@@ -183,6 +184,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     if (!videoUrl || typeof videoUrl !== "string") return 0;
     const cleanUrl = videoUrl.trim();
     if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) return 0;
+
+    // Check if source is a Filemoon / Byse stream before probing
+    if (isFilemoonOrByseUrl(cleanUrl)) {
+      try {
+        const fmRes = await extractFilemoonByseStream(cleanUrl);
+        if (fmRes.ok && fmRes.m3u8Url) {
+          const resolvedDur = await probeVideoDuration(fmRes.m3u8Url);
+          if (resolvedDur > 0) return resolvedDur;
+        }
+      } catch (fmErr) {
+        console.warn("Probe Filemoon/Byse auto-extraction error:", fmErr);
+      }
+    }
 
     // Check if source is an extractable stream (e.g. voe.sx) before probing
     const isVoeOrExtractable = cleanUrl.includes("voe.sx") || cleanUrl.includes("voe.") || cleanUrl.includes("voe-network");
@@ -563,6 +577,485 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
+  // ============================================================================
+  // ⚡ DEDICATED FILEMOON / BYSE (byseraguci.com / n1mwq.org / f16px / filemoon)
+  //    DIRECT STREAM EXTRACTOR (ECDSA P-256 Attestation + PoW + AES-256-GCM + Packer)
+  // ============================================================================
+  const FILEMOON_BYSE_DOMAINS = [
+    "filemoon", "moonmov", "kerapoxy", "bysedikamoum", "byseraguci",
+    "byse", "n1mwq", "f16px", "1azayf9w", "8mhlloqo", "96ar.com", "xcoic.com", "l1afav.net"
+  ];
+
+  function isFilemoonOrByseUrl(rawUrl: string): boolean {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    const lower = rawUrl.toLowerCase().trim();
+    if (FILEMOON_BYSE_DOMAINS.some((d) => lower.includes(d))) return true;
+    try {
+      const parsed = new URL(rawUrl.trim());
+      if (/^\/(d|bkg|wz28)\/[a-zA-Z0-9_-]{6,}/i.test(parsed.pathname)) return true;
+    } catch {}
+    return false;
+  }
+
+  // Byse Custom 512-Word PoW Solver (matches pow-DEJGtdh2.js gr/wr/Er)
+  function solveBysePow(nonce: string, difficulty: number): string {
+    if (difficulty <= 0) return "0";
+    const prefix = nonce + ":";
+    const re = (t: number, e: number) => ((t << e) | (t >>> (32 - e))) >>> 0;
+    const ht = (t: number, e: number) => Math.imul(t, e) >>> 0;
+
+    function ye(t: Uint32Array): void {
+      t[0] = (t[0] + t[1]) >>> 0; t[3] = re(t[3] ^ t[0], 16);
+      t[2] = (t[2] + t[3]) >>> 0; t[1] = re(t[1] ^ t[2], 12);
+      t[0] = (t[0] + t[1]) >>> 0; t[3] = re(t[3] ^ t[0], 8);
+      t[2] = (t[2] + t[3]) >>> 0; t[1] = re(t[1] ^ t[2], 7);
+    }
+
+    function gr(bytes: Uint8Array): Uint32Array {
+      const e = new Uint32Array([1779033703, 3144134277, 1013904242, 2773480762]);
+      for (let i = 0; i < bytes.length; i++) {
+        e[0] = (e[0] + bytes[i]) >>> 0;
+        e[0] = re(e[0], 7);
+        ye(e);
+      }
+      for (let i = 0; i < 8; i++) ye(e);
+      const r = new Uint32Array(512);
+      for (let i = 0; i < 512; i++) {
+        ye(e);
+        r[i] = (e[0] ^ e[2]) >>> 0;
+      }
+      for (let i = 0; i < 2; i++) {
+        for (let s = 0; s < 512; s++) {
+          const a = r[s] & 511;
+          let c = (r[s] + r[a]) >>> 0;
+          c = re(c, 13);
+          c = (c ^ ht(r[(s + 1) & 511], 2654435761)) >>> 0;
+          r[s] = c;
+          e[0] = (e[0] ^ c) >>> 0;
+          ye(e);
+        }
+      }
+      const n = new Uint32Array(8);
+      for (let i = 0; i < 8; i++) {
+        ye(e);
+        let s = e[0];
+        const a = i * 64;
+        for (let c = 0; c < 64; c++) {
+          const d = r[a + c];
+          s = (s + d) >>> 0;
+          s = re(s, 5);
+          s = (s ^ ht(d, 2246822519)) >>> 0;
+        }
+        n[i] = (s ^ e[2]) >>> 0;
+      }
+      return n;
+    }
+
+    function wr(arr: Uint32Array): number {
+      let z = 0;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] === 0) {
+          z += 32;
+          continue;
+        }
+        return z + Math.clz32(arr[i]);
+      }
+      return z;
+    }
+
+    for (let s = 0; s < 5000000; s++) {
+      const str = prefix + s;
+      const bytes = new Uint8Array(str.length);
+      for (let i = 0; i < str.length; i++) {
+        bytes[i] = str.charCodeAt(i) & 255;
+      }
+      if (wr(gr(bytes)) >= difficulty) {
+        return String(s);
+      }
+    }
+    return "0";
+  }
+
+  function unpackDeanEdwardsPacker(packedBlock: string): string {
+    try {
+      const idx = packedBlock.indexOf("}(");
+      if (idx === -1) return "";
+      const argsPart = packedBlock.slice(idx + 2);
+      const quote = argsPart.trimStart()[0];
+      if (quote !== "'" && quote !== '"') return "";
+      const startP = argsPart.indexOf(quote) + 1;
+      let i = startP;
+      let pStr = "";
+      while (i < argsPart.length) {
+        const ch = argsPart[i];
+        if (ch === "\\") {
+          const next = argsPart[i + 1] || "";
+          pStr += (next === "'" || next === '"' || next === "\\" || next === "/") ? next : "\\" + next;
+          i += 2;
+          continue;
+        }
+        if (ch === quote) {
+          i++;
+          break;
+        }
+        pStr += ch;
+        i++;
+      }
+      const rest = argsPart.slice(i);
+      const m = rest.match(/^\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['"])([\s\S]*?)\3\.split\(['"]\|['"]\)/);
+      if (!m) return "";
+      const a = parseInt(m[1], 10);
+      const c = parseInt(m[2], 10);
+      const k = m[4].split("|");
+      const encodeToken = (num: number): string => {
+        const prefix = num < a ? "" : encodeToken(Math.floor(num / a));
+        const rem = num % a;
+        const suffix = rem > 35 ? String.fromCharCode(rem + 29) : rem.toString(36);
+        return prefix + suffix;
+      };
+      const dict: Record<string, string> = {};
+      for (let cnt = c - 1; cnt >= 0; cnt--) {
+        const key = encodeToken(cnt);
+        dict[key] = k[cnt] && k[cnt].length > 0 ? k[cnt] : key;
+      }
+      return pStr.replace(/\b\w+\b/g, (word) => dict[word] ?? word).replace(/\\\//g, "/");
+    } catch {
+      return "";
+    }
+  }
+
+  // Cache Byse fingerprint attestation tokens for 4 minutes per embedOrigin
+  const byseAttestCache = new Map<string, { fingerprint: any; expiresAt: number }>();
+
+  async function extractFilemoonByseStream(sourceUrl: string): Promise<{
+    ok: boolean;
+    m3u8Url?: string;
+    headers?: Record<string, string>;
+    error?: string;
+  }> {
+    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    try {
+      const parsed = new URL(sourceUrl.trim());
+      const origin = `${parsed.protocol}//${parsed.host}`;
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      const code = pathParts.length >= 2 && ["d", "e", "g", "bkg", "wz28"].includes(pathParts[0].toLowerCase())
+        ? pathParts[1]
+        : pathParts[pathParts.length - 1];
+
+      // STAGE 1: Byse / F16Px API + ECDSA P-256 Attestation + PoW Captcha + AES-256-GCM Decryption
+      if (code && code.length >= 6) {
+        try {
+          const detailsRes = await fetch(`${origin}/api/videos/${code}/embed/details`, {
+            headers: {
+              "User-Agent": ua,
+              "Accept": "application/json",
+              "Referer": `${origin}/e/${code}`
+            },
+            signal: AbortSignal.timeout(8000)
+          });
+
+          if (detailsRes.ok) {
+            const details = await detailsRes.json();
+            const embedFrameUrl: string = details?.embed_frame_url || `${origin}/e/${code}`;
+            const embedParsed = new URL(embedFrameUrl);
+            const embedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
+
+            const now = Date.now();
+            let cachedAttest = byseAttestCache.get(embedOrigin);
+            let fingerprint = cachedAttest && cachedAttest.expiresAt > now ? cachedAttest.fingerprint : null;
+
+            if (!fingerprint) {
+              const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+              const jwk = publicKey.export({ format: "jwk" });
+              const publicJwk = { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
+
+              const chRes = await fetch(`${embedOrigin}/api/videos/access/challenge`, {
+                method: "POST",
+                headers: {
+                  "User-Agent": ua,
+                  "Origin": embedOrigin,
+                  "Referer": embedFrameUrl
+                },
+                signal: AbortSignal.timeout(8000)
+              });
+
+              if (chRes.ok) {
+                const chData = await chRes.json();
+                const nonceStr = chData.nonce || chData.challenge || "";
+                const sig = crypto.sign("sha256", Buffer.from(nonceStr, "utf8"), {
+                  key: privateKey,
+                  dsaEncoding: "ieee-p1363"
+                });
+                const signatureB64Url = sig.toString("base64url");
+                const hashB64 = (s: string) => crypto.createHash("sha256").update(s).digest("base64url");
+
+                const client = {
+                  user_agent: ua,
+                  architecture: "x86",
+                  bitness: "64",
+                  platform: "Windows",
+                  platform_version: "15.0.0",
+                  model: "",
+                  ua_full_version: "124.0.6367.118",
+                  brand_full_versions: [
+                    { brand: "Chromium", version: "124.0.6367.118" },
+                    { brand: "Google Chrome", version: "124.0.6367.118" },
+                    { brand: "Not-A.Brand", version: "99.0.0.0" }
+                  ],
+                  pixel_ratio: 1,
+                  screen_width: 1920,
+                  screen_height: 1080,
+                  color_depth: 24,
+                  languages: ["en-US", "en"],
+                  timezone: "Asia/Kolkata",
+                  hardware_concurrency: 8,
+                  device_memory: 8,
+                  touch_points: 0,
+                  webgl_vendor: "Google Inc. (NVIDIA)",
+                  webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                  canvas_hash: hashB64("canvas-byse-access"),
+                  audio_hash: hashB64("audio-byse-access"),
+                  webgl_params_hash: hashB64("webgl-params"),
+                  fonts_hash: hashB64("Arial,Calibri,Consolas,Segoe UI,Tahoma,Times New Roman,Verdana"),
+                  codecs_hash: hashB64("codecs-v1"),
+                  media_devices: "ai1ao2vi1",
+                  pointer_type: "fine,hover",
+                  extra: { vendor: "Google Inc.", appVersion: ua.replace("Mozilla/", "") }
+                };
+
+                const attRes = await fetch(`${embedOrigin}/api/videos/access/attest`, {
+                  method: "POST",
+                  headers: {
+                    "User-Agent": ua,
+                    "Content-Type": "application/json",
+                    "Origin": embedOrigin,
+                    "Referer": embedFrameUrl
+                  },
+                  body: JSON.stringify({
+                    viewer_id: "",
+                    device_id: "",
+                    challenge_id: chData.challenge_id,
+                    nonce: nonceStr,
+                    signature: signatureB64Url,
+                    public_key: publicJwk,
+                    client,
+                    storage: {},
+                    attributes: { entropy: "high" }
+                  }),
+                  signal: AbortSignal.timeout(8000)
+                });
+
+                if (attRes.ok) {
+                  const attData = await attRes.json();
+                  fingerprint = {
+                    token: attData.token || "",
+                    viewer_id: attData.viewer_id || "",
+                    device_id: attData.device_id || "",
+                    confidence: attData.confidence ?? 0.55
+                  };
+                  byseAttestCache.set(embedOrigin, {
+                    fingerprint,
+                    expiresAt: now + 4 * 60 * 1000
+                  });
+                }
+              }
+            }
+
+            if (fingerprint) {
+              const embedHeaders: Record<string, string> = {
+                "User-Agent": ua,
+                "Content-Type": "application/json",
+                "Origin": embedOrigin,
+                "Referer": embedFrameUrl,
+                "X-Embed-Origin": parsed.host,
+                "X-Embed-Referer": sourceUrl.trim(),
+                "X-Embed-Parent": `${origin}/e/${code}`
+              };
+
+              let pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
+                method: "POST",
+                headers: embedHeaders,
+                body: JSON.stringify({ fingerprint }),
+                signal: AbortSignal.timeout(8000)
+              });
+
+              let pbData = await pbRes.json().catch(() => ({}));
+
+              // Handle HTTP 428 Captcha PoW Challenge automatically
+              if (pbRes.status === 428 || pbData?.error === "captcha_required") {
+                const capChRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha`, {
+                  method: "POST",
+                  headers: embedHeaders,
+                  body: JSON.stringify({ fingerprint }),
+                  signal: AbortSignal.timeout(8000)
+                });
+
+                if (capChRes.ok) {
+                  const capCh = await capChRes.json();
+                  const powNonce = capCh.pow_nonce || capCh.nonce;
+                  const powDiff = capCh.pow_difficulty || capCh.difficulty || 16;
+                  const powToken = capCh.pow_token || capCh.challenge_id;
+                  const solutionStr = solveBysePow(powNonce, powDiff);
+
+                  const capVerRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha/verify`, {
+                    method: "POST",
+                    headers: embedHeaders,
+                    body: JSON.stringify({
+                      pow_token: powToken,
+                      solution: solutionStr,
+                      fingerprint
+                    }),
+                    signal: AbortSignal.timeout(8000)
+                  });
+
+                  if (capVerRes.ok) {
+                    const capVer = await capVerRes.json();
+                    const captchaToken = capVer.token || capVer.captcha_token || "";
+                    pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
+                      method: "POST",
+                      headers: {
+                        ...embedHeaders,
+                        "X-Captcha-Token": captchaToken
+                      },
+                      body: JSON.stringify({ fingerprint }),
+                      signal: AbortSignal.timeout(8000)
+                    });
+                    pbData = await pbRes.json().catch(() => ({}));
+                  }
+                }
+              }
+
+              if (pbData?.playback) {
+                const pb = pbData.playback;
+                const b64UrlToBuf = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+                const decryptPayload = (payloadB64: string, ivB64: string, kParts: string[], version?: string | number) => {
+                  try {
+                    const verNum = parseInt(String(version ?? "").trim(), 10);
+                    let selectedParts = kParts.slice(0, 2);
+                    if (verNum >= 1 && verNum <= 20 && kParts.length >= 31 - verNum) {
+                      selectedParts = [kParts[verNum - 1], kParts[31 - verNum - 1]];
+                    }
+                    const key = Buffer.concat(selectedParts.map(b64UrlToBuf));
+                    const iv = b64UrlToBuf(ivB64);
+                    const raw = b64UrlToBuf(payloadB64);
+                    const ct = raw.subarray(0, raw.length - 16);
+                    const tag = raw.subarray(raw.length - 16);
+                    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+                    decipher.setAuthTag(tag);
+                    const dec = Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+                    return JSON.parse(dec);
+                  } catch {
+                    return null;
+                  }
+                };
+
+                const sourcesList: string[] = [];
+                if (pb.payload && pb.iv && Array.isArray(pb.key_parts) && pb.key_parts.length >= 2) {
+                  const dec1 = decryptPayload(pb.payload, pb.iv, pb.key_parts, pb.version);
+                  if (Array.isArray(dec1?.sources)) {
+                    for (const s of dec1.sources) {
+                      if (s?.url && typeof s.url === "string") sourcesList.push(s.url);
+                    }
+                  }
+                }
+                if (pb.payload2 && pb.iv2 && Array.isArray(pb.key_parts2) && pb.key_parts2.length >= 2) {
+                  const dec2 = decryptPayload(pb.payload2, pb.iv2, pb.key_parts2, pb.version2 || pb.version);
+                  if (Array.isArray(dec2?.sources)) {
+                    for (const s of dec2.sources) {
+                      if (s?.url && typeof s.url === "string") sourcesList.push(s.url);
+                    }
+                  }
+                }
+
+                // Prefer edge sprintcdn / owphbf / master.m3u8 URL
+                const bestM3u8 =
+                  sourcesList.find((u) => !u.includes("byse") && u.includes(".m3u8")) ||
+                  sourcesList.find((u) => u.includes(".m3u8")) ||
+                  sourcesList[0];
+
+                if (bestM3u8) {
+                  return {
+                    ok: true,
+                    m3u8Url: bestM3u8,
+                    headers: {
+                      "Referer": `${embedOrigin}/`,
+                      "Origin": embedOrigin,
+                      "User-Agent": ua
+                    }
+                  };
+                }
+              }
+            }
+          }
+        } catch (byseErr: any) {
+          console.warn("[FilemoonByseExtractor] Stage 1 Byse API note:", byseErr?.message);
+        }
+      }
+
+      // STAGE 2: Classic Filemoon HTML (/e/{code} -> nested /bkg/ iframe -> eval(p,a,c,k,e,d) unpacker)
+      let currentUrl = sourceUrl.trim().replace(/\/d\//i, "/e/");
+      let refererUrl = `${origin}/`;
+      let isIframe = false;
+
+      for (let hop = 0; hop < 4; hop++) {
+        const resp = await fetch(currentUrl, {
+          headers: {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": refererUrl,
+            "Sec-Fetch-Dest": isIframe ? "iframe" : "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": isIframe ? "cross-site" : "none"
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+        const html = await resp.text();
+        if (!html) break;
+
+        let searchPool = html.replace(/\\\//g, "/");
+        if (html.includes("eval(function(p,a,c,k,e,")) {
+          const pIdx = html.indexOf("eval(function(p,a,c,k,e,");
+          const unpacked = unpackDeanEdwardsPacker(html.slice(pIdx));
+          if (unpacked) searchPool += "\n" + unpacked;
+        }
+
+        const m3u8Matches = searchPool.match(/https?:\/\/[^\s"'<>\\`]+?\.m3u8[^\s"'<>\\`]*/gi);
+        if (m3u8Matches && m3u8Matches.length > 0) {
+          const valid = m3u8Matches.filter((u) => !u.includes("jwpltx") && !u.includes("ping.gif"));
+          const best = valid.find((u) => u.includes("master")) || valid[0];
+          if (best) {
+            const pageOrigin = new URL(currentUrl).origin;
+            return {
+              ok: true,
+              m3u8Url: best,
+              headers: {
+                "Referer": currentUrl,
+                "Origin": pageOrigin,
+                "User-Agent": ua
+              }
+            };
+          }
+        }
+
+        const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+        if (iframeMatch && iframeMatch[1]) {
+          const nextIframe = new URL(iframeMatch[1], currentUrl).toString();
+          if (nextIframe !== currentUrl && !nextIframe.includes("doubleclick") && !nextIframe.includes("popads")) {
+            refererUrl = currentUrl;
+            currentUrl = nextIframe;
+            isIframe = true;
+            continue;
+          }
+        }
+        break;
+      }
+
+      return { ok: false, error: "Could not extract Filemoon/Byse stream" };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || "Filemoon/Byse extraction error" };
+    }
+  }
+
   const handleExtractStream = async (req: any, res: any) => {
     try {
       const sourceUrl = (req.body?.url || req.query?.url) as string;
@@ -630,6 +1123,46 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         return;
       }
 
+      // ====================================================================
+      // DEDICATED FILEMOON / BYSE FAST PATH (byseraguci.com / filemoon.sx)
+      // ====================================================================
+      if (isFilemoonOrByseUrl(trimmedUrl)) {
+        const fmResult = await extractFilemoonByseStream(trimmedUrl);
+        if (fmResult.ok && fmResult.m3u8Url) {
+          const ttlMs = 170 * 60 * 1000;
+          const expiresAt = now + ttlMs;
+          const streamMeta = await parseHlsManifestMetadata(fmResult.m3u8Url, requestedDuration);
+
+          streamExtractionCache.set(trimmedUrl, {
+            m3u8Url: fmResult.m3u8Url,
+            expiresAt,
+            cachedAt: now,
+            qualities: streamMeta.qualities,
+            qualityLinks: streamMeta.qualityLinks,
+            downloadQualities: streamMeta.downloadQualities,
+            audioTracks: streamMeta.audioTracks,
+            duration: streamMeta.duration
+          });
+
+          res.json({
+            ok: true,
+            m3u8Url: fmResult.m3u8Url,
+            qualities: streamMeta.qualities,
+            qualityLinks: streamMeta.qualityLinks,
+            downloadQualities: streamMeta.downloadQualities,
+            audioTracks: streamMeta.audioTracks,
+            duration: streamMeta.duration,
+            durationFormatted: Math.floor(streamMeta.duration / 60) + ":" + (streamMeta.duration % 60).toString().padStart(2, '0'),
+            headers: fmResult.headers,
+            provider: "FILEMOON",
+            cached: false,
+            expiresAt,
+            remainingSeconds: Math.round(ttlMs / 1000)
+          });
+          return;
+        }
+      }
+
       const isVercelEnv = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
       const extractorKey = (process.env.VOE_EXTRACTOR_KEY || "MaxPlayMasterPass777!").trim();
       let rawBaseUrl = (process.env.VOE_EXTRACTOR_URL || "").trim();
@@ -642,9 +1175,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const extractorBaseUrl = rawBaseUrl;
       const apiUrl = `${extractorBaseUrl}?url=${encodeURIComponent(trimmedUrl)}&key=${encodeURIComponent(extractorKey)}`;
 
-      // Helper to compute embed URL for known hosters like VOE
+      // Helper to compute embed URL for known hosters like VOE / Filemoon
       const getFallbackEmbed = (urlStr: string) => {
         const lower = urlStr.toLowerCase();
+        if (isFilemoonOrByseUrl(urlStr)) {
+          return urlStr.replace(/\/d\//i, "/e/");
+        }
         if (lower.includes("voe.") || lower.includes("voe.sx")) {
           if (urlStr.includes("/e/")) return urlStr;
           const match = urlStr.match(/https?:\/\/[^\/]+\/([a-zA-Z0-9_-]+)/);
@@ -768,7 +1304,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const isAbort = err.name === "AbortError";
       const u = (req.body?.url || req.query?.url || "").trim();
       let fallbackEmbed = "";
-      if (u.toLowerCase().includes("voe")) {
+      if (isFilemoonOrByseUrl(u)) {
+        fallbackEmbed = u.replace(/\/d\//i, "/e/");
+      } else if (u.toLowerCase().includes("voe")) {
         if (u.includes("/e/")) {
           fallbackEmbed = u;
         } else {
@@ -807,8 +1345,21 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       let streamUrl = rawUrl.trim();
 
-      // Resolve extractable URL if needed
-      if (
+      // Resolve Filemoon / Byse URL if needed
+      if (isFilemoonOrByseUrl(streamUrl)) {
+        const cached = streamExtractionCache.get(streamUrl);
+        if (cached && cached.m3u8Url) {
+          streamUrl = cached.m3u8Url;
+          if (quality && cached.qualityLinks && cached.qualityLinks[quality]) {
+            streamUrl = cached.qualityLinks[quality];
+          }
+        } else {
+          const fmRes = await extractFilemoonByseStream(streamUrl);
+          if (fmRes.ok && fmRes.m3u8Url) {
+            streamUrl = fmRes.m3u8Url;
+          }
+        }
+      } else if (
         streamUrl.includes("voe.sx") ||
         streamUrl.includes("voe.") ||
         streamUrl.includes("cloudwindow-route") ||
@@ -3417,8 +3968,7 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
     });
   }
 
-  const isMainModule = process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href;
-  if (isMainModule) {
+  if (!isVercel) {
     app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server running on http://0.0.0.0:${PORT}`);
     });

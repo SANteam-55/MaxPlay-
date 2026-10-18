@@ -35,7 +35,7 @@ export class SmartStreamService {
       return false;
     }
 
-    // Recognised video hosters that require extraction (Voe, Filemoon, StreamWish, VidHide, etc.)
+    // Recognised video hosters that require extraction (Voe, Filemoon, Byse, StreamWish, VidHide, etc.)
     if (
       lower.includes("voe.sx") ||
       lower.includes("voe.") ||
@@ -52,14 +52,22 @@ export class SmartStreamService {
       lower.includes("moonmov.") ||
       lower.includes("kerapoxy.") ||
       lower.includes("bysedikamoum.") ||
+      lower.includes("byseraguci.") ||
+      lower.includes("byse") ||
+      lower.includes("n1mwq.") ||
       lower.includes("f16px.") ||
+      lower.includes("1azayf9w.") ||
+      lower.includes("8mhlloqo.") ||
+      lower.includes("96ar.com") ||
+      lower.includes("xcoic.com") ||
+      lower.includes("l1afav.net") ||
       lower.includes("streamwish.") ||
       lower.includes("hlswish.") ||
       lower.includes("playerwish.") ||
       lower.includes("vidhide.") ||
       lower.includes("dood.") ||
       lower.includes("streamtape.") ||
-      /https?:\/\/[^\/]+\/(?:e|d)\/[a-z0-9_-]{6,}/i.test(lower)
+      /https?:\/\/[^\/]+\/(?:e|d|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
     ) {
       return true;
     }
@@ -72,7 +80,7 @@ export class SmartStreamService {
   }
 
   /**
-   * Helper to retrieve iframe embed URL for external hosters like VOE / Filemoon.
+   * Helper to retrieve iframe embed URL for external hosters like VOE / Filemoon / Byse.
    */
   public static getEmbedUrl(sourceUrl?: string): string | null {
     if (!sourceUrl || typeof sourceUrl !== "string") return null;
@@ -84,7 +92,15 @@ export class SmartStreamService {
       lower.includes("moonmov.") ||
       lower.includes("kerapoxy.") ||
       lower.includes("bysedikamoum.") ||
-      lower.includes("f16px.")
+      lower.includes("byseraguci.") ||
+      lower.includes("byse") ||
+      lower.includes("n1mwq.") ||
+      lower.includes("f16px.") ||
+      lower.includes("1azayf9w.") ||
+      lower.includes("8mhlloqo.") ||
+      lower.includes("96ar.com") ||
+      lower.includes("xcoic.com") ||
+      lower.includes("l1afav.net")
     ) {
       return trimmed.replace(/\/d\//i, "/e/");
     }

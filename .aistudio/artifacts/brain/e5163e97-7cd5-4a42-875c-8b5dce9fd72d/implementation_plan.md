@@ -1,101 +1,126 @@
-# MaxPlay Instant Filemoon Extraction (1–3s) & Download Freeze Fix
+# Filemoon Byse/F16Px Scraper Upgrade & Dual-Server Selection System
 
-Resolve the two critical issues reported in testing: **(1) Filemoon scraper taking 60+ seconds to start playback**, and **(2) Tapping the Download button permanently freezing the app even after restarting**.
-
----
+This plan upgrades MaxPlay's inbuilt Filemoon scraper to natively extract HLS streams from Filemoon's latest `byseraguci.com` / `bysedikamoum.com` / `f16px.com` (`/d/` and `/e/`) links via both encrypted API decryption and headless DOM/network interception, replaces the 4th Action Dock button (**Details**) on the Content Details screen with an interactive **Server Selector** (**Server 1: Primary Voe.sx** & **Server 2: Filemoon**), and updates the Admin Panel so every episode and movie can store both a Primary (`voe.sx`) and Secondary (`filemoon`) link.
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Existing System Protection Guarantee**: All existing working systems — including the 100% working Voe.sx scraper, Firebase Firestore database, collections, security rules, authentication, and Admin Panel — remain 100% untouched.
+> **MaxPlay Existing System Protection Guarantee**:
+> - The working **Voe.sx scraper pipeline** (`ProviderType.VOE`), existing Firestore database collections (`content`, `content_seasons`), authentication, and offline download engine remain **100% untouched and backward-compatible**.
+> - Existing content items that only have a single `videoUrl` will continue playing seamlessly without requiring any data migration.
 
-- **Root Cause & Fix 1 — Why Filemoon Took 60+ Seconds (And How We Make It 1–3 Seconds)**:
-  - **What Happened**:
-    1. Filemoon's `eval(function(p,a,c,k,e,d)...)` packed JavaScript block uses single-quoted payload strings (`'...'`) that contain unescaped double quotes (`"sources":[{"file":"https://...m3u8"}]`) inside the payload. In our Kotlin regex (`(['"])((?:\\.|(?!\1).)*)\1`), Java's regex engine failed or backtracked when matching across large single-line packed scripts, AND `unpackBlockViaV8` evaluated the packed function on the main WebView where Filemoon's packer code tried to reference `jwplayer` or `window` variables inside the `eval`, throwing an exception!
-    2. Because Stage 1 OkHttp unpacking failed, it fell back to Stage 2 (`sniffStreamWithHeadlessWebView`), which waited **24 seconds** before timing out, then `smartStreamService` waited for `/api/extract-stream` (**up to 35–60 seconds**), and only after ~65 seconds did it finally resolve!
-  - **The Fix (1–3 Seconds Instant Filemoon Extraction)**:
-    1. **Bulletproof Pure-Kotlin Packer Argument Parser (`unpackPacker`)**: Replace the fragile regex argument matcher with a deterministic **character-by-character state-machine parser** that walks from the end of the packed block (`'.split('|')`) backwards to extract `(p, a, c, k)` in `< 2ms` with 100% accuracy regardless of quotes, newlines, or semicolons.
-    2. **Safe V8 String-Only Unpacker**: In `unpackBlockViaV8`, strip `eval(` so V8 *only* executes `function(p,a,c,k,e,d){...}(...)` and returns the unpacked string **without** executing the inner `jwplayer().setup()` code.
-    3. **Instant Iframe Fast-Path in Stage 2 Sniffer**: If Stage 2 ever runs, instead of waiting 3.8 seconds on the outer `/e/` wrapper page (where cross-origin iframes block JS inspection), immediately unwrap and load the `/bkg/` or player iframe with `Referer` + `Sec-Fetch-Dest: iframe` within **300ms** and cap the sniffer timeout to **8 seconds** (never 24s + 60s).
-
-- **Root Cause & Fix 2 — Why Tapping Download Froze the Entire App Even After Restart**:
-  - **What Happened (3 Compounding Freezes)**:
-    1. **Popup Window Trap on Download Tap**: In `ContentDetailScreen.tsx`, tapping the Download button called `adManager.handleActionDockClick()`, which executed `window.open(SMART_LINK, '_blank')` and injected an external popunder script right as `DownloadSelectionModal` mounted. Inside the Android WebView, this triggered navigation/focus interception on the main UI thread.
-    2. **Main-Thread Megabyte String Freeze in `parseHlsManifestOnDevice`**: When `DownloadSelectionModal` opened, it immediately called `NativeBridgeService.extractStreamNative(targetUrl)`, which called `parseHlsManifestOnDevice()`. That method downloaded the **entire master `.m3u8` + variant media `.m3u8` (thousands of `#EXTINF` segment lines)** and passed them through `webView.evaluateJavascript("window.onMaxPlaySnifferResult(..., hugeJsonString)")` on the **Android UI Main Thread**, freezing touch input!
-    3. **Permanent Startup Freeze (`localStorage` Auto-Resume Loop)**: When the user clicked Download, `DownloadManager` saved the task in `localStorage` (`maxplay_download_tasks_v3`) with `status: 'downloading'` / `'queued'`. On app restart, `DownloadManager`'s constructor immediately auto-restarted the task (`startQueueWorker`) and called `window.MaxPlayNative.fetchBytesBase64CorsFree(segUrl)` **8 times concurrently (`CONCURRENCY = 8`)**. Because `fetchBytesBase64CorsFree` is a **synchronous `@JavascriptInterface` call** returning megabytes of Base64 strings across the JS bridge while `atob()` + byte-by-byte loops ran on the single JS UI thread, the entire WebView locked up permanently within 1.5 seconds of opening the app!
-  - **The Fix (Zero-Freeze Download Modal & Non-Blocking Downloader)**:
-    1. **Auto-Heal Persisted Tasks on Startup**: On app boot, `DownloadManager` automatically converts any stuck `'downloading'` or `'queued'` tasks from a previous session into `'paused'` state so restarting the app NEVER auto-triggers background scraping/downloading until the user taps Resume.
-    2. **Zero-Network Instant Modal Open**: Opening `DownloadSelectionModal` no longer triggers `adManager` popups and no longer fetches/evaluates multi-megabyte media playlists on the UI thread. Stream resolution happens *only* when the user confirms download, or uses already-cached stream metadata from the player!
-    3. **Asynchronous Native Binary Segment Bridge (`fetchBytesBase64CorsFreeAsync`) + Safe Concurrency**: Add non-blocking `fetchBytesBase64CorsFreeAsync` and native `fetch(segUrl)` support (since `CorsFreeWebViewClient` already injects `Referer` and CORS headers at the WebView network layer!) with `CONCURRENCY = 3` and micro-task yielding so downloading segments never blocks touch events.
+- **Confirmed Decision 1 (Smart Auto-Fallback)**: If the user selects Server 1 (`voe.sx`) or Server 2 (`filemoon`) and that link is either not uploaded for a particular episode or fails to resolve, the player automatically falls back to the other available server link and shows a subtle toast notification.
+- **Confirmed Decision 2 (Dual-Server Admin Inputs for Episodes & Movies)**: Every Episode box in the Admin Panel (and the Movie Smart HLS section) will have two stacked inputs: **Server 1 — Primary Link (Voe.sx)** on top, and **Server 2 — Secondary Link (Filemoon / Byse)** directly below it, each with its own independent **Verify** button.
+- **Confirmed Decision 3 (Button #4 Server Selector + Title Info Trigger)**: Button #4 in the Content Details 4-button Action Dock is transformed into the **Server** selector button (`Server 1` / `Server 2` badge), while a subtle info icon next to the content title remains available if a user wishes to view the story synopsis modal.
 
 ---
 
 ### 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Instant Filemoon.sx Playback (1–3 Seconds)**: Extracts `.m3u8` directly inside Stage 1 OkHttp in `~1.2s` by following `/d/` -> `/e/` -> nested `<iframe src="...">` (`/bkg/`, `bysedikamoum`, `kerapoxy`, `moonmov`) and unpacking `eval(function(p,a,c,k,e,d))` with a deterministic state-machine parser.
-  2. **100% Freeze-Free Download Modal & Queue**: Eliminates UI thread blocking when tapping the Download button, prevents `localStorage` auto-start boot loops, and streams HLS segments asynchronously without locking the WebView.
-- **Target Audience / Persona**: MaxPlay Android users streaming and downloading movies, anime, and series episodes.
-- **Key Value**: Fast 1–3 second Filemoon stream startup (matching Voe.sx speed) and rock-solid, responsive offline downloads.
+  1. **Fixes `https://byseraguci.com/d/euhf0n80b2ue` & All Filemoon Mirrors**: Filemoon links on `byseraguci.com`, `bysedikamoum.com`, `f16px.com`, `filemoon.sx`, and `moonmov.pro` use two mechanisms:
+     - **Encrypted Playback API (`/api/videos/{code}/embed/details` & `/api/videos/{code}/embed/playback`)**: Returns an AES-256-GCM encrypted JSON payload (`payload`, `iv`, `key_parts`) containing the direct `.m3u8` master stream URL.
+     - **Packed JWPlayer / Nested Iframe (`/bkg/`, `f16px`, `kerapoxy`)**: Uses `eval(function(p,a,c,k,e,d)...)` or runtime `fetch()` decryption inside an embedded player iframe.
+     - Our upgraded Filemoon pipeline handles **both** in under 1–2 seconds: Stage 1 directly queries `/api/videos/{code}/embed/playback` and decrypts the AES-GCM payload in Kotlin (`javax.crypto.Cipher` `AES/GCM/NoPadding`) + Node.js (`crypto.createDecipheriv('aes-256-gcm')`) as well as running the Packer unpacker; Stage 2 WebView Sniffer hooks `window.fetch`, `XMLHttpRequest`, and `JSON.parse` to immediately capture any runtime-decrypted `.m3u8` URL.
+  2. **Explicit Server Selection (Button #4 on Content Detail Screen)**:
+     - Users can tap the 4th Action Dock button (**Server**) to open a sleek bottom sheet / modal and switch between **Server 1: Primary (Voe.sx)** and **Server 2: Backup (Filemoon)**.
+     - Selecting a server immediately tells the scraper engine (`forcedProvider = 'VOE'` or `'FILEMOON'`) which dedicated pipeline to execute—eliminating any ambiguity between Voe and Filemoon links.
+  3. **Admin Panel Dual-Server Workflow**:
+     - Each Episode box displays **Primary Link (Server 1 — Voe.sx)** and directly beneath it **Secondary Link (Server 2 — Filemoon / Byse)** so admins can attach both mirrors per episode.
+
+- **Target Audience / Persona**: MaxPlay viewers watching anime, series, and movies on Android APK and Web, and MaxPlay admins uploading dual-mirror streams.
+- **Key Value**: 100% reliable playback across both Voe.sx and Filemoon (`byseraguci.com/d/...`) with instant server switching and zero guesswork for the scraper engine.
 
 ---
 
 ### 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  - **Filemoon Playback Flow**: User taps a Movie or Episode -> Smart Provider Router detects `FILEMOON` -> Stage 1 OkHttp fetches `/e/` and nested `/bkg/` iframe with `Sec-Fetch-Dest: iframe` -> Deterministic Kotlin unpacker decodes `eval(p,a,c,k,e,d)` in `< 5ms` -> Video plays in **1–3 seconds**.
-  - **Download Button Flow**: User taps **Download** on Details screen -> `DownloadSelectionModal` opens **instantly (< 16ms)** without popup interference or heavy manifest parsing -> User selects quality/episodes and taps **Download** -> Queue processes episodes one-by-one in the background while all app buttons remain 100% responsive.
+  1. **Viewer Server Switching Flow**:
+     - On the Content Detail Screen, the 4-button Action Dock displays: `Like`, `My List`, `Download`, and **`Server`** (Button #4, showing the active server badge `S1` or `S2`).
+     - Tapping **Server** opens a responsive dark glassmorphic selector sheet displaying:
+       - **Server 1 • Primary (Voe.sx)** — Fast Multi-Quality HLS (`Active` / `Available` badge)
+       - **Server 2 • Secondary (Filemoon)** — High-Stability Mirror (`Active` / `Available` badge)
+     - When the user switches servers, playback resumes from the exact current timestamp (`playbackPosition`) using the newly selected server's link and dedicated scraper.
+  2. **Admin Dual-Link Upload Flow**:
+     - Inside the Admin Portal (`Upload / Edit Content` -> `Step 2`), every Episode box in Smart HLS mode shows:
+       - **Input 1 (Server 1 — Primary Voe.sx)**: `https://voe.sx/...` + `[Verify S1]` button.
+       - **Input 2 (Server 2 — Secondary Filemoon)**: `https://byseraguci.com/d/...` + `[Verify S2]` button.
+     - Admins can fill either one or both links. Saving the content persists both links cleanly on the episode object (`videoUrl` / `primaryServerUrl` for Server 1, and `secondaryServerUrl` / `filemoonUrl` for Server 2).
+
 - **Visual Identity & Theme**:
-  - Preserves 100% of MaxPlay's existing UI layout, dark theme (`#0A0A0A`), and components.
+  - *Aesthetic Direction*: Matches MaxPlay's signature dark OTT HUD (`#0A0A0A` canvas, `#131318` elevated cards, `#8B5CF6` violet and `#06B6D4` cyan accents).
+  - *Touch Ergonomics*: Minimum `44x44px` touch hitboxes on all server selection cards and action dock buttons, instant `<150ms` tactile feedback (`active:scale-95`).
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Deterministic State-Machine Packer Unpacker vs Regex**
-  - *Chosen Approach*: Parse `(p, a, c, k)` arguments using a quote-aware character scanner instead of a complex regular expression.
-  - *Why*: Filemoon's packed payloads are 15KB–60KB long and contain mixed escaped quotes; Java's `Pattern` engine suffers catastrophic backtracking or fails to match, whereas a linear character scanner runs in `< 2ms` and never fails.
+- **Decision 1: Native AES-256-GCM Decryption for `byseraguci.com/d/{code}` (`/api/videos/{code}/embed/playback`)**
+  - *Chosen Approach*: Extract the media code (`euhf0n80b2ue`) from `/d/{code}` or `/e/{code}`, query `/api/videos/{code}/embed/details` and `/api/videos/{code}/embed/playback` with proper `Referer` / `X-Embed-Parent` headers, concatenate `key_parts[0] + key_parts[1]`, and decrypt `payload` with `iv` using native `AES/GCM/NoPadding`. If the host uses HTML Packer (`eval(function(p,a,c,k,e,d)...)`), run our state-machine unpacker; if it uses a cross-origin iframe, unwrap it and intercept `JSON.parse` / `fetch` in Stage 2.
+  - *Why*: Modern Filemoon domains (`byseraguci.com`, `bysedikamoum.com`, `f16px.com`) no longer put `.m3u8` in plain HTML—they return an AES-GCM encrypted JSON from `/api/videos/{code}/embed/playback`. Decrypting this directly in Kotlin & Node.js resolves `https://byseraguci.com/d/euhf0n80b2ue` in `< 400ms` without waiting for heavy browser ads.
 
-- **Decision 2: Pause Interrupted Tasks on App Boot (`DownloadManager.ts`)**
-  - *Chosen Approach*: If the app was closed while tasks were `'downloading'` or `'queued'`, set their status to `'paused'` on startup instead of `'queued'`.
-  - *Why*: Guarantees that even if a user previously queued heavy downloads, reopening the app is 100% responsive and never enters an unrecoverable boot freeze.
+- **Decision 2: Explicit Provider Hinting via Server Selection (`server1_voe` vs `server2_filemoon`)**
+  - *Chosen Approach*: Pass the active server selection (`providerHint: 'VOE' | 'FILEMOON'`) from `ContentDetailScreen` -> `SmartStreamService` -> `NativeBridgeService` -> `InbuiltStreamScraper.kt` (and `/api/extract-stream`).
+  - *Why*: Ensures the Voe scraper never touches a Filemoon link and the Filemoon scraper never touches a Voe link, while still keeping automatic URL/HTML signature detection as a safety net when a single link is used.
+
+- **Decision 3: Backward-Compatible Firestore Episode & Movie Data Structure**
+  - *Chosen Approach*: Store Server 1 in `videoUrl` (and `server1Url`) and Server 2 in `secondaryVideoUrl` (and `server2Url`) on each episode and movie item. If an older episode only has `videoUrl` (whether Voe or Filemoon), the app automatically detects which server it belongs to and plays it smoothly.
+  - *Why*: Protects 100% of existing uploaded content in Firestore with zero breaking changes.
 
 ---
 
 ### 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
-```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                   1. FILEMOON FAST PIPELINE (1–3s)                        │
-│  Filemoon Link (/d/ or /e/ or bysedikamoum / kerapoxy / moonmov)          │
-│       │                                                                   │
-│       ▼                                                                   │
-│  OkHttp Hop 1 (/e/{code}) ──► Extracts <iframe src=".../bkg/...">         │
-│       │                                                                   │
-│       ▼                                                                   │
-│  OkHttp Hop 2 (Referer: /e/, Sec-Fetch-Dest: iframe)                      │
-│       │                                                                   │
-│       ▼                                                                   │
-│  Deterministic State-Machine Packer Parser (unpackPacker in <2ms)         │
-│       │                                                                   │
-│       ▼                                                                   │
-│  Direct Master .m3u8 URL + Referer Registered in CorsFreeWebViewClient    │
-└───────────────────────────────────────────────────────────────────────────┘
+- **Architecture & Component Diagram**:
 
+```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                 2. FREEZE-FREE DOWNLOAD ARCHITECTURE                      │
-│  Tap Download Button                                                      │
-│       │                                                                   │
-│       ├──► No Popup Ad Interception on Modal Open                         │
-│       ├──► Instant Modal Render (Uses Cached Player Meta / Fast Header)   │
-│       └──► Background Queue Worker:                                       │
-│              • Startup Guard: Interrupted tasks start as 'paused'         │
-│              • Native Fetch via CorsFreeWebViewClient (Zero Base64 Lock)  │
-│              • Throttled Progress UI Updates (Max 2 updates/sec)          │
+│                         ADMIN PORTAL (Upload Step 2)                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Episode Box / Movie Smart HLS Box                                   │  │
+│  │  • Server 1 Input (Primary - Voe.sx)      + [Verify S1]             │  │
+│  │  • Server 2 Input (Secondary - Filemoon)  + [Verify S2]             │  │
+│  └──────────────────────────────────┬──────────────────────────────────┘  │
+└─────────────────────────────────────┼─────────────────────────────────────┘
+                                      ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                    CONTENT DETAIL SCREEN (Action Dock)                    │
+│  [1. Like]     [2. My List]     [3. Download]     [4. Server (S1 / S2)]   │
+│                                                            │              │
+│   ┌────────────────────────────────────────────────────────┘              │
+│   ▼                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Server Selector Modal                                               │  │
+│  │  (o) Server 1: Primary (Voe.sx)     — Fast Multi-Quality HLS        │  │
+│  │  ( ) Server 2: Secondary (Filemoon) — Backup High-Speed Mirror      │  │
+│  └──────────────────────────────────┬──────────────────────────────────┘  │
+└─────────────────────────────────────┼─────────────────────────────────────┘
+                                      ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│            DEDICATED SCRAPER ROUTER (Kotlin APK + Node Server)            │
+│                                                                           │
+│   ├──► Server 1 (VOE Pipeline) ──► ROT13 + Base64 + Shift(-3) + wc0       │
+│   │                                (100% Existing Working Engine)         │
+│   │                                                                       │
+│   └──► Server 2 (FILEMOON / BYSE Pipeline)                                │
+│         ├─ Step A: /api/videos/{code}/embed/details & /embed/playback     │
+│         │          AES-256-GCM Decryptor (key_parts + iv + payload)       │
+│         ├─ Step B: /d/{code} -> /e/{code} -> Nested Iframe (f16px / bkg)  │
+│         │          Deterministic Packer Unpacker                          │
+│         └─ Step C: Stage 2 WebView Sniffer with JSON.parse & fetch() Hook │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
+
+- **Data Model & State**:
+  - `Episode` & `ContentItem` interface additions (optional, non-breaking fields):
+    - `videoUrl`: Primary stream link (Server 1 - Voe.sx, or default single link)
+    - `secondaryVideoUrl?: string`: Secondary stream link (Server 2 - Filemoon / Byse)
+    - `server1Url?: string`: Explicit Server 1 link alias
+    - `server2Url?: string`: Explicit Server 2 link alias
+  - `activeServer`: `'server1' | 'server2'` state in `ContentDetailScreen` (persisted in `localStorage` under `maxplay_preferred_server` so user preference is remembered across episodes).
 
 - **Interactive Component & State Mapping**:
-  - **Filemoon Unpacker & Fast Iframe Sniffer (`InbuiltStreamScraper.kt`)**: Replaces regex argument extraction with a deterministic linear parser, fixes V8 string-only evaluation, and fast-paths nested iframes.
-  - **Non-Blocking Native Bridge (`MaxPlayNativeBridge.kt` & `nativeBridgeService.ts`)**: Removes multi-megabyte media playlist string evaluation from `parseHlsManifestOnDevice` and adds async binary segment support.
-  - **Download Freeze Prevention (`ContentDetailScreen.tsx`, `DownloadSelectionModal.tsx`, `DownloadManager.ts`, `clientHlsDownloader.ts`)**: Removes popup trigger from the Download button, reuses resolved stream cache in the modal, pauses stale tasks on startup, and uses native WebView CORS-free `fetch()` for segment downloads instead of synchronous Base64 bridge calls.
+  - **Action Dock Button #4 (`Server`)**: Opens the Server Selection Modal showing availability status for Server 1 (Voe.sx) and Server 2 (Filemoon) on the active episode/movie.
+  - **Server Selection Modal**: Clicking Server 1 or Server 2 saves current playback progress, updates `activeServer`, clears any stale error state, and immediately resolves the selected server's stream URL with explicit provider routing (`VOE` vs `FILEMOON`).
+  - **Automatic Fallback Handler**: If `activeServer === 'server1'` but only `secondaryVideoUrl` exists (or if Server 1 extraction fails and `secondaryVideoUrl` is present), automatically switches to Server 2 and notifies the user via toast (`"Switched to Server 2 (Filemoon)"`), and vice-versa.

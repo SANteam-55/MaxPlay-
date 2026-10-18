@@ -29,7 +29,8 @@ import {
   Flag,
   AlertTriangle,
   ShieldAlert,
-  Loader2
+  Loader2,
+  Server
 } from 'lucide-react';
 import { ContentItem, CommentItem, CommentReplyItem, SeasonData } from '../../types';
 import { InlinePlayer } from '../../components/player/InlinePlayer';
@@ -650,6 +651,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   };
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
   const [showDetails, setShowDetails] = useState(false);
+  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2'>('server1');
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isSeasonModalOpen, setIsSeasonModalOpen] = useState(false);
@@ -1175,6 +1178,49 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     if (selectedPartIndex + 1 < movieTotalParts) {
       hasNext = true;
+    }
+  }
+
+  // 3. DUAL-SERVER RESOLUTION (Server 1: Primary Voe.sx / HLS | Server 2: Secondary Filemoon / Byse)
+  let primaryServerUrl = playerVideoUrl || content.videoUrl || '';
+  let secondaryServerUrl = '';
+  let secondaryServerQualityLinks: Record<string, string> = {};
+
+  if (isSeries && !isMovie && currentEpisode) {
+    const epExtraParts = Array.isArray(currentEpisode.videoLinks) ? currentEpisode.videoLinks : [];
+    if (selectedPartIndex > 0 && epExtraParts[selectedPartIndex - 1] && typeof epExtraParts[selectedPartIndex - 1] === 'object') {
+      const extraPartObj = epExtraParts[selectedPartIndex - 1];
+      secondaryServerUrl = extraPartObj.secondaryVideoUrl || extraPartObj.secondaryUrl || '';
+      secondaryServerQualityLinks = extraPartObj.secondaryQualityLinks || {};
+    } else {
+      secondaryServerUrl = currentEpisode.secondaryVideoUrl || (currentEpisode as any).secondaryUrl || content.secondaryVideoUrl || (content as any).secondaryUrl || '';
+      secondaryServerQualityLinks = currentEpisode.secondaryQualityLinks || content.secondaryQualityLinks || {};
+    }
+  } else {
+    if (activeMoviePart && typeof activeMoviePart === 'object') {
+      secondaryServerUrl = activeMoviePart.secondaryVideoUrl || activeMoviePart.secondaryUrl || content.secondaryVideoUrl || (content as any).secondaryUrl || '';
+      secondaryServerQualityLinks = (activeMoviePart.secondaryQualityLinks && Object.keys(activeMoviePart.secondaryQualityLinks).length > 0)
+        ? activeMoviePart.secondaryQualityLinks
+        : (content.secondaryQualityLinks || {});
+    } else {
+      secondaryServerUrl = content.secondaryVideoUrl || (content as any).secondaryUrl || '';
+      secondaryServerQualityLinks = content.secondaryQualityLinks || {};
+    }
+  }
+
+  if (!offlineVideoUrl) {
+    if (selectedServer === 'server2') {
+      if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
+        playerQualityLinks = secondaryServerQualityLinks;
+        playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
+          ? playerQualityLinks[activeQuality]
+          : (secondaryServerUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
+        playerVideoSources = {};
+      }
+    } else if (selectedServer === 'server1' && !playerVideoUrl && secondaryServerUrl) {
+      // Automatic fallback if only Server 2 link was filled
+      playerQualityLinks = secondaryServerQualityLinks;
+      playerVideoUrl = secondaryServerUrl;
     }
   }
 
@@ -1916,14 +1962,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           return (
             <InlinePlayer
               key={content.id}
-              streamKey={`${content.id}-${currentPartKey}`}
+              streamKey={`${content.id}-${currentPartKey}-${selectedServer}`}
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}
               videoSources={playerVideoSources}
               availableLanguages={availableLanguages}
               chunks={playerChunks}
               skipMarkers={currentPlayerSkipMarkers}
-              isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls)}
+              isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls || secondaryServerUrl)}
               posterUrl={posterOrBackdrop}
               title={playerTitle || 'Video'}
               initialTime={playbackPosition}
@@ -2131,10 +2177,12 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               content.isSmartHls ||
               (currentEpisode as any)?.isSmartHls ||
               (activeMoviePart as any)?.isSmartHls ||
+              secondaryServerUrl ||
               (content.videoUrl && (content.videoUrl.includes('.m3u8') || content.videoUrl.includes('m3u8'))) ||
               (currentEpisode?.videoUrl && (currentEpisode.videoUrl.includes('.m3u8') || currentEpisode.videoUrl.includes('m3u8'))) ||
               SmartStreamService.isExtractableSource(content.videoUrl, content.isSmartHls) ||
-              SmartStreamService.isExtractableSource(currentEpisode?.videoUrl, (currentEpisode as any)?.isSmartHls)
+              SmartStreamService.isExtractableSource(currentEpisode?.videoUrl, (currentEpisode as any)?.isSmartHls) ||
+              SmartStreamService.isExtractableSource(secondaryServerUrl, true)
             );
 
             return (
@@ -2167,16 +2215,32 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             );
           })()}
 
-          {/* 4. Details / Info Button (Violet Purple Accent) */}
+          {/* 4. Server Selection Button (Server 1 Primary Voe.sx / Server 2 Filemoon) */}
           <button 
             onClick={() => {
               adManager.handleActionDockClick(!!user?.isPremium);
-              setShowDetails(true);
+              setIsServerModalOpen(true);
             }}
-            className="flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border border-white/10 hover:border-purple-500/40 hover:bg-[#181822] active:scale-95 transition-all duration-200 cursor-pointer text-white/80 hover:text-purple-300 shadow-md shadow-purple-950/20"
+            className={`flex flex-col items-center justify-center gap-1.5 h-[66px] rounded-2xl bg-[#131318]/90 border transition-all duration-200 cursor-pointer active:scale-95 shadow-md ${
+              selectedServer === 'server2'
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/15 shadow-amber-950/20'
+                : 'border-white/10 hover:border-purple-500/40 hover:bg-[#181822] text-white/80 hover:text-purple-300 shadow-purple-950/20'
+            }`}
+            title="Switch Streaming Server (Server 1 Voe.sx / Server 2 Filemoon)"
           >
-            <Info className="w-4 h-4 stroke-[2.4] text-[#a855f7]" />
-            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight">Details</span>
+            <div className="relative flex items-center justify-center">
+              <Server className={`w-4 h-4 stroke-[2.4] ${selectedServer === 'server2' ? 'text-amber-400' : 'text-[#a855f7]'}`} />
+              <span className={`ml-1 px-1 py-0.2 rounded text-[8px] font-black uppercase tracking-tighter ${
+                selectedServer === 'server2'
+                  ? 'bg-amber-500/25 text-amber-300 border border-amber-400/40'
+                  : 'bg-purple-500/25 text-purple-300 border border-purple-400/40'
+              }`}>
+                {selectedServer === 'server2' ? 'S2' : 'S1'}
+              </span>
+            </div>
+            <span className="font-bold text-[9px] sm:text-[10px] tracking-tight truncate max-w-[92%]">
+              {selectedServer === 'server2' ? 'Server 2' : 'Server 1'}
+            </span>
           </button>
         </div>
 
@@ -2963,12 +3027,186 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         </div>
       )}
 
+      {/* Server Selection Bottom Sheet Modal (Server 1 Primary Voe.sx / Server 2 Secondary Filemoon) */}
+      {isServerModalOpen && content && (
+        <div
+          className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex items-end justify-center p-0 animate-in fade-in duration-200"
+          onClick={() => setIsServerModalOpen(false)}
+        >
+          <div
+            className="bg-[#18181c] border-t border-white/15 w-full rounded-t-3xl p-5 max-h-[85%] overflow-y-auto overscroll-contain shadow-2xl animate-in slide-in-from-bottom-5 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3.5 mb-3.5 border-b border-white/10 sticky top-0 bg-[#18181c] z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+                  <Server className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-extrabold text-white leading-tight">
+                    Select Streaming Server
+                  </h2>
+                  <p className="text-[10px] text-white/50">
+                    Switch servers instantly if one is slow or buffering
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsServerModalOpen(false)}
+                className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 text-white/70 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {/* Server 1: Primary (Voe.sx) */}
+              {(() => {
+                const isSelected = selectedServer === 'server1';
+                const hasPrimary = Boolean(primaryServerUrl);
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedServer('server1');
+                      setIsServerModalOpen(false);
+                      setToastMessage('Switched to Server 1 (Primary • Voe.sx)');
+                      setTimeout(() => setToastMessage(null), 2500);
+                    }}
+                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-purple-600/25 via-indigo-600/15 to-[#181822] border-purple-500 ring-1 ring-purple-500/50 shadow-lg shadow-purple-950/40'
+                        : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border ${
+                        isSelected
+                          ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-900/50'
+                          : 'bg-white/5 text-purple-300 border-white/10'
+                      }`}>
+                        S1
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs sm:text-sm font-extrabold text-white truncate">
+                            Server 1 — Primary (Voe.sx)
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            Fastest
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-white/55 mt-0.5 truncate">
+                          {hasPrimary
+                            ? 'Direct HLS Multi-Audio & Auto Quality Stream'
+                            : 'Uses default stream link'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 ml-2">
+                      {isSelected ? (
+                        <div className="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center text-white shadow-sm">
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        </div>
+                      ) : (
+                        <span className="text-[10px] font-bold text-white/40 px-2 py-1 rounded-lg bg-white/5">
+                          Select
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })()}
+
+              {/* Server 2: Secondary (Filemoon / Byse) */}
+              {(() => {
+                const isSelected = selectedServer === 'server2';
+                const hasSecondary = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
+                const isPrimaryAlreadyFilemoon = Boolean(
+                  primaryServerUrl && (
+                    primaryServerUrl.toLowerCase().includes('filemoon') ||
+                    primaryServerUrl.toLowerCase().includes('byse') ||
+                    primaryServerUrl.toLowerCase().includes('f16px') ||
+                    primaryServerUrl.toLowerCase().includes('n1mwq')
+                  )
+                );
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedServer('server2');
+                      setIsServerModalOpen(false);
+                      setToastMessage(
+                        hasSecondary || isPrimaryAlreadyFilemoon
+                          ? 'Switched to Server 2 (Secondary • Filemoon)'
+                          : 'Switched to Server 2 (Using available stream)'
+                      );
+                      setTimeout(() => setToastMessage(null), 2500);
+                    }}
+                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-amber-500/25 via-orange-600/15 to-[#181822] border-amber-500 ring-1 ring-amber-500/50 shadow-lg shadow-amber-950/40'
+                        : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border ${
+                        isSelected
+                          ? 'bg-amber-500 text-black border-amber-300 shadow-md shadow-amber-900/50'
+                          : 'bg-white/5 text-amber-300 border-white/10'
+                      }`}>
+                        S2
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs sm:text-sm font-extrabold text-white truncate">
+                            Server 2 — Backup (Filemoon)
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
+                            hasSecondary || isPrimaryAlreadyFilemoon
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-white/10 text-white/50 border-white/15'
+                          }`}>
+                            {hasSecondary || isPrimaryAlreadyFilemoon ? 'Ready' : 'Auto Fallback'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-white/55 mt-0.5 truncate">
+                          {hasSecondary
+                            ? 'Dedicated Filemoon / Byse High-Speed HLS Stream'
+                            : isPrimaryAlreadyFilemoon
+                            ? 'Active Filemoon / Byse Direct HLS Stream'
+                            : 'Backup mirror server (falls back to Primary if not set)'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 ml-2">
+                      {isSelected ? (
+                        <div className="w-6 h-6 rounded-full bg-amber-500 flex items-center justify-center text-black shadow-sm">
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        </div>
+                      ) : (
+                        <span className="text-[10px] font-bold text-white/40 px-2 py-1 rounded-lg bg-white/5">
+                          Select
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Instant Download Selection Modal */}
       <DownloadSelectionModal
         visible={showDownloadModal}
         content={content}
         initialSeasonIndex={selectedSeasonIndex}
         initialEpisodeIndex={selectedEpisodeIndex}
+        selectedServer={selectedServer}
         onClose={() => setShowDownloadModal(false)}
         onSuccessToast={(msg) => {
           setToastMessage(msg);

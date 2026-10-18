@@ -10,6 +10,7 @@ interface DownloadSelectionModalProps {
   content: ContentItem;
   initialSeasonIndex?: number;
   initialEpisodeIndex?: number;
+  selectedServer?: 'server1' | 'server2';
   onClose: () => void;
   onSuccessToast?: (msg: string) => void;
 }
@@ -19,6 +20,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   content,
   initialSeasonIndex = 0,
   initialEpisodeIndex = 0,
+  selectedServer = 'server1',
   onClose,
   onSuccessToast,
 }) => {
@@ -118,9 +120,14 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   useEffect(() => {
     let isCancelled = false;
     const activeEp = isSeries ? currentEpisodes[focusedEpisodeIdx] : null;
-    const targetUrl = (activeEp?.videoUrl || content.videoUrl || (content.qualityLinks ? Object.values(content.qualityLinks)[0] : '')) as string;
+    const isServer2 = selectedServer === 'server2';
+    const primaryUrl = (activeEp?.videoUrl || content.videoUrl || (content.qualityLinks ? Object.values(content.qualityLinks)[0] : '')) as string;
+    const secondaryUrl = ((activeEp as any)?.secondaryVideoUrl || (activeEp as any)?.secondaryUrl || content.secondaryVideoUrl || (content as any)?.secondaryUrl || '') as string;
+    const targetUrl = (isServer2 ? (secondaryUrl || primaryUrl) : (primaryUrl || secondaryUrl)) as string;
 
-    const existingDl = (activeEp as any)?.downloadQualities || (content as any)?.downloadQualities;
+    const existingDl = isServer2 && ((activeEp as any)?.secondaryDownloadQualities || (content as any)?.secondaryDownloadQualities)
+      ? ((activeEp as any)?.secondaryDownloadQualities || (content as any)?.secondaryDownloadQualities)
+      : (!isServer2 || !secondaryUrl ? ((activeEp as any)?.downloadQualities || (content as any)?.downloadQualities) : null);
     const existingAudios = (activeEp as any)?.audioTracks || (content as any)?.audioTracks;
 
     if (Array.isArray(existingDl) && existingDl.length > 0 && Array.isArray(existingAudios) && existingAudios.length > 0) {
@@ -200,7 +207,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       isCancelled = true;
       clearTimeout(deferTimer);
     };
-  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes]);
+  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes, selectedServer]);
 
   // 2. Available Languages resolution (Dynamic from extracted metadata or content)
   const availableLanguages = useMemo(() => {
@@ -241,7 +248,13 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   // 3. Available Qualities resolution (Real extracted qualities & exact sizes from Admin verify or stream probe)
   const qualityOptions = useMemo(() => {
     const activeEp = isSeries ? currentEpisodes[focusedEpisodeIdx] : null;
-    const rawDl = extractedMeta?.downloadQualities || (activeEp as any)?.downloadQualities || (content as any)?.downloadQualities;
+    const isServer2 = selectedServer === 'server2';
+    const secUrl = (activeEp as any)?.secondaryVideoUrl || (activeEp as any)?.secondaryUrl || content.secondaryVideoUrl;
+    const rawDl = extractedMeta?.downloadQualities || (
+      isServer2 && secUrl
+        ? ((activeEp as any)?.secondaryDownloadQualities || (content as any)?.secondaryDownloadQualities)
+        : ((activeEp as any)?.downloadQualities || (content as any)?.downloadQualities)
+    );
 
     if (Array.isArray(rawDl) && rawDl.length > 0) {
       return rawDl.map((q: any) => ({
@@ -258,7 +271,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     const epDurationSec = extractedMeta?.duration || (activeEp?.duration ? (activeEp.duration > 300 ? activeEp.duration : activeEp.duration * 60) : 1440);
     const calcSizeMb = (dur: number, bitrateBps: number) => Math.max(30, Math.round((bitrateBps * dur) / (8 * 1024 * 1024)));
 
-    const qLinks = (activeEp as any)?.qualityLinks || content.qualityLinks;
+    const qLinks = isServer2 && secUrl
+      ? ((activeEp as any)?.secondaryQualityLinks || content.secondaryQualityLinks)
+      : ((activeEp as any)?.qualityLinks || content.qualityLinks);
     if (qLinks && typeof qLinks === 'object' && Object.keys(qLinks).length > 0) {
       const keys = Object.keys(qLinks);
       return keys.map((k) => {
@@ -280,7 +295,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       { id: '480p', label: '480p Standard', badge: 'Data Saver', movieSizeMb: calcSizeMb(durationSec, 600000), epSizeMb: calcSizeMb(epDurationSec, 600000) },
       { id: '360p', label: '360p Fast Load', badge: 'Ultra Saver', movieSizeMb: calcSizeMb(durationSec, 300000), epSizeMb: calcSizeMb(epDurationSec, 300000) },
     ];
-  }, [content, isSeries, currentEpisodes, focusedEpisodeIdx, extractedMeta]);
+  }, [content, isSeries, currentEpisodes, focusedEpisodeIdx, extractedMeta, selectedServer]);
 
   const [selectedQuality, setSelectedQuality] = useState<string>(() => {
     return qualityOptions[0]?.id || '720p';
@@ -317,7 +332,10 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     if (content.videoUrl && (content.videoUrl.includes('.m3u8') || content.videoUrl.includes('m3u8') || SmartStreamService.isExtractableSource(content.videoUrl, true))) {
       return true;
     }
-    if (currentEpisodes.some((ep) => ep.isSmartHls || (ep.videoUrl && (ep.videoUrl.includes('.m3u8') || SmartStreamService.isExtractableSource(ep.videoUrl, true))))) {
+    if (content.secondaryVideoUrl && (content.secondaryVideoUrl.includes('.m3u8') || content.secondaryVideoUrl.includes('m3u8') || SmartStreamService.isExtractableSource(content.secondaryVideoUrl, true))) {
+      return true;
+    }
+    if (currentEpisodes.some((ep) => ep.isSmartHls || (ep.videoUrl && (ep.videoUrl.includes('.m3u8') || SmartStreamService.isExtractableSource(ep.videoUrl, true))) || ((ep as any).secondaryVideoUrl && ((ep as any).secondaryVideoUrl.includes('.m3u8') || SmartStreamService.isExtractableSource((ep as any).secondaryVideoUrl, true))))) {
       return true;
     }
     return false;
@@ -365,7 +383,21 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       return '';
     };
 
+    const isServer2 = selectedServer === 'server2';
+
     if (ep) {
+      if (isServer2) {
+        const epSecDl = (ep as any)?.secondaryDownloadQualities;
+        if (Array.isArray(epSecDl) && epSecDl.length > 0) {
+          const match = epSecDl.find((q: any) => q.id === activeQuality) || epSecDl[0];
+          if (match?.url && isHlsStream(match.url)) return match.url;
+        }
+        const fromEpSecQuality = findInQualityDict((ep as any)?.secondaryQualityLinks);
+        if (fromEpSecQuality && isHlsStream(fromEpSecQuality)) return fromEpSecQuality;
+        const epSecUrl = (ep as any)?.secondaryVideoUrl || (ep as any)?.secondaryUrl;
+        if (epSecUrl && isHlsStream(epSecUrl)) return epSecUrl;
+      }
+
       const epDl = (ep as any)?.downloadQualities;
       if (Array.isArray(epDl) && epDl.length > 0) {
         const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
@@ -380,11 +412,25 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       if (ep.videoUrl && isHlsStream(ep.videoUrl)) return ep.videoUrl;
       if (ep.streamUrl && isHlsStream(ep.streamUrl)) return ep.streamUrl;
       if (ep.url && isHlsStream(ep.url)) return ep.url;
+      const epSecFallback = (ep as any)?.secondaryVideoUrl || (ep as any)?.secondaryUrl;
+      if (epSecFallback && isHlsStream(epSecFallback)) return epSecFallback;
     }
 
     // Content-level resolution
     const matchedOpt = qualityOptions.find((q) => q.id === activeQuality);
     if (matchedOpt?.url && isHlsStream(matchedOpt.url)) return matchedOpt.url;
+
+    if (isServer2) {
+      const contentSecDl = (content as any)?.secondaryDownloadQualities;
+      if (Array.isArray(contentSecDl) && contentSecDl.length > 0) {
+        const match = contentSecDl.find((q: any) => q.id === activeQuality) || contentSecDl[0];
+        if (match?.url && isHlsStream(match.url)) return match.url;
+      }
+      const fromContentSecQuality = findInQualityDict(content.secondaryQualityLinks);
+      if (fromContentSecQuality && isHlsStream(fromContentSecQuality)) return fromContentSecQuality;
+      const contentSecUrl = content.secondaryVideoUrl || (content as any).secondaryUrl;
+      if (contentSecUrl && isHlsStream(contentSecUrl)) return contentSecUrl;
+    }
 
     const contentDl = (content as any)?.downloadQualities;
     if (Array.isArray(contentDl) && contentDl.length > 0) {
@@ -400,6 +446,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
     if (content.videoUrl && isHlsStream(content.videoUrl)) return content.videoUrl;
     if ((content as any).streamUrl && isHlsStream((content as any).streamUrl)) return (content as any).streamUrl;
+    if (content.secondaryVideoUrl && isHlsStream(content.secondaryVideoUrl)) return content.secondaryVideoUrl;
 
     if (Array.isArray((content as any).movieParts) && (content as any).movieParts.length > 0) {
       const mp0 = (content as any).movieParts[0];
