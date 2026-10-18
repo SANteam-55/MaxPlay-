@@ -368,6 +368,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
   // ==========================================
   interface CachedStreamInfo {
     m3u8Url: string;
+    rawM3u8Url?: string;
     expiresAt: number;
     cachedAt: number;
     qualities?: string[];
@@ -392,6 +393,17 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     duration: number;
   }
 
+  function joinHlsUrl(relative: string, targetUrl: string): string {
+    try {
+      const base = new URL(targetUrl);
+      const joined = new URL(relative, targetUrl);
+      if (!joined.search && base.search) joined.search = base.search;
+      return joined.toString();
+    } catch {
+      return relative;
+    }
+  }
+
   async function parseHlsManifestMetadata(m3u8Url: string, durationSec: number = 0): Promise<ExtractedStreamMetadata> {
     const fallbackQualities = ['1080p', '720p'];
     const fallbackDownloadQualities = [
@@ -401,9 +413,18 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     const fallbackAudios = ['Hindi', 'English'];
 
     try {
+      let referer = 'https://byseraguci.com/';
+      try {
+        const u = new URL(m3u8Url);
+        if (!u.hostname.includes('sprintcdn') && !u.hostname.includes('owphbf') && !u.hostname.includes('filemoon') && !u.hostname.includes('byse')) {
+          referer = `${u.origin}/`;
+        }
+      } catch {}
+
       const resp = await fetch(m3u8Url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': referer,
           'Accept': '*/*'
         }
       });
@@ -1133,23 +1154,46 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           const expiresAt = now + ttlMs;
           const streamMeta = await parseHlsManifestMetadata(fmResult.m3u8Url, requestedDuration);
 
+          const host = req.get('host') || 'localhost:3000';
+          const proto = (req.secure || req.headers['x-forwarded-proto'] === 'https' || host.includes('hf.space')) ? 'https' : 'http';
+          const serverOrigin = `${proto}://${host}`;
+
+          // Wrap master m3u8 in proxy so client browser/native player has zero CORS / ASN issues
+          const proxiedMaster = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(fmResult.m3u8Url)}`;
+
+          const proxiedQualityLinks: Record<string, string> = {};
+          if (streamMeta.qualityLinks && typeof streamMeta.qualityLinks === 'object') {
+            for (const [q, link] of Object.entries(streamMeta.qualityLinks)) {
+              proxiedQualityLinks[q] = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(link)}`;
+            }
+          }
+          if (Object.keys(proxiedQualityLinks).length === 0) {
+            proxiedQualityLinks['1080p'] = proxiedMaster;
+          }
+
+          const proxiedDownloadQualities = (streamMeta.downloadQualities || []).map((dq: any) => ({
+            ...dq,
+            url: `${serverOrigin}/proxy/ts?url=${encodeURIComponent(dq.url || fmResult.m3u8Url)}`
+          }));
+
           streamExtractionCache.set(trimmedUrl, {
-            m3u8Url: fmResult.m3u8Url,
+            m3u8Url: proxiedMaster,
+            rawM3u8Url: fmResult.m3u8Url,
             expiresAt,
             cachedAt: now,
             qualities: streamMeta.qualities,
-            qualityLinks: streamMeta.qualityLinks,
-            downloadQualities: streamMeta.downloadQualities,
+            qualityLinks: proxiedQualityLinks,
+            downloadQualities: proxiedDownloadQualities,
             audioTracks: streamMeta.audioTracks,
             duration: streamMeta.duration
           });
 
           res.json({
             ok: true,
-            m3u8Url: fmResult.m3u8Url,
+            m3u8Url: proxiedMaster,
             qualities: streamMeta.qualities,
-            qualityLinks: streamMeta.qualityLinks,
-            downloadQualities: streamMeta.downloadQualities,
+            qualityLinks: proxiedQualityLinks,
+            downloadQualities: proxiedDownloadQualities,
             audioTracks: streamMeta.audioTracks,
             duration: streamMeta.duration,
             durationFormatted: Math.floor(streamMeta.duration / 60) + ":" + (streamMeta.duration % 60).toString().padStart(2, '0'),
@@ -1519,6 +1563,192 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
   app.get(["/api/download-media", "/api/download-stream"], handleDownloadMedia);
   app.post(["/api/download-media", "/api/download-stream"], handleDownloadMedia);
+
+  // Dedicated Filemoon / Byse / HLS Playlist Proxy & Rewriter
+  const handleProxyM3u8 = async (req: any, res: any) => {
+    try {
+      const targetUrl = (req.query.url as string || "").trim();
+      if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        res.status(400).send("#EXTM3U\n# Missing or invalid url");
+        return;
+      }
+
+      const host = req.get("host") || "localhost:3000";
+      const proto = (req.secure || req.headers["x-forwarded-proto"] === "https" || host.includes("hf.space")) ? "https" : "http";
+      const serverOrigin = `${proto}://${host}`;
+
+      let referer = (req.query.referer as string || "").trim();
+      if (!referer) {
+        try {
+          const u = new URL(targetUrl);
+          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse")) {
+            referer = "https://byseraguci.com/";
+          } else {
+            referer = `${u.origin}/`;
+          }
+        } catch {
+          referer = "https://byseraguci.com/";
+        }
+      }
+
+      const upstream = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Referer": referer,
+          "Accept": "*/*"
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!upstream.ok) {
+        res.status(upstream.status).send(`#EXTM3U\n# Upstream responded with ${upstream.status}`);
+        return;
+      }
+
+      const text = await upstream.text();
+      const lines = text.split("\n");
+      const rewrittenLines: string[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+        if (!line) {
+          rewrittenLines.push("");
+          continue;
+        }
+
+        if (line.startsWith("#")) {
+          // Check for #EXT-X-MEDIA:TYPE=AUDIO/SUBTITLES/...URI="..."
+          if (line.startsWith("#EXT-X-MEDIA") && line.includes('URI="')) {
+            line = line.replace(/URI="([^"]+)"/, (_match, uri) => {
+              const full = joinHlsUrl(uri, targetUrl);
+              return `URI="${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(full)}"`;
+            });
+          }
+          // Check for #EXT-X-KEY:METHOD=...,URI="..."
+          else if (line.startsWith("#EXT-X-KEY") && line.includes('URI="')) {
+            line = line.replace(/URI="([^"]+)"/, (_match, uri) => {
+              const full = joinHlsUrl(uri, targetUrl);
+              return `URI="${serverOrigin}/proxy/ts?url=${encodeURIComponent(full)}"`;
+            });
+          }
+          // Check for #EXT-X-I-FRAME-STREAM-INF:...URI="..."
+          else if (line.startsWith("#EXT-X-I-FRAME-STREAM-INF") && line.includes('URI="')) {
+            line = line.replace(/URI="([^"]+)"/, (_match, uri) => {
+              const full = joinHlsUrl(uri, targetUrl);
+              return `URI="${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(full)}"`;
+            });
+          }
+          rewrittenLines.push(line);
+        } else {
+          // Line is a URL (variant playlist or media segment)
+          const fullUrl = joinHlsUrl(line, targetUrl);
+          if (fullUrl.includes(".m3u8") || fullUrl.includes("m3u8")) {
+            rewrittenLines.push(`${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(fullUrl)}`);
+          } else {
+            rewrittenLines.push(`${serverOrigin}/proxy/ts?url=${encodeURIComponent(fullUrl)}`);
+          }
+        }
+      }
+
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.status(200).send(rewrittenLines.join("\n"));
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).send(`#EXTM3U\n# Proxy error: ${err.message}`);
+      }
+    }
+  };
+
+  app.get(["/proxy/m3u8", "/api/proxy/m3u8"], handleProxyM3u8);
+  app.options(["/proxy/m3u8", "/api/proxy/m3u8"], (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.sendStatus(204);
+  });
+
+  // Dedicated TS Segment Proxy with Range Header & Streaming Support
+  const handleProxyTs = async (req: any, res: any) => {
+    try {
+      const targetUrl = (req.query.url as string || "").trim();
+      if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        res.status(400).json({ error: "Missing or invalid url parameter" });
+        return;
+      }
+
+      let referer = (req.query.referer as string || "").trim();
+      if (!referer) {
+        try {
+          const u = new URL(targetUrl);
+          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse")) {
+            referer = "https://byseraguci.com/";
+          } else {
+            referer = `${u.origin}/`;
+          }
+        } catch {
+          referer = "https://byseraguci.com/";
+        }
+      }
+
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer": referer,
+        "Accept": "*/*"
+      };
+
+      if (req.headers.range) {
+        headers["Range"] = req.headers.range;
+      }
+
+      const upstream = await fetch(targetUrl, {
+        headers,
+        signal: AbortSignal.timeout(30000)
+      });
+
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Accept-Ranges", "bytes");
+
+      if (upstream.headers.get("content-type")) {
+        res.setHeader("Content-Type", upstream.headers.get("content-type")!);
+      } else {
+        res.setHeader("Content-Type", "video/mp2t");
+      }
+      if (upstream.headers.get("content-length")) {
+        res.setHeader("Content-Length", upstream.headers.get("content-length")!);
+      }
+      if (upstream.headers.get("content-range")) {
+        res.setHeader("Content-Range", upstream.headers.get("content-range")!);
+      }
+
+      res.status(upstream.status);
+      if (upstream.body) {
+        const { Readable } = await import("stream");
+        const nodeStream = Readable.fromWeb(upstream.body as any);
+        nodeStream.pipe(res);
+      } else {
+        const arrayBuf = await upstream.arrayBuffer();
+        res.send(Buffer.from(arrayBuf));
+      }
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message || "TS proxy segment error" });
+      }
+    }
+  };
+
+  app.get(["/proxy/ts", "/api/proxy/ts"], handleProxyTs);
+  app.options(["/proxy/ts", "/api/proxy/ts"], (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.sendStatus(204);
+  });
 
   // Lightweight CORS proxy for individual HLS segments & media requests (fast, <300ms, Vercel safe)
   app.get(["/api/proxy", "/proxy"], async (req, res) => {

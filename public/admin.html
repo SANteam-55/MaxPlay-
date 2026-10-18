@@ -1671,8 +1671,9 @@
                 </p>
                 <div class="form-group" style="margin-bottom:16px;">
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                    <label class="form-label" style="font-size:11px; font-weight:800; color:var(--accent-cyan); margin:0;">
+                    <label class="form-label" style="font-size:11px; font-weight:800; color:var(--accent-cyan); margin:0; display:flex; align-items:center; gap:6px;">
                       <i class="fa-solid fa-server"></i> Server 1 — Primary Stream URL (Voe.sx / Master HLS)
+                      <span style="font-size:9px; background:rgba(6,182,212,0.15); color:var(--accent-cyan); padding:2px 6px; border-radius:4px; font-weight:700;">OPTIONAL</span>
                     </label>
                     <span style="font-size:10px; color:var(--text-tertiary);">Primary VOE.sx or direct .m3u8 source</span>
                   </div>
@@ -1681,21 +1682,28 @@
                     <button type="button" id="btn-test-movie-hls" class="btn-primary" onclick="testAndExtractMovieStream()" style="white-space:nowrap; padding:0 16px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
                       <i class="fa-solid fa-bolt"></i> Verify S1
                     </button>
+                    <button type="button" id="btn-clear-movie-hls" class="btn-secondary" onclick="clearMovieServer1()" title="Clear Server 1" style="white-space:nowrap; padding:0 12px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                      <i class="fa-solid fa-trash-can"></i> Clear
+                    </button>
                   </div>
                   <div id="movie-hls-extract-result" style="display:none; margin-top:8px;"></div>
                 </div>
 
                 <div class="form-group" style="margin-bottom:16px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.28); border-radius:10px; padding:12px;">
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                    <label class="form-label" style="font-size:11px; font-weight:800; color:#FBBF24; margin:0;">
+                    <label class="form-label" style="font-size:11px; font-weight:800; color:#FBBF24; margin:0; display:flex; align-items:center; gap:6px;">
                       <i class="fa-solid fa-moon"></i> Server 2 — Secondary Stream URL (Filemoon / Byse)
+                      <span style="font-size:9px; background:rgba(245,158,11,0.18); color:#FBBF24; padding:2px 6px; border-radius:4px; font-weight:700;">OPTIONAL</span>
                     </label>
-                    <span style="font-size:10px; color:var(--text-tertiary);">Optional Filemoon / Byse link (e.g. https://byseraguci.com/d/...)</span>
+                    <span style="font-size:10px; color:var(--text-tertiary);">Filemoon / Byse link (e.g. https://byseraguci.com/d/...)</span>
                   </div>
                   <div style="display:flex; gap:10px;">
                     <input type="text" id="movie-secondary-hls-url" class="input-control" placeholder="https://byseraguci.com/d/euhf0n80b2ue or https://filemoon.sx/e/..." style="font-family:monospace; font-size:13px; font-weight:600; border-color:rgba(245,158,11,0.4);">
                     <button type="button" id="btn-test-movie-secondary-hls" class="btn-secondary" onclick="testAndExtractMovieSecondaryStream()" style="white-space:nowrap; padding:0 16px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:6px; border-color:rgba(245,158,11,0.45); color:#FBBF24;">
                       <i class="fa-solid fa-bolt"></i> Verify S2
+                    </button>
+                    <button type="button" id="btn-clear-movie-secondary-hls" class="btn-secondary" onclick="clearMovieServer2()" title="Clear Server 2" style="white-space:nowrap; padding:0 12px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                      <i class="fa-solid fa-trash-can"></i> Clear
                     </button>
                   </div>
                   <div id="movie-secondary-hls-extract-result" style="display:none; margin-top:8px;"></div>
@@ -5239,12 +5247,20 @@
 
         // Pre-fill movie smart HLS url if present
         const movieHlsInput = document.getElementById('movie-hls-url');
-        if (movieHlsInput) {
-          movieHlsInput.value = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
-        }
         const movieSecHlsInput = document.getElementById('movie-secondary-hls-url');
+        const itemSecUrl = item.secondaryVideoUrl || item.secondaryUrl || '';
+        let itemPrimaryUrl = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
+
+        // If primary URL is identical to secondary URL (from earlier single-server save bug), don't duplicate into Server 1
+        if (itemSecUrl && itemPrimaryUrl === itemSecUrl) {
+          itemPrimaryUrl = '';
+        }
+
+        if (movieHlsInput) {
+          movieHlsInput.value = itemPrimaryUrl;
+        }
         if (movieSecHlsInput) {
-          movieSecHlsInput.value = item.secondaryVideoUrl || item.secondaryUrl || '';
+          movieSecHlsInput.value = itemSecUrl;
         }
         
         // Restore movie download qualities and metadata
@@ -5939,10 +5955,21 @@
               <div style="font-size:11px; color:#ddd; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.3); padding:8px; border-radius:6px; margin-bottom:6px; border:1px solid rgba(255,255,255,0.05);">
                 ${data.m3u8Url}
               </div>
-              <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:#ddd;">
+              <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:#ddd; margin-bottom:8px;">
                 <span><strong style="color:#FBBF24;">Qualities:</strong> ${qLabels}</span>
                 <span>•</span>
                 <span><strong style="color:#38BDF8;">Audio:</strong> ${aLabels}</span>
+              </div>
+              <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(245,158,11,0.25); display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s2-movie-preview-box', '${data.m3u8Url}')">
+                    <i class="fa-solid fa-play"></i> Test Play S2 Stream
+                  </button>
+                  <span style="font-size:10px; color:#aaa;">Inbuilt HLS Proxy • Zero CORS</span>
+                </div>
+                <div id="s2-movie-preview-box" style="display:none; margin-top:6px;">
+                  <video controls style="width:100%; max-height:240px; border-radius:8px; background:#000;" playsinline></video>
+                </div>
               </div>
             </div>
           `;
@@ -6008,8 +6035,16 @@
                 <div style="color:#FBBF24; font-weight:800; font-size:11px; display:flex; align-items:center; gap:6px; margin-bottom:2px;">
                   <i class="fa-solid fa-circle-check"></i> Server 2 (Filemoon / Byse) Verified & Ready
                 </div>
-                <div style="font-size:10px; color:#ddd;">
+                <div style="font-size:10px; color:#ddd; margin-bottom:6px;">
                   <i class="fa-solid fa-sliders" style="color:#FBBF24;"></i> ${qLabels} • <i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> ${aLabels}
+                </div>
+                <div style="padding-top:6px; border-top:1px solid rgba(245,158,11,0.25);">
+                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('s2-ep-preview-box-${epIdx}', '${data.m3u8Url}')">
+                    <i class="fa-solid fa-play"></i> Test Play S2 Stream
+                  </button>
+                  <div id="s2-ep-preview-box-${epIdx}" style="display:none; margin-top:6px;">
+                    <video controls style="width:100%; max-height:200px; border-radius:6px; background:#000;" playsinline></video>
+                  </div>
                 </div>
               </div>
             `;
@@ -6027,6 +6062,100 @@
         btn.disabled = false;
         btn.innerHTML = origHtml;
       }
+    };
+
+    window.clearMovieServer1 = function() {
+      const inp = document.getElementById('movie-hls-url');
+      if (inp) inp.value = '';
+      const res = document.getElementById('movie-hls-extract-result');
+      if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+      window.extractedMovieDownloadQualities = [];
+      window.extractedMovieQualityLinks = {};
+      window.extractedMovieAudioTracks = [];
+      window.extractedMovieQualities = [];
+      showToast('Server 1 link cleared', 'info');
+    };
+
+    window.clearMovieServer2 = function() {
+      const inp = document.getElementById('movie-secondary-hls-url');
+      if (inp) inp.value = '';
+      const res = document.getElementById('movie-secondary-hls-extract-result');
+      if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+      window.extractedMovieSecondaryDownloadQualities = [];
+      showToast('Server 2 link cleared', 'info');
+    };
+
+    window.toggleAdminStreamPreview = function(containerId, streamUrl) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      if (container.style.display === 'block') {
+        container.style.display = 'none';
+        const vid = container.querySelector('video');
+        if (vid) {
+          vid.pause();
+          vid.removeAttribute('src');
+          vid.load();
+        }
+        if (window._adminPreviewHlsInstances && window._adminPreviewHlsInstances[containerId]) {
+          window._adminPreviewHlsInstances[containerId].destroy();
+          delete window._adminPreviewHlsInstances[containerId];
+        }
+        return;
+      }
+      container.style.display = 'block';
+      const vid = container.querySelector('video');
+      if (!vid) return;
+
+      if (!window._adminPreviewHlsInstances) window._adminPreviewHlsInstances = {};
+      if (window._adminPreviewHlsInstances[containerId]) {
+        window._adminPreviewHlsInstances[containerId].destroy();
+      }
+
+      if (window.Hls && window.Hls.isSupported()) {
+        const hls = new window.Hls();
+        window._adminPreviewHlsInstances[containerId] = hls;
+        hls.loadSource(streamUrl);
+        hls.attachMedia(vid);
+        hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          vid.play().catch(e => console.log('Autoplay blocked:', e));
+        });
+      } else {
+        vid.src = streamUrl;
+        vid.play().catch(e => console.log('Autoplay blocked:', e));
+      }
+    };
+
+    window.clearEpisodeServer1 = function(epIdx, btn) {
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-hls-stream-input');
+      if (inp) inp.value = '';
+      const statusEl = card.querySelector('.ep-hls-extract-status');
+      if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes[epIdx]) {
+        activeSeason.episodes[epIdx].videoUrl = '';
+        delete activeSeason.episodes[epIdx].videoSources;
+        delete activeSeason.episodes[epIdx].qualityLinks;
+      }
+      if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
+      showToast(`Episode ${epIdx + 1} Server 1 link cleared`, 'info');
+    };
+
+    window.clearEpisodeServer2 = function(epIdx, btn) {
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-secondary-hls-stream-input');
+      if (inp) inp.value = '';
+      const statusEl = card.querySelector('.ep-secondary-hls-extract-status');
+      if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes[epIdx]) {
+        delete activeSeason.episodes[epIdx].secondaryVideoUrl;
+        delete activeSeason.episodes[epIdx].secondaryDownloadQualities;
+      }
+      if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
+      showToast(`Episode ${epIdx + 1} Server 2 link cleared`, 'info');
     };
 
     window.promptAndExtractMovieStream = async function(btn) {
@@ -7009,6 +7138,7 @@
                 <div style="display:flex; gap:8px;">
                   <input type="text" class="input-control ep-hls-stream-input" value="${ep.videoUrl || (ep.videoSources?.Default?.['1080p'] || '')}" placeholder="https://voe.sx/yz8csmojmi6a or https://...master.m3u8" style="font-family:monospace; font-size:12px; font-weight:600; border-color:rgba(168,85,247,0.4);" onchange="syncEpisodesFromDOM()">
                   <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 12px; height:38px; font-size:11px; font-weight:700;" onclick="testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S1</button>
+                  <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:38px; font-size:11px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer1(${epIdx}, this)" title="Clear Server 1"><i class="fa-solid fa-trash-can"></i></button>
                 </div>
                 <div class="ep-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
 
@@ -7022,6 +7152,7 @@
                   <div style="display:flex; gap:8px;">
                     <input type="text" class="input-control ep-secondary-hls-stream-input" value="${ep.secondaryVideoUrl || ep.secondaryUrl || ''}" placeholder="https://byseraguci.com/d/euhf0n80b2ue or https://filemoon.sx/e/..." style="font-family:monospace; font-size:12px; font-weight:600; border-color:rgba(245,158,11,0.4);" onchange="syncEpisodesFromDOM()">
                     <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 12px; height:38px; font-size:11px; font-weight:700; border-color:rgba(245,158,11,0.45); color:#FBBF24;" onclick="testAndExtractEpisodeSecondaryStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S2</button>
+                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:38px; font-size:11px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer2(${epIdx}, this)" title="Clear Server 2"><i class="fa-solid fa-trash-can"></i></button>
                   </div>
                   <div class="ep-secondary-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
                 </div>
@@ -7384,10 +7515,28 @@
         if (window.currentUploadMode === 'movie') {
           if (window.isSmartHlsMode) {
             const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || '';
-            firstVideoUrl = hlsUrl;
-            mainQualityLinks = { '1080p': hlsUrl };
-            mainVideoSources = { 'Default': { '1080p': hlsUrl } };
-            movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } } }];
+            const secUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || '';
+            firstVideoUrl = hlsUrl || secUrl;
+
+            if (hlsUrl && secUrl) {
+              firstVideoUrl = hlsUrl;
+              mainQualityLinks = { '1080p': hlsUrl };
+              mainVideoSources = { 'Default': { '1080p': hlsUrl } };
+              movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } }, secondaryVideoUrl: secUrl }];
+            } else if (hlsUrl) {
+              firstVideoUrl = hlsUrl;
+              mainQualityLinks = { '1080p': hlsUrl };
+              mainVideoSources = { 'Default': { '1080p': hlsUrl } };
+              movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } } }];
+            } else if (secUrl) {
+              firstVideoUrl = '';
+              mainQualityLinks = {};
+              mainVideoSources = {};
+              movieParts = [{ secondaryVideoUrl: secUrl }];
+            } else {
+              firstVideoUrl = '';
+              movieParts = [];
+            }
           } else {
             if (typeof window.collectCurrentMoviePartsData === 'function') {
               movieParts = window.collectCurrentMoviePartsData();
@@ -7541,6 +7690,7 @@
                 }
               }
             });
+            movieParts = movieParts.filter(p => p && ((p.videoSources && Object.keys(p.videoSources).length > 0) || p.secondaryVideoUrl || p.secondaryUrl || p.videoUrl));
           }
 
           activeEpisodesList = activeSeasons.flatMap(s => (s && s.episodes) ? s.episodes : []);
@@ -7611,7 +7761,9 @@
           qualityLinks: mainQualityLinks,
           videoSources: mainVideoSources,
           availableLanguages: window.isSmartHlsMode ? ['Default'] : (window.activeLanguages || ['Hindi', 'English']),
-          videoLinks: movieParts.length > 0 ? movieParts : (firstVideoUrl ? [firstVideoUrl] : []),
+          videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryUrl))).length > 0
+            ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryUrl)))
+            : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: document.getElementById('movie-secondary-hls-url')?.value.trim() }] : [])),
           seasonsData: activeSeasons,
           episodesList: lightweightEpisodes,
           trending: selectedRows.length > 0,
@@ -7626,6 +7778,8 @@
           const movieSecUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || '';
           if (movieSecUrl) {
             rawDoc.secondaryVideoUrl = movieSecUrl;
+          } else {
+            delete rawDoc.secondaryVideoUrl;
           }
           if (window.extractedMovieSecondaryDownloadQualities && window.extractedMovieSecondaryDownloadQualities.length > 0) {
             rawDoc.secondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities;

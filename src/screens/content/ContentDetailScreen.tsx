@@ -659,6 +659,26 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
+  // Auto-detect and switch to Server 2 if Server 1 is not provided/empty
+  useEffect(() => {
+    if (!content) return;
+    const hasS1 = Boolean(
+      content.videoUrl ||
+      (content.qualityLinks && Object.keys(content.qualityLinks).length > 0) ||
+      (content.videoSources && Object.keys(content.videoSources).length > 0) ||
+      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'string' ? Boolean(p) : Boolean(p?.videoUrl || (p?.videoSources && Object.keys(p.videoSources).length > 0) || (p?.qualityLinks && Object.keys(p.qualityLinks).length > 0))))
+    );
+    const hasS2 = Boolean(
+      content.secondaryVideoUrl ||
+      (content as any).secondaryUrl ||
+      (content.secondaryQualityLinks && Object.keys(content.secondaryQualityLinks).length > 0) ||
+      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryUrl)))
+    );
+    if (!hasS1 && hasS2) {
+      setSelectedServer('server2');
+    }
+  }, [content?.id]);
+
   // Report Modal States
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportingTarget, setReportingTarget] = useState<{ comment: CommentItem; reply?: CommentReplyItem } | null>(null);
@@ -1129,10 +1149,28 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
   if (isMovie) {
     if (content.videoLinks && Array.isArray(content.videoLinks) && content.videoLinks.length > 0) {
-      moviePartsList = content.videoLinks;
-      movieTotalParts = moviePartsList.length;
+      const validLinks = content.videoLinks.filter((p: any) =>
+        p && (
+          typeof p === 'string'
+            ? p.trim().length > 0
+            : Boolean(
+                (p.videoSources && Object.keys(p.videoSources).length > 0) ||
+                (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) ||
+                p.videoUrl ||
+                p.secondaryVideoUrl ||
+                p.secondaryUrl
+              )
+        )
+      );
+      if (validLinks.length > 0) {
+        moviePartsList = validLinks;
+        movieTotalParts = moviePartsList.length;
+      } else {
+        moviePartsList = [{ videoSources: content.videoSources, qualityLinks: content.qualityLinks, videoUrl: content.videoUrl, secondaryVideoUrl: content.secondaryVideoUrl }];
+        movieTotalParts = 1;
+      }
     } else {
-      moviePartsList = [{ videoSources: content.videoSources, qualityLinks: content.qualityLinks, videoUrl: content.videoUrl }];
+      moviePartsList = [{ videoSources: content.videoSources, qualityLinks: content.qualityLinks, videoUrl: content.videoUrl, secondaryVideoUrl: content.secondaryVideoUrl }];
       movieTotalParts = 1;
     }
 
@@ -1961,7 +1999,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
           return (
             <InlinePlayer
-              key={content.id}
+              key={`${content.id}-${currentPartKey}-${selectedServer}`}
               streamKey={`${content.id}-${currentPartKey}-${selectedServer}`}
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}
@@ -3094,14 +3132,18 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                           <span className="text-xs sm:text-sm font-extrabold text-white truncate">
                             Server 1 — Primary (Voe.sx)
                           </span>
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                            Fastest
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
+                            hasPrimary
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : 'bg-white/10 text-white/50 border-white/15'
+                          }`}>
+                            {hasPrimary ? 'Ready' : 'Not configured'}
                           </span>
                         </div>
                         <p className="text-[11px] text-white/55 mt-0.5 truncate">
                           {hasPrimary
                             ? 'Direct HLS Multi-Audio & Auto Quality Stream'
-                            : 'Uses default stream link'}
+                            : 'Server 1 is not configured for this title'}
                         </p>
                       </div>
                     </div>
@@ -3169,7 +3211,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                               ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                               : 'bg-white/10 text-white/50 border-white/15'
                           }`}>
-                            {hasSecondary || isPrimaryAlreadyFilemoon ? 'Ready' : 'Auto Fallback'}
+                            {hasSecondary || isPrimaryAlreadyFilemoon ? 'Ready' : 'Not configured'}
                           </span>
                         </div>
                         <p className="text-[11px] text-white/55 mt-0.5 truncate">
@@ -3177,7 +3219,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                             ? 'Dedicated Filemoon / Byse High-Speed HLS Stream'
                             : isPrimaryAlreadyFilemoon
                             ? 'Active Filemoon / Byse Direct HLS Stream'
-                            : 'Backup mirror server (falls back to Primary if not set)'}
+                            : 'Server 2 is not configured for this title'}
                         </p>
                       </div>
                     </div>
