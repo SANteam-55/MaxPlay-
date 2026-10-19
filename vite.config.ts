@@ -15,6 +15,8 @@ export default defineConfig(() => {
         'firebase/auth',
         'firebase/firestore',
         'react',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
         'react-dom',
         'react-dom/client',
         'lucide-react',
@@ -24,6 +26,7 @@ export default defineConfig(() => {
       ],
     },
     resolve: {
+      dedupe: ['react', 'react-dom'],
       alias: {
         '@': path.resolve(__dirname, '.'),
       },

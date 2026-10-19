@@ -238,6 +238,17 @@ export class SmartStreamService {
   }>>();
 
   /**
+   * Non-blocking background stream pre-warmer for instant playback and server switching.
+   */
+  public static prefetchStream(sourceUrl?: string): void {
+    if (!sourceUrl || typeof sourceUrl !== "string") return;
+    const trimmed = sourceUrl.trim();
+    if (!this.isExtractableSource(trimmed)) return;
+    if (this.getClientCache(trimmed) || this.inFlightMap.has(trimmed)) return;
+    this.resolveStream(trimmed, { forceRefresh: false }).catch(() => {});
+  }
+
+  /**
    * Resolves a video source URL into a playable Master m3u8 URL.
    * If the URL is already an m3u8 or mp4, it returns it directly.
    * If it is an extractable source (e.g. VOE / Filemoon), it uses the on-device scraper or backend proxy.
@@ -306,8 +317,10 @@ export class SmartStreamService {
     isEmbed?: boolean;
     expiresAt?: number;
   }> {
+    const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
+
     // 1.5 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Headless Sniffer (Zero CORS)
-    if (NativeBridgeService.isRunningInKotlinApp()) {
+    if (isKotlinApp) {
       try {
         const nativeRes = await NativeBridgeService.extractStreamNative(trimmed);
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
@@ -340,19 +353,27 @@ export class SmartStreamService {
         },
         body: JSON.stringify({
           url: trimmed,
-          forceRefresh: options.forceRefresh === true
+          forceRefresh: options.forceRefresh === true,
+          fast: true
         })
       });
       clearTimeout(timeoutId);
 
       if (response.ok) {
         const result = await response.json();
-        if (result.ok && result.m3u8Url) {
+        const chosenM3u8 = isKotlinApp
+          ? (result.rawM3u8Url || result.m3u8Url)
+          : result.m3u8Url;
+
+        if (result.ok && chosenM3u8) {
+          if (isKotlinApp && result.headers?.Referer) {
+            NativeBridgeService.fetchTextCorsFree(chosenM3u8, result.headers).catch(() => {});
+          }
           if (result.expiresAt) {
-            this.setClientCache(trimmed, result.m3u8Url, result.expiresAt);
+            this.setClientCache(trimmed, chosenM3u8, result.expiresAt);
           }
           return {
-            streamUrl: result.m3u8Url,
+            streamUrl: chosenM3u8,
             isExtracted: true,
             cached: Boolean(result.cached),
             isEmbed: false,

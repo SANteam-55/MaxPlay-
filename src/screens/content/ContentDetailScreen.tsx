@@ -1247,20 +1247,37 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }
 
   if (!offlineVideoUrl) {
+    const isSecExtractable = SmartStreamService.isExtractableSource(secondaryServerUrl);
     if (selectedServer === 'server2') {
       if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
-        playerQualityLinks = secondaryServerQualityLinks;
-        playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-          ? playerQualityLinks[activeQuality]
-          : (secondaryServerUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
-        playerVideoSources = {};
+        if (isSecExtractable) {
+          playerQualityLinks = {};
+          playerVideoUrl = secondaryServerUrl;
+          playerVideoSources = {};
+        } else {
+          playerQualityLinks = secondaryServerQualityLinks;
+          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
+            ? playerQualityLinks[activeQuality]
+            : (secondaryServerUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
+          playerVideoSources = {};
+        }
       }
     } else if (selectedServer === 'server1' && !playerVideoUrl && secondaryServerUrl) {
       // Automatic fallback if only Server 2 link was filled
-      playerQualityLinks = secondaryServerQualityLinks;
+      playerQualityLinks = isSecExtractable ? {} : secondaryServerQualityLinks;
       playerVideoUrl = secondaryServerUrl;
     }
   }
+
+  // Pre-warm both Server 1 and Server 2 streams in the background for instant 0ms playback & server switching
+  useEffect(() => {
+    if (primaryServerUrl) {
+      SmartStreamService.prefetchStream(primaryServerUrl);
+    }
+    if (secondaryServerUrl) {
+      SmartStreamService.prefetchStream(secondaryServerUrl);
+    }
+  }, [primaryServerUrl, secondaryServerUrl]);
 
   // Derive available languages dynamically for the current part
   const availableLanguages = useMemo(() => {

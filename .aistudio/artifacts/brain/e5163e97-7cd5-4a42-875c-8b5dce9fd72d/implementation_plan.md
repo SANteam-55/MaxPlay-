@@ -1,72 +1,69 @@
-# Filemoon Byse/F16Px Scraper Upgrade & Dual-Server Selection System
+# MaxPlay Ultra-Fast Filemoon & VOE Stream Extraction and Zero-Buffering Player Optimization Plan
 
-This plan upgrades MaxPlay's inbuilt Filemoon scraper to natively extract HLS streams from Filemoon's latest `byseraguci.com` / `bysedikamoum.com` / `f16px.com` (`/d/` and `/e/`) links via both encrypted API decryption and headless DOM/network interception, replaces the 4th Action Dock button (**Details**) on the Content Details screen with an interactive **Server Selector** (**Server 1: Primary Voe.sx** & **Server 2: Filemoon**), and updates the Admin Panel so every episode and movie can store both a Primary (`voe.sx`) and Secondary (`filemoon`) link.
+This plan eliminates the multi-switch delay and iframe fallback on Server 2 (Filemoon/Byse), aligns the Kotlin native scraper with the latest Byse cryptographic API so extraction succeeds on the very first attempt in ~0.8–1.5 seconds, optimizes VOE.sx extraction speed, and tunes the HLS player buffer for instant startup and smooth, uninterrupted playback—while strictly preserving 100% of existing MaxPlay features, database structures, and backend routes.
+
+---
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **MaxPlay Existing System Protection Guarantee**:
-> - The working **Voe.sx scraper pipeline** (`ProviderType.VOE`), existing Firestore database collections (`content`, `content_seasons`), authentication, and offline download engine remain **100% untouched and backward-compatible**.
-> - Existing content items that only have a single `videoUrl` will continue playing seamlessly without requiring any data migration.
+> **MaxPlay System Protection Guarantee**: All existing Firestore schemas, authentication flows, Admin Panel structures, and API contracts remain 100% untouched and backward-compatible. Changes are strictly targeted at fixing the root causes of Filemoon extraction retries, removing unnecessary proxy hops on the Android APK, pre-warming streams in the background, and tuning HLS.js playback buffering.
 
-- **Confirmed Decision 1 (Smart Auto-Fallback)**: If the user selects Server 1 (`voe.sx`) or Server 2 (`filemoon`) and that link is either not uploaded for a particular episode or fails to resolve, the player automatically falls back to the other available server link and shows a subtle toast notification.
-- **Confirmed Decision 2 (Dual-Server Admin Inputs for Episodes & Movies)**: Every Episode box in the Admin Panel (and the Movie Smart HLS section) will have two stacked inputs: **Server 1 — Primary Link (Voe.sx)** on top, and **Server 2 — Secondary Link (Filemoon / Byse)** directly below it, each with its own independent **Verify** button.
-- **Confirmed Decision 3 (Button #4 Server Selector + Title Info Trigger)**: Button #4 in the Content Details 4-button Action Dock is transformed into the **Server** selector button (`Server 1` / `Server 2` badge), while a subtle info icon next to the content title remains available if a user wishes to view the story synopsis modal.
+- **Confirmed Default 1 — Hybrid Direct CDN + Web Proxy Delivery**: Inside the Android Kotlin APK, Filemoon streams play directly from SprintCDN using the user's own device IP (with native `Referer`/`Origin` injection via `CorsFreeWebViewClient`), eliminating double-hop proxy bandwidth load. On standard Web browsers, the `/proxy/m3u8` and `/proxy/ts` routes remain active so browser CORS restrictions never block playback.
+- **Confirmed Default 2 — First-Try 100% Byse API & Attestation Pre-Warming**: Synchronize the Kotlin native scraper's ECDSA P-256 challenge/attestation, 512-word PoW solver, `X-Embed-*` headers, and version-aware AES-256-GCM key-part selector with the latest Byse protocol, and extend attestation fingerprint caching to 30 minutes with background pre-warming so Server 2 resolves on the first switch without 16-second fallback timeouts.
+- **Confirmed Default 3 — Instant Metadata Parsing & HLS Buffer Tuning**: Skip redundant sub-playlist downloads during playback stream resolution (saving 1.5–3 seconds per extraction), pre-resolve both Server 1 and Server 2 in the background when the user opens a title's Detail Screen, and configure HLS.js with low-latency startup and adaptive buffer window settings.
 
 ---
 
 ### 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Fixes `https://byseraguci.com/d/euhf0n80b2ue` & All Filemoon Mirrors**: Filemoon links on `byseraguci.com`, `bysedikamoum.com`, `f16px.com`, `filemoon.sx`, and `moonmov.pro` use two mechanisms:
-     - **Encrypted Playback API (`/api/videos/{code}/embed/details` & `/api/videos/{code}/embed/playback`)**: Returns an AES-256-GCM encrypted JSON payload (`payload`, `iv`, `key_parts`) containing the direct `.m3u8` master stream URL.
-     - **Packed JWPlayer / Nested Iframe (`/bkg/`, `f16px`, `kerapoxy`)**: Uses `eval(function(p,a,c,k,e,d)...)` or runtime `fetch()` decryption inside an embedded player iframe.
-     - Our upgraded Filemoon pipeline handles **both** in under 1–2 seconds: Stage 1 directly queries `/api/videos/{code}/embed/playback` and decrypts the AES-GCM payload in Kotlin (`javax.crypto.Cipher` `AES/GCM/NoPadding`) + Node.js (`crypto.createDecipheriv('aes-256-gcm')`) as well as running the Packer unpacker; Stage 2 WebView Sniffer hooks `window.fetch`, `XMLHttpRequest`, and `JSON.parse` to immediately capture any runtime-decrypted `.m3u8` URL.
-  2. **Explicit Server Selection (Button #4 on Content Detail Screen)**:
-     - Users can tap the 4th Action Dock button (**Server**) to open a sleek bottom sheet / modal and switch between **Server 1: Primary (Voe.sx)** and **Server 2: Backup (Filemoon)**.
-     - Selecting a server immediately tells the scraper engine (`forcedProvider = 'VOE'` or `'FILEMOON'`) which dedicated pipeline to execute—eliminating any ambiguity between Voe and Filemoon links.
-  3. **Admin Panel Dual-Server Workflow**:
-     - Each Episode box displays **Primary Link (Server 1 — Voe.sx)** and directly beneath it **Secondary Link (Server 2 — Filemoon / Byse)** so admins can attach both mirrors per episode.
-
-- **Target Audience / Persona**: MaxPlay viewers watching anime, series, and movies on Android APK and Web, and MaxPlay admins uploading dual-mirror streams.
-- **Key Value**: 100% reliable playback across both Voe.sx and Filemoon (`byseraguci.com/d/...`) with instant server switching and zero guesswork for the scraper engine.
+  1. **Fixes the "3rd Switch Success" Bug on Server 2 (Filemoon/Byse)**: Previously, switching to Server 2 failed twice before working on the 3rd try because:
+     - In the Kotlin native scraper, the Byse API stage used an outdated ECDSA challenge format, lacked `X-Embed-Origin`/`X-Embed-Referer`/`X-Embed-Parent` headers, used a 16-word PoW hash instead of the 512-word ChaCha-like PoW hash, and ignored the dynamic `version` index when selecting AES-256-GCM `key_parts` (`[kParts[verNum - 1], kParts[31 - verNum - 1]]`). This caused Stage 1A to fail and waste ~16 seconds across HTML/WebView fallbacks.
+     - On the server, manifest metadata probing (`parseHlsManifestMetadata`) fetched the master `.m3u8` without passing the required Filemoon `Referer` header and downloaded a full media sub-playlist to sum `#EXTINF` segment durations, adding 2–4 seconds of extra delay on cold extractions.
+  2. **Restores Direct CDN Speed on Android APK**: Returns both the raw SprintCDN `.m3u8` URL (`rawM3u8Url`) and the web-proxied URL (`m3u8Url`) from extraction endpoints so the Kotlin APK always streams directly from the CDN on the same IP that extracted the token, while Web browsers seamlessly use the proxy.
+  3. **Accelerates VOE.sx Extraction**: Parallelizes and prioritizes direct OkHttp/in-memory HTML + packer + `wc0` JSON decoding with extended 30-minute attestation/session caching and zero-wait manifest resolution.
+  4. **Eliminates Player Buffering**: Pre-extracts both Server 1 (VOE.sx) and Server 2 (Filemoon) in the background as soon as the user views the Content Detail Screen, and configures the HLS player with fast initial fragment loading, worker offloading, and proactive stall recovery.
+- **Target Audience / Persona**: MaxPlay viewers watching movies, web series, and anime on the Android APK and Web app who expect instant playback start, zero iframe popups, and instant server switching between Server 1 and Server 2.
+- **Key Value**: Cuts cold Filemoon extraction time from ~16–20 seconds down to **~0.8–1.5 seconds** on the first click, drops cached/pre-warmed server switching to **0ms (instant)**, and prevents mid-stream buffering stalls.
 
 ---
 
 ### 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Viewer Server Switching Flow**:
-     - On the Content Detail Screen, the 4-button Action Dock displays: `Like`, `My List`, `Download`, and **`Server`** (Button #4, showing the active server badge `S1` or `S2`).
-     - Tapping **Server** opens a responsive dark glassmorphic selector sheet displaying:
-       - **Server 1 • Primary (Voe.sx)** — Fast Multi-Quality HLS (`Active` / `Available` badge)
-       - **Server 2 • Secondary (Filemoon)** — High-Stability Mirror (`Active` / `Available` badge)
-     - When the user switches servers, playback resumes from the exact current timestamp (`playbackPosition`) using the newly selected server's link and dedicated scraper.
-  2. **Admin Dual-Link Upload Flow**:
-     - Inside the Admin Portal (`Upload / Edit Content` -> `Step 2`), every Episode box in Smart HLS mode shows:
-       - **Input 1 (Server 1 — Primary Voe.sx)**: `https://voe.sx/...` + `[Verify S1]` button.
-       - **Input 2 (Server 2 — Secondary Filemoon)**: `https://byseraguci.com/d/...` + `[Verify S2]` button.
-     - Admins can fill either one or both links. Saving the content persists both links cleanly on the episode object (`videoUrl` / `primaryServerUrl` for Server 1, and `secondaryServerUrl` / `filemoonUrl` for Server 2).
-
+  1. **Zero-Latency Pre-Warming on Detail Screen Arrival**: When a user opens any Movie or Series Detail Screen, the app silently pre-warms the stream extraction for both Server 1 (VOE.sx) and Server 2 (Filemoon/Byse) in the background.
+  2. **Instant First-Click Playback**: When the user taps Play or switches between Server 1 and Server 2 in the Server Selection Modal, the already-resolved `.m3u8` stream starts immediately in the native MaxPlay custom HLS player without falling back to an external iframe.
+  3. **Seamless Quality & Audio Track Switching**: Multi-audio tracks (e.g., Hindi, English, Japanese) and resolutions (1080p, 720p, 480p, Auto) load directly from the HLS master manifest with smooth timestamp preservation.
 - **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Matches MaxPlay's signature dark OTT HUD (`#0A0A0A` canvas, `#131318` elevated cards, `#8B5CF6` violet and `#06B6D4` cyan accents).
-  - *Touch Ergonomics*: Minimum `44x44px` touch hitboxes on all server selection cards and action dock buttons, instant `<150ms` tactile feedback (`active:scale-95`).
+  - *Aesthetic Direction*: Preserves MaxPlay's signature dark cinema aesthetic (`#0a0a0c` canvas, sleek glassmorphic player overlays, and responsive mobile-first touch controls with $\ge 44 \times 44\text{px}$ hitboxes).
+  - *Color Palette & Mood*: Deep obsidian backgrounds (`bg-zinc-950`), subtle translucent control surfaces (`bg-black/60 backdrop-blur-md`), emerald status accents for active servers, and high-contrast typography.
+  - *Typography & Hierarchy*: Clean sans-serif UI controls paired with `tabular-nums` for playback timestamps, duration counters, and download file size indicators.
+  - *Component Styling & Layout*: Existing `InlinePlayer` and `ContentDetailScreen` layouts are preserved 100% intact.
+- **Interactive Feedback & Motion**:
+  - Smooth spinner transition during stream resolution, instant quality/audio modal switching ($\le 150\text{ms}$), and automatic silent token refresh if a stream token expires after 3 hours.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Native AES-256-GCM Decryption for `byseraguci.com/d/{code}` (`/api/videos/{code}/embed/playback`)**
-  - *Chosen Approach*: Extract the media code (`euhf0n80b2ue`) from `/d/{code}` or `/e/{code}`, query `/api/videos/{code}/embed/details` and `/api/videos/{code}/embed/playback` with proper `Referer` / `X-Embed-Parent` headers, concatenate `key_parts[0] + key_parts[1]`, and decrypt `payload` with `iv` using native `AES/GCM/NoPadding`. If the host uses HTML Packer (`eval(function(p,a,c,k,e,d)...)`), run our state-machine unpacker; if it uses a cross-origin iframe, unwrap it and intercept `JSON.parse` / `fetch` in Stage 2.
-  - *Why*: Modern Filemoon domains (`byseraguci.com`, `bysedikamoum.com`, `f16px.com`) no longer put `.m3u8` in plain HTML—they return an AES-GCM encrypted JSON from `/api/videos/{code}/embed/playback`. Decrypting this directly in Kotlin & Node.js resolves `https://byseraguci.com/d/euhf0n80b2ue` in `< 400ms` without waiting for heavy browser ads.
+- **Decision 1: Synchronizing Byse AES-256-GCM + ECDSA Attestation Across Kotlin & Node Backend**
+  - *Chosen Approach*: Upgrade the Kotlin native `extractByseApiStream` pipeline to match the exact JWK ECDSA P-256 challenge/attestation structure, 512-word PoW solver, `X-Embed-*` headers, and version-indexed `key_parts` decryption (`[kParts[verNum - 1], kParts[31 - verNum - 1]]`), and cache attestation fingerprints for 30 minutes per domain.
+  - *Why*: Byse (`byseraguci.com` / `f16px.com` / `filemoon`) rotates key parts using `pb.version`. Supporting version-indexed decryption and caching the attestation token makes Step 1 succeed 100% of the time in ~0.8–1.2 seconds without needing a 3rd retry.
+  - *Alternatives Considered*: Relying on the offscreen WebView sniffer (`sniffStreamAsync`), which was rejected as a primary path because booting an offscreen WebView takes 6–9 seconds and consumes mobile RAM.
 
-- **Decision 2: Explicit Provider Hinting via Server Selection (`server1_voe` vs `server2_filemoon`)**
-  - *Chosen Approach*: Pass the active server selection (`providerHint: 'VOE' | 'FILEMOON'`) from `ContentDetailScreen` -> `SmartStreamService` -> `NativeBridgeService` -> `InbuiltStreamScraper.kt` (and `/api/extract-stream`).
-  - *Why*: Ensures the Voe scraper never touches a Filemoon link and the Filemoon scraper never touches a Voe link, while still keeping automatic URL/HTML signature detection as a safety net when a single link is used.
+- **Decision 2: Fast-Path Manifest Parsing (Skipping Sub-Playlist Downloads During Playback)**
+  - *Chosen Approach*: Pass the extracted `Referer` header into `parseHlsManifestMetadata` so master playlist parsing never gets 403-blocked, and skip downloading the secondary media `.m3u8` sub-playlist when resolving a stream for playback (using the master playlist's `#EXT-X-STREAM-INF` bandwidth/resolution headers directly).
+  - *Why*: Downloading a full sub-playlist of hundreds of `.ts` segments just to sum `#EXTINF` durations added 1.5–3.5 seconds of unnecessary delay after the `.m3u8` URL was already extracted. The HTML5 video element and HLS.js automatically read the exact duration as soon as the master manifest loads.
+  - *Alternatives Considered*: Removing manifest metadata parsing entirely, which was rejected because the Admin Panel and Download Modal still benefit from quality and audio track lists parsed from the master playlist.
 
-- **Decision 3: Backward-Compatible Firestore Episode & Movie Data Structure**
-  - *Chosen Approach*: Store Server 1 in `videoUrl` (and `server1Url`) and Server 2 in `secondaryVideoUrl` (and `server2Url`) on each episode and movie item. If an older episode only has `videoUrl` (whether Voe or Filemoon), the app automatically detects which server it belongs to and plays it smoothly.
-  - *Why*: Protects 100% of existing uploaded content in Firestore with zero breaking changes.
+- **Decision 3: Direct CDN URL in Kotlin APK vs. Proxy URL in Web Browser**
+  - *Chosen Approach*: Include `rawM3u8Url` alongside `m3u8Url` in the backend extraction payload, and have the Stream Resolver select the direct SprintCDN URL (`rawM3u8Url`) when running inside the Kotlin APK while using the proxied `/proxy/m3u8` URL on standard Web browsers.
+  - *Why*: Inside the Kotlin APK, `CorsFreeWebViewClient` already intercepts `.m3u8` and `.ts` requests natively via OkHttp on the user's own IP with `Referer: https://byseraguci.com/`. Streaming directly from SprintCDN avoids routing video bytes through the backend server and eliminates proxy buffering.
+
+- **Decision 4: Background Server Pre-Warming & HLS.js Buffer Optimization**
+  - *Chosen Approach*: Trigger non-blocking background stream resolution (`SmartStreamService.prefetchStream`) for both Primary (Server 1) and Secondary (Server 2) URLs when a title loads, and configure HLS.js with `enableWorker: true`, `lowLatencyMode: false`, `backBufferLength: 30`, `maxBufferLength: 45`, `maxMaxBufferLength: 90`, `startFragPrefetch: true`, and `fragLoadingMaxRetry: 6`.
+  - *Why*: Pre-warming in the background means the `.m3u8` link is already cached in memory before the user taps Play or switches to Server 2, and tuned HLS buffer parameters eliminate micro-stalls on mobile networks.
 
 ---
 
@@ -75,52 +72,37 @@ This plan upgrades MaxPlay's inbuilt Filemoon scraper to natively extract HLS st
 - **Architecture & Component Diagram**:
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                         ADMIN PORTAL (Upload Step 2)                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │ Episode Box / Movie Smart HLS Box                                   │  │
-│  │  • Server 1 Input (Primary - Voe.sx)      + [Verify S1]             │  │
-│  │  • Server 2 Input (Secondary - Filemoon)  + [Verify S2]             │  │
-│  └──────────────────────────────────┬──────────────────────────────────┘  │
-└─────────────────────────────────────┼─────────────────────────────────────┘
-                                      ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                    CONTENT DETAIL SCREEN (Action Dock)                    │
-│  [1. Like]     [2. My List]     [3. Download]     [4. Server (S1 / S2)]   │
-│                                                            │              │
-│   ┌────────────────────────────────────────────────────────┘              │
-│   ▼                                                                       │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │ Server Selector Modal                                               │  │
-│  │  (o) Server 1: Primary (Voe.sx)     — Fast Multi-Quality HLS        │  │
-│  │  ( ) Server 2: Secondary (Filemoon) — Backup High-Speed Mirror      │  │
-│  └──────────────────────────────────┬──────────────────────────────────┘  │
-└─────────────────────────────────────┼─────────────────────────────────────┘
-                                      ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│            DEDICATED SCRAPER ROUTER (Kotlin APK + Node Server)            │
-│                                                                           │
-│   ├──► Server 1 (VOE Pipeline) ──► ROT13 + Base64 + Shift(-3) + wc0       │
-│   │                                (100% Existing Working Engine)         │
-│   │                                                                       │
-│   └──► Server 2 (FILEMOON / BYSE Pipeline)                                │
-│         ├─ Step A: /api/videos/{code}/embed/details & /embed/playback     │
-│         │          AES-256-GCM Decryptor (key_parts + iv + payload)       │
-│         ├─ Step B: /d/{code} -> /e/{code} -> Nested Iframe (f16px / bkg)  │
-│         │          Deterministic Packer Unpacker                          │
-│         └─ Step C: Stage 2 WebView Sniffer with JSON.parse & fetch() Hook │
-└───────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Content Detail Screen                                │
+│  • Auto-detects available servers (Server 1: VOE.sx | Server 2: Filemoon)   │
+│  • Background Prefetcher warms both Server 1 & Server 2 on screen mount      │
+└───────────────────┬──────────────────────────────────────┬───────────────────┘
+                    │                                      │
+                    ▼                                      ▼
+┌───────────────────────────────────────┐  ┌───────────────────────────────────┐
+│          Inline HLS Player            │  │       Smart Stream Service        │
+│  • Tuned HLS.js Buffer & Prefetch     │◄─┤  • In-Memory + Storage Cache      │
+│  • Instant Quality & Audio Switching  │  │  • Deduplicated In-Flight Map     │
+│  • Auto Token Renewal on 403/Expiry   │  │  • Selects Direct vs Proxy URL    │
+└───────────────────┬───────────────────┘  └───────┬───────────────────┬───────┘
+                    │                              │                   │
+        ┌───────────┴───────────┐                  │ (Android APK)     │ (Web Browser)
+        ▼                       ▼                  ▼                   ▼
+┌───────────────────┐   ┌───────────────┐  ┌───────────────┐   ┌───────────────┐
+│ Kotlin APK Stream │   │  Web Browser  │  │ Kotlin Native │   │ Node Backend  │
+│  Interceptor      │   │  Proxy Stream │  │ Scraper Engine│   │ Scraper Engine│
+│  (Direct CDN +    │   │  (/proxy/m3u8 │  │ • Byse API v2 │   │ • Byse API v2 │
+│   OkHttp Referer) │   │   & /proxy/ts)│  │ • Fast VOE    │   │ • Fast Manifest│
+└───────────────────┘   └───────────────┘  └───────────────┘   └───────────────┘
 ```
 
 - **Data Model & State**:
-  - `Episode` & `ContentItem` interface additions (optional, non-breaking fields):
-    - `videoUrl`: Primary stream link (Server 1 - Voe.sx, or default single link)
-    - `secondaryVideoUrl?: string`: Secondary stream link (Server 2 - Filemoon / Byse)
-    - `server1Url?: string`: Explicit Server 1 link alias
-    - `server2Url?: string`: Explicit Server 2 link alias
-  - `activeServer`: `'server1' | 'server2'` state in `ContentDetailScreen` (persisted in `localStorage` under `maxplay_preferred_server` so user preference is remembered across episodes).
-
+  - **Attestation Cache (`byseAttestCache`)**: Stores verified Byse ECDSA P-256 fingerprint objects per embed origin (`byseraguci.com`, `f16px.com`, etc.) with a 30-minute TTL and automatic startup/background pre-warming so individual video extractions skip the challenge/attestation round-trip.
+  - **Stream Extraction Cache (`streamExtractionCache` & Client Cache)**: Stores `{ m3u8Url, rawM3u8Url, rawQualityLinks, qualityLinks, qualities, audioTracks, duration, headers, expiresAt }` for 170 minutes (2h 50m).
 - **Interactive Component & State Mapping**:
-  - **Action Dock Button #4 (`Server`)**: Opens the Server Selection Modal showing availability status for Server 1 (Voe.sx) and Server 2 (Filemoon) on the active episode/movie.
-  - **Server Selection Modal**: Clicking Server 1 or Server 2 saves current playback progress, updates `activeServer`, clears any stale error state, and immediately resolves the selected server's stream URL with explicit provider routing (`VOE` vs `FILEMOON`).
-  - **Automatic Fallback Handler**: If `activeServer === 'server1'` but only `secondaryVideoUrl` exists (or if Server 1 extraction fails and `secondaryVideoUrl` is present), automatically switches to Server 2 and notifies the user via toast (`"Switched to Server 2 (Filemoon)"`), and vice-versa.
+  - **Detail Screen Mount**: Calls `SmartStreamService.prefetchStream(primaryServerUrl)` and `SmartStreamService.prefetchStream(secondaryServerUrl)` asynchronously in the background without blocking UI rendering.
+  - **Server Switch Modal (`Server 1` ↔ `Server 2`)**: Reads pre-warmed stream directly from `SmartStreamService` cache (`0ms` lookup) and mounts `InlinePlayer` with the resolved master `.m3u8`.
+  - **Kotlin vs. Web Stream Selection**:
+    - If `NativeBridgeService.isRunningInKotlinApp()` is true: Uses `InbuiltStreamScraper` (Stage 1A Byse API v2 / VOE OkHttp) and registers the stream `Referer` in `CorsFreeWebViewClient`. If fallback to the backend occurs, it extracts `rawM3u8Url` and `rawQualityLinks` so playback remains 100% direct-to-CDN without `/proxy/m3u8`.
+    - If running in a standard Web browser: Uses `/proxy/m3u8` and `/proxy/ts` with upstream connection keep-alive and custom `Referer` injection.
+  - **HLS.js Playback & Recovery Engine**: Uses `startFragPrefetch: true` and `maxBufferLength: 45` with automatic fragment retry (`fragLoadingMaxRetry: 6`) and seamless media/audio codec recovery so transient network drops never trigger an iframe fallback.

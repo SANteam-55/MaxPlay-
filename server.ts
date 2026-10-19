@@ -404,7 +404,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
-  async function parseHlsManifestMetadata(m3u8Url: string, durationSec: number = 0): Promise<ExtractedStreamMetadata> {
+  async function parseHlsManifestMetadata(
+    m3u8Url: string,
+    durationSec: number = 0,
+    customReferer?: string,
+    skipSubPlaylistProbe: boolean = false
+  ): Promise<ExtractedStreamMetadata> {
     const fallbackQualities = ['1080p', '720p'];
     const fallbackDownloadQualities = [
       { id: '1080p', label: '1080p Full HD', sizeMb: 450, url: m3u8Url, bandwidth: 2200000 },
@@ -413,20 +418,23 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     const fallbackAudios = ['Hindi', 'English'];
 
     try {
-      let referer = 'https://byseraguci.com/';
-      try {
-        const u = new URL(m3u8Url);
-        if (!u.hostname.includes('sprintcdn') && !u.hostname.includes('owphbf') && !u.hostname.includes('filemoon') && !u.hostname.includes('byse')) {
-          referer = `${u.origin}/`;
-        }
-      } catch {}
+      let referer = customReferer || 'https://byseraguci.com/';
+      if (!customReferer) {
+        try {
+          const u = new URL(m3u8Url);
+          if (!u.hostname.includes('sprintcdn') && !u.hostname.includes('owphbf') && !u.hostname.includes('filemoon') && !u.hostname.includes('byse')) {
+            referer = `${u.origin}/`;
+          }
+        } catch {}
+      }
 
       const resp = await fetch(m3u8Url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           'Referer': referer,
           'Accept': '*/*'
-        }
+        },
+        signal: AbortSignal.timeout(4000)
       });
       if (!resp.ok) {
         return {
@@ -517,18 +525,22 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       }
 
-      // 3. Exact Duration Calculation: Probe media playlist segment durations (#EXTINF)
+      // 3. Exact Duration Calculation: Probe media playlist segment durations (#EXTINF) only when needed
       let detectedDuration = durationSec > 0 ? durationSec : 0;
       let sampleMediaPlaylist = '';
 
       if (text.includes('#EXTINF:')) {
         sampleMediaPlaylist = text;
-      } else if (Object.values(qualityLinks).length > 0) {
+      } else if (!skipSubPlaylistProbe && detectedDuration <= 0 && Object.values(qualityLinks).length > 0) {
         try {
           const probeUrl = Object.values(qualityLinks)[0];
           const pResp = await fetch(probeUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': '*/*' },
-            signal: AbortSignal.timeout(4500)
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Referer': referer,
+              'Accept': '*/*'
+            },
+            signal: AbortSignal.timeout(3500)
           });
           if (pResp.ok) {
             sampleMediaPlaylist = await pResp.text();
@@ -618,79 +630,83 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     return false;
   }
 
-  // Byse Custom 512-Word PoW Solver (matches pow-DEJGtdh2.js gr/wr/Er)
+  // Byse Custom 512-Word PoW Solver (Zero-allocation pre-hashed prefix + single buffer loop)
   function solveBysePow(nonce: string, difficulty: number): string {
     if (difficulty <= 0) return "0";
     const prefix = nonce + ":";
-    const re = (t: number, e: number) => ((t << e) | (t >>> (32 - e))) >>> 0;
-    const ht = (t: number, e: number) => Math.imul(t, e) >>> 0;
-
-    function ye(t: Uint32Array): void {
-      t[0] = (t[0] + t[1]) >>> 0; t[3] = re(t[3] ^ t[0], 16);
-      t[2] = (t[2] + t[3]) >>> 0; t[1] = re(t[1] ^ t[2], 12);
-      t[0] = (t[0] + t[1]) >>> 0; t[3] = re(t[3] ^ t[0], 8);
-      t[2] = (t[2] + t[3]) >>> 0; t[1] = re(t[1] ^ t[2], 7);
+    let p0 = 1779033703, p1 = 3144134277, p2 = 1013904242, p3 = 2773480762;
+    for (let i = 0; i < prefix.length; i++) {
+      p0 = (p0 + (prefix.charCodeAt(i) & 255)) >>> 0;
+      p0 = ((p0 << 7) | (p0 >>> 25)) >>> 0;
+      p0 = (p0 + p1) >>> 0; p3 = (((p3 ^ p0) << 16) | ((p3 ^ p0) >>> 16)) >>> 0;
+      p2 = (p2 + p3) >>> 0; p1 = (((p1 ^ p2) << 12) | ((p1 ^ p2) >>> 20)) >>> 0;
+      p0 = (p0 + p1) >>> 0; p3 = (((p3 ^ p0) << 8) | ((p3 ^ p0) >>> 24)) >>> 0;
+      p2 = (p2 + p3) >>> 0; p1 = (((p1 ^ p2) << 7) | ((p1 ^ p2) >>> 25)) >>> 0;
     }
 
-    function gr(bytes: Uint8Array): Uint32Array {
-      const e = new Uint32Array([1779033703, 3144134277, 1013904242, 2773480762]);
-      for (let i = 0; i < bytes.length; i++) {
-        e[0] = (e[0] + bytes[i]) >>> 0;
-        e[0] = re(e[0], 7);
-        ye(e);
-      }
-      for (let i = 0; i < 8; i++) ye(e);
-      const r = new Uint32Array(512);
-      for (let i = 0; i < 512; i++) {
-        ye(e);
-        r[i] = (e[0] ^ e[2]) >>> 0;
-      }
-      for (let i = 0; i < 2; i++) {
-        for (let s = 0; s < 512; s++) {
-          const a = r[s] & 511;
-          let c = (r[s] + r[a]) >>> 0;
-          c = re(c, 13);
-          c = (c ^ ht(r[(s + 1) & 511], 2654435761)) >>> 0;
-          r[s] = c;
-          e[0] = (e[0] ^ c) >>> 0;
-          ye(e);
-        }
-      }
-      const n = new Uint32Array(8);
-      for (let i = 0; i < 8; i++) {
-        ye(e);
-        let s = e[0];
-        const a = i * 64;
-        for (let c = 0; c < 64; c++) {
-          const d = r[a + c];
-          s = (s + d) >>> 0;
-          s = re(s, 5);
-          s = (s ^ ht(d, 2246822519)) >>> 0;
-        }
-        n[i] = (s ^ e[2]) >>> 0;
-      }
-      return n;
-    }
-
-    function wr(arr: Uint32Array): number {
-      let z = 0;
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i] === 0) {
-          z += 32;
-          continue;
-        }
-        return z + Math.clz32(arr[i]);
-      }
-      return z;
-    }
+    const r = new Uint32Array(512);
+    const digits = new Uint8Array(12);
 
     for (let s = 0; s < 5000000; s++) {
-      const str = prefix + s;
-      const bytes = new Uint8Array(str.length);
-      for (let i = 0; i < str.length; i++) {
-        bytes[i] = str.charCodeAt(i) & 255;
+      let e0 = p0, e1 = p1, e2 = p2, e3 = p3;
+      let temp = s;
+      let len = 0;
+      if (temp === 0) {
+        digits[0] = 48;
+        len = 1;
+      } else {
+        while (temp > 0) {
+          digits[len++] = 48 + (temp % 10);
+          temp = (temp / 10) | 0;
+        }
       }
-      if (wr(gr(bytes)) >= difficulty) {
+      for (let i = len - 1; i >= 0; i--) {
+        e0 = (e0 + digits[i]) >>> 0;
+        e0 = ((e0 << 7) | (e0 >>> 25)) >>> 0;
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 16) | ((e3 ^ e0) >>> 16)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 12) | ((e1 ^ e2) >>> 20)) >>> 0;
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 8) | ((e3 ^ e0) >>> 24)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 7) | ((e1 ^ e2) >>> 25)) >>> 0;
+      }
+      for (let i = 0; i < 8; i++) {
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 16) | ((e3 ^ e0) >>> 16)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 12) | ((e1 ^ e2) >>> 20)) >>> 0;
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 8) | ((e3 ^ e0) >>> 24)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 7) | ((e1 ^ e2) >>> 25)) >>> 0;
+      }
+      for (let i = 0; i < 512; i++) {
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 16) | ((e3 ^ e0) >>> 16)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 12) | ((e1 ^ e2) >>> 20)) >>> 0;
+        e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 8) | ((e3 ^ e0) >>> 24)) >>> 0;
+        e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 7) | ((e1 ^ e2) >>> 25)) >>> 0;
+        r[i] = (e0 ^ e2) >>> 0;
+      }
+      for (let i = 0; i < 2; i++) {
+        for (let k = 0; k < 512; k++) {
+          const a = r[k] & 511;
+          let c = (r[k] + r[a]) >>> 0;
+          c = ((c << 13) | (c >>> 19)) >>> 0;
+          c = (c ^ (Math.imul(r[(k + 1) & 511], 2654435761) >>> 0)) >>> 0;
+          r[k] = c;
+          e0 = (e0 ^ c) >>> 0;
+          e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 16) | ((e3 ^ e0) >>> 16)) >>> 0;
+          e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 12) | ((e1 ^ e2) >>> 20)) >>> 0;
+          e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 8) | ((e3 ^ e0) >>> 24)) >>> 0;
+          e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 7) | ((e1 ^ e2) >>> 25)) >>> 0;
+        }
+      }
+      e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 16) | ((e3 ^ e0) >>> 16)) >>> 0;
+      e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 12) | ((e1 ^ e2) >>> 20)) >>> 0;
+      e0 = (e0 + e1) >>> 0; e3 = (((e3 ^ e0) << 8) | ((e3 ^ e0) >>> 24)) >>> 0;
+      e2 = (e2 + e3) >>> 0; e1 = (((e1 ^ e2) << 7) | ((e1 ^ e2) >>> 25)) >>> 0;
+      let sWord = e0;
+      for (let c = 0; c < 64; c++) {
+        const d = r[c];
+        sWord = (sWord + d) >>> 0;
+        sWord = ((sWord << 5) | (sWord >>> 27)) >>> 0;
+        sWord = (sWord ^ (Math.imul(d, 2246822519) >>> 0)) >>> 0;
+      }
+      if (Math.clz32((sWord ^ e2) >>> 0) >= difficulty) {
         return String(s);
       }
     }
@@ -745,8 +761,129 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
-  // Cache Byse fingerprint attestation tokens for 4 minutes per embedOrigin
+  // Cache Byse fingerprint attestation tokens for 9 minutes per embedOrigin (JWT valid for 10m)
   const byseAttestCache = new Map<string, { fingerprint: any; expiresAt: number }>();
+  const byseEmbedOriginCache = new Map<string, string>([
+    ["https://byseraguci.com", "https://n1mwq.org"],
+    ["https://bysedikamoum.com", "https://n1mwq.org"],
+    ["https://filemoon.sx", "https://n1mwq.org"],
+    ["https://filemoon.in", "https://n1mwq.org"]
+  ]);
+
+  async function getOrAttestByseFingerprint(embedOrigin: string, embedFrameUrl: string, ua: string): Promise<any | null> {
+    const now = Date.now();
+    const cachedAttest = byseAttestCache.get(embedOrigin);
+    if (cachedAttest && cachedAttest.expiresAt > now) {
+      return cachedAttest.fingerprint;
+    }
+
+    try {
+      const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+      const jwk = publicKey.export({ format: "jwk" });
+      const publicJwk = { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
+
+      const chRes = await fetch(`${embedOrigin}/api/videos/access/challenge`, {
+        method: "POST",
+        headers: {
+          "User-Agent": ua,
+          "Origin": embedOrigin,
+          "Referer": embedFrameUrl
+        },
+        signal: AbortSignal.timeout(6000)
+      });
+
+      if (!chRes.ok) return null;
+      const chData = await chRes.json();
+      const nonceStr = chData.nonce || chData.challenge || "";
+      const sig = crypto.sign("sha256", Buffer.from(nonceStr, "utf8"), {
+        key: privateKey,
+        dsaEncoding: "ieee-p1363"
+      });
+      const signatureB64Url = sig.toString("base64url");
+      const hashB64 = (s: string) => crypto.createHash("sha256").update(s).digest("base64url");
+
+      const client = {
+        user_agent: ua,
+        architecture: "x86",
+        bitness: "64",
+        platform: "Windows",
+        platform_version: "15.0.0",
+        model: "",
+        ua_full_version: "124.0.6367.118",
+        brand_full_versions: [
+          { brand: "Chromium", version: "124.0.6367.118" },
+          { brand: "Google Chrome", version: "124.0.6367.118" },
+          { brand: "Not-A.Brand", version: "99.0.0.0" }
+        ],
+        pixel_ratio: 1,
+        screen_width: 1920,
+        screen_height: 1080,
+        color_depth: 24,
+        languages: ["en-US", "en"],
+        timezone: "Asia/Kolkata",
+        hardware_concurrency: 8,
+        device_memory: 8,
+        touch_points: 0,
+        webgl_vendor: "Google Inc. (NVIDIA)",
+        webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        canvas_hash: hashB64("canvas-byse-access"),
+        audio_hash: hashB64("audio-byse-access"),
+        webgl_params_hash: hashB64("webgl-params"),
+        fonts_hash: hashB64("Arial,Calibri,Consolas,Segoe UI,Tahoma,Times New Roman,Verdana"),
+        codecs_hash: hashB64("codecs-v1"),
+        media_devices: "ai1ao2vi1",
+        pointer_type: "fine,hover",
+        extra: { vendor: "Google Inc.", appVersion: ua.replace("Mozilla/", "") }
+      };
+
+      const attRes = await fetch(`${embedOrigin}/api/videos/access/attest`, {
+        method: "POST",
+        headers: {
+          "User-Agent": ua,
+          "Content-Type": "application/json",
+          "Origin": embedOrigin,
+          "Referer": embedFrameUrl
+        },
+        body: JSON.stringify({
+          viewer_id: "",
+          device_id: "",
+          challenge_id: chData.challenge_id,
+          nonce: nonceStr,
+          signature: signatureB64Url,
+          public_key: publicJwk,
+          client,
+          storage: {},
+          attributes: { entropy: "high" }
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+
+      if (!attRes.ok) return null;
+      const attData = await attRes.json();
+      const fingerprint = {
+        token: attData.token || "",
+        viewer_id: attData.viewer_id || "",
+        device_id: attData.device_id || "",
+        confidence: attData.confidence ?? 0.9
+      };
+      byseAttestCache.set(embedOrigin, {
+        fingerprint,
+        expiresAt: Date.now() + 9 * 60 * 1000
+      });
+      return fingerprint;
+    } catch {
+      return null;
+    }
+  }
+
+  // Background pre-warmer so Byse attestation fingerprint is always hot (0ms on user request)
+  const defaultByseUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  setTimeout(() => {
+    getOrAttestByseFingerprint("https://n1mwq.org", "https://n1mwq.org/30s/wm894ng2635g", defaultByseUa).catch(() => {});
+  }, 500);
+  setInterval(() => {
+    getOrAttestByseFingerprint("https://n1mwq.org", "https://n1mwq.org/30s/wm894ng2635g", defaultByseUa).catch(() => {});
+  }, 8 * 60 * 1000);
 
   async function extractFilemoonByseStream(sourceUrl: string): Promise<{
     ok: boolean;
@@ -754,133 +891,42 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     headers?: Record<string, string>;
     error?: string;
   }> {
-    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    const ua = defaultByseUa;
     try {
       const parsed = new URL(sourceUrl.trim());
       const origin = `${parsed.protocol}//${parsed.host}`;
       const pathParts = parsed.pathname.split("/").filter(Boolean);
-      const code = pathParts.length >= 2 && ["d", "e", "g", "bkg", "wz28"].includes(pathParts[0].toLowerCase())
+      const code = pathParts.length >= 2 && ["d", "e", "g", "bkg", "wz28", "30s"].includes(pathParts[0].toLowerCase())
         ? pathParts[1]
         : pathParts[pathParts.length - 1];
 
-      // STAGE 1: Byse / F16Px API + ECDSA P-256 Attestation + PoW Captcha + AES-256-GCM Decryption
+      // STAGE 1: Byse / F16Px API + Pre-Warmed ECDSA P-256 Attestation + Fast PoW Captcha + AES-256-GCM Decryption
       if (code && code.length >= 6) {
         try {
-          const detailsRes = await fetch(`${origin}/api/videos/${code}/embed/details`, {
-            headers: {
-              "User-Agent": ua,
-              "Accept": "application/json",
-              "Referer": `${origin}/e/${code}`
-            },
-            signal: AbortSignal.timeout(8000)
-          });
+          let embedOrigin = byseEmbedOriginCache.get(origin) || "";
+          let embedFrameUrl = embedOrigin ? `${embedOrigin}/30s/${code}` : "";
 
-          if (detailsRes.ok) {
-            const details = await detailsRes.json();
-            const embedFrameUrl: string = details?.embed_frame_url || `${origin}/e/${code}`;
-            const embedParsed = new URL(embedFrameUrl);
-            const embedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
+          if (!embedOrigin) {
+            const detailsRes = await fetch(`${origin}/api/videos/${code}/embed/details`, {
+              headers: {
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Referer": `${origin}/e/${code}`
+              },
+              signal: AbortSignal.timeout(5000)
+            });
 
-            const now = Date.now();
-            let cachedAttest = byseAttestCache.get(embedOrigin);
-            let fingerprint = cachedAttest && cachedAttest.expiresAt > now ? cachedAttest.fingerprint : null;
-
-            if (!fingerprint) {
-              const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
-              const jwk = publicKey.export({ format: "jwk" });
-              const publicJwk = { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
-
-              const chRes = await fetch(`${embedOrigin}/api/videos/access/challenge`, {
-                method: "POST",
-                headers: {
-                  "User-Agent": ua,
-                  "Origin": embedOrigin,
-                  "Referer": embedFrameUrl
-                },
-                signal: AbortSignal.timeout(8000)
-              });
-
-              if (chRes.ok) {
-                const chData = await chRes.json();
-                const nonceStr = chData.nonce || chData.challenge || "";
-                const sig = crypto.sign("sha256", Buffer.from(nonceStr, "utf8"), {
-                  key: privateKey,
-                  dsaEncoding: "ieee-p1363"
-                });
-                const signatureB64Url = sig.toString("base64url");
-                const hashB64 = (s: string) => crypto.createHash("sha256").update(s).digest("base64url");
-
-                const client = {
-                  user_agent: ua,
-                  architecture: "x86",
-                  bitness: "64",
-                  platform: "Windows",
-                  platform_version: "15.0.0",
-                  model: "",
-                  ua_full_version: "124.0.6367.118",
-                  brand_full_versions: [
-                    { brand: "Chromium", version: "124.0.6367.118" },
-                    { brand: "Google Chrome", version: "124.0.6367.118" },
-                    { brand: "Not-A.Brand", version: "99.0.0.0" }
-                  ],
-                  pixel_ratio: 1,
-                  screen_width: 1920,
-                  screen_height: 1080,
-                  color_depth: 24,
-                  languages: ["en-US", "en"],
-                  timezone: "Asia/Kolkata",
-                  hardware_concurrency: 8,
-                  device_memory: 8,
-                  touch_points: 0,
-                  webgl_vendor: "Google Inc. (NVIDIA)",
-                  webgl_renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-                  canvas_hash: hashB64("canvas-byse-access"),
-                  audio_hash: hashB64("audio-byse-access"),
-                  webgl_params_hash: hashB64("webgl-params"),
-                  fonts_hash: hashB64("Arial,Calibri,Consolas,Segoe UI,Tahoma,Times New Roman,Verdana"),
-                  codecs_hash: hashB64("codecs-v1"),
-                  media_devices: "ai1ao2vi1",
-                  pointer_type: "fine,hover",
-                  extra: { vendor: "Google Inc.", appVersion: ua.replace("Mozilla/", "") }
-                };
-
-                const attRes = await fetch(`${embedOrigin}/api/videos/access/attest`, {
-                  method: "POST",
-                  headers: {
-                    "User-Agent": ua,
-                    "Content-Type": "application/json",
-                    "Origin": embedOrigin,
-                    "Referer": embedFrameUrl
-                  },
-                  body: JSON.stringify({
-                    viewer_id: "",
-                    device_id: "",
-                    challenge_id: chData.challenge_id,
-                    nonce: nonceStr,
-                    signature: signatureB64Url,
-                    public_key: publicJwk,
-                    client,
-                    storage: {},
-                    attributes: { entropy: "high" }
-                  }),
-                  signal: AbortSignal.timeout(8000)
-                });
-
-                if (attRes.ok) {
-                  const attData = await attRes.json();
-                  fingerprint = {
-                    token: attData.token || "",
-                    viewer_id: attData.viewer_id || "",
-                    device_id: attData.device_id || "",
-                    confidence: attData.confidence ?? 0.55
-                  };
-                  byseAttestCache.set(embedOrigin, {
-                    fingerprint,
-                    expiresAt: now + 4 * 60 * 1000
-                  });
-                }
-              }
+            if (detailsRes.ok) {
+              const details = await detailsRes.json();
+              embedFrameUrl = details?.embed_frame_url || `${origin}/e/${code}`;
+              const embedParsed = new URL(embedFrameUrl);
+              embedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
+              byseEmbedOriginCache.set(origin, embedOrigin);
             }
+          }
+
+          if (embedOrigin) {
+            const fingerprint = await getOrAttestByseFingerprint(embedOrigin, embedFrameUrl, ua);
 
             if (fingerprint) {
               const embedHeaders: Record<string, string> = {
@@ -893,57 +939,57 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                 "X-Embed-Parent": `${origin}/e/${code}`
               };
 
-              let pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
+              let pbData: any = null;
+
+              // Fast-path: Request PoW Captcha directly to skip the wasted 428 round-trip
+              const capChRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha`, {
                 method: "POST",
                 headers: embedHeaders,
                 body: JSON.stringify({ fingerprint }),
-                signal: AbortSignal.timeout(8000)
-              });
+                signal: AbortSignal.timeout(6000)
+              }).catch(() => null);
 
-              let pbData = await pbRes.json().catch(() => ({}));
+              if (capChRes && capChRes.ok) {
+                const capCh = await capChRes.json();
+                const powNonce = capCh.pow_nonce || capCh.nonce;
+                const powDiff = capCh.pow_difficulty || capCh.difficulty || 16;
+                const powToken = capCh.pow_token || capCh.challenge_id;
+                const solutionStr = solveBysePow(powNonce, powDiff);
 
-              // Handle HTTP 428 Captcha PoW Challenge automatically
-              if (pbRes.status === 428 || pbData?.error === "captcha_required") {
-                const capChRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha`, {
+                const capVerRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha/verify`, {
+                  method: "POST",
+                  headers: embedHeaders,
+                  body: JSON.stringify({
+                    pow_token: powToken,
+                    solution: solutionStr,
+                    fingerprint
+                  }),
+                  signal: AbortSignal.timeout(6000)
+                });
+
+                if (capVerRes.ok) {
+                  const capVer = await capVerRes.json();
+                  const captchaToken = capVer.token || capVer.captcha_token || "";
+                  const pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
+                    method: "POST",
+                    headers: {
+                      ...embedHeaders,
+                      "X-Captcha-Token": captchaToken
+                    },
+                    body: JSON.stringify({ fingerprint }),
+                    signal: AbortSignal.timeout(6000)
+                  });
+                  pbData = await pbRes.json().catch(() => ({}));
+                }
+              } else {
+                // Fallback if mirror does not use /embed/captcha
+                const pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
                   method: "POST",
                   headers: embedHeaders,
                   body: JSON.stringify({ fingerprint }),
-                  signal: AbortSignal.timeout(8000)
+                  signal: AbortSignal.timeout(6000)
                 });
-
-                if (capChRes.ok) {
-                  const capCh = await capChRes.json();
-                  const powNonce = capCh.pow_nonce || capCh.nonce;
-                  const powDiff = capCh.pow_difficulty || capCh.difficulty || 16;
-                  const powToken = capCh.pow_token || capCh.challenge_id;
-                  const solutionStr = solveBysePow(powNonce, powDiff);
-
-                  const capVerRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/captcha/verify`, {
-                    method: "POST",
-                    headers: embedHeaders,
-                    body: JSON.stringify({
-                      pow_token: powToken,
-                      solution: solutionStr,
-                      fingerprint
-                    }),
-                    signal: AbortSignal.timeout(8000)
-                  });
-
-                  if (capVerRes.ok) {
-                    const capVer = await capVerRes.json();
-                    const captchaToken = capVer.token || capVer.captcha_token || "";
-                    pbRes = await fetch(`${embedOrigin}/api/videos/${code}/embed/playback`, {
-                      method: "POST",
-                      headers: {
-                        ...embedHeaders,
-                        "X-Captcha-Token": captchaToken
-                      },
-                      body: JSON.stringify({ fingerprint }),
-                      signal: AbortSignal.timeout(8000)
-                    });
-                    pbData = await pbRes.json().catch(() => ({}));
-                  }
-                }
+                pbData = await pbRes.json().catch(() => ({}));
               }
 
               if (pbData?.playback) {
@@ -1082,6 +1128,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const sourceUrl = (req.body?.url || req.query?.url) as string;
       const forceRefresh = req.body?.forceRefresh === true || req.query?.forceRefresh === "true";
       const requestedDuration = Number(req.body?.duration || req.query?.duration) || 0;
+      const skipSubPlaylistProbe = req.body?.fast === true || req.query?.fast === "true";
 
       if (!sourceUrl || typeof sourceUrl !== "string" || !sourceUrl.trim()) {
         res.status(400).json({ ok: false, error: "Source video URL is required" });
@@ -1098,11 +1145,14 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           res.json({
             ok: true,
             m3u8Url: cached.m3u8Url,
+            rawM3u8Url: (cached as any).rawM3u8Url || cached.m3u8Url,
             qualities: cached.qualities || ['1080p', '720p'],
             qualityLinks: cached.qualityLinks || { '1080p': cached.m3u8Url, '720p': cached.m3u8Url },
+            rawQualityLinks: (cached as any).rawQualityLinks || cached.qualityLinks,
             downloadQualities: cached.downloadQualities || [],
             audioTracks: cached.audioTracks || ['Hindi'],
             duration: cached.duration || 1440,
+            headers: (cached as any).headers,
             cached: true,
             expiresAt: cached.expiresAt,
             remainingSeconds: Math.max(0, Math.round((cached.expiresAt - now) / 1000))
@@ -1113,7 +1163,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       // Direct HLS stream parsing without third-party extractor if URL is already an m3u8
       if (trimmedUrl.includes(".m3u8") || trimmedUrl.includes("m3u8")) {
-        const streamMeta = await parseHlsManifestMetadata(trimmedUrl, requestedDuration);
+        const streamMeta = await parseHlsManifestMetadata(trimmedUrl, requestedDuration, undefined, skipSubPlaylistProbe);
         const ttlMs = 170 * 60 * 1000;
         const expiresAt = now + ttlMs;
 
@@ -1131,6 +1181,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         res.json({
           ok: true,
           m3u8Url: trimmedUrl,
+          rawM3u8Url: trimmedUrl,
           qualities: streamMeta.qualities,
           qualityLinks: streamMeta.qualityLinks,
           downloadQualities: streamMeta.downloadQualities,
@@ -1152,13 +1203,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         if (fmResult.ok && fmResult.m3u8Url) {
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = now + ttlMs;
-          const streamMeta = await parseHlsManifestMetadata(fmResult.m3u8Url, requestedDuration);
+          const customRef = fmResult.headers?.["Referer"] || "https://byseraguci.com/";
+          const streamMeta = await parseHlsManifestMetadata(
+            fmResult.m3u8Url,
+            requestedDuration,
+            customRef,
+            skipSubPlaylistProbe
+          );
 
           const host = req.get('host') || 'localhost:3000';
           const proto = (req.secure || req.headers['x-forwarded-proto'] === 'https' || host.includes('hf.space')) ? 'https' : 'http';
           const serverOrigin = `${proto}://${host}`;
 
-          // Wrap master m3u8 in proxy so client browser/native player has zero CORS / ASN issues
+          // Wrap master m3u8 in proxy for Web Browsers, while preserving rawM3u8Url for Native Kotlin APK
           const proxiedMaster = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(fmResult.m3u8Url)}`;
 
           const proxiedQualityLinks: Record<string, string> = {};
@@ -1179,6 +1236,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           streamExtractionCache.set(trimmedUrl, {
             m3u8Url: proxiedMaster,
             rawM3u8Url: fmResult.m3u8Url,
+            rawQualityLinks: streamMeta.qualityLinks,
+            headers: fmResult.headers,
             expiresAt,
             cachedAt: now,
             qualities: streamMeta.qualities,
@@ -1186,13 +1245,15 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             downloadQualities: proxiedDownloadQualities,
             audioTracks: streamMeta.audioTracks,
             duration: streamMeta.duration
-          });
+          } as any);
 
           res.json({
             ok: true,
             m3u8Url: proxiedMaster,
+            rawM3u8Url: fmResult.m3u8Url,
             qualities: streamMeta.qualities,
             qualityLinks: proxiedQualityLinks,
+            rawQualityLinks: streamMeta.qualityLinks,
             downloadQualities: proxiedDownloadQualities,
             audioTracks: streamMeta.audioTracks,
             duration: streamMeta.duration,

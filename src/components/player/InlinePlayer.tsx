@@ -581,22 +581,41 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
 
     if (links && typeof links === 'object' && Object.keys(links).length > 0) {
+      let candidate = '';
       if (currentQuality && currentQuality !== 'auto' && links[currentQuality]) {
-        return links[currentQuality];
+        candidate = links[currentQuality];
+      } else {
+        // Auto selection logic: highest available
+        candidate = links['1080p'] || links['720p'] || links['480p'] || links['360p'] || '';
+        if (!candidate) {
+          const firstKey = Object.keys(links)[0];
+          if (firstKey && links[firstKey]) candidate = links[firstKey];
+        }
       }
-      
-      // Auto selection logic: highest available
-      if (links['1080p']) return links['1080p'];
-      if (links['720p']) return links['720p'];
-      if (links['480p']) return links['480p'];
-      if (links['360p']) return links['360p'];
-      const firstKey = Object.keys(links)[0];
-      if (firstKey && links[firstKey]) return links[firstKey];
+
+      // If videoUrl is an extractable hoster (e.g. Filemoon / Byse / VOE) and candidate is a temporary/expiring CDN .m3u8,
+      // prefer videoUrl so SmartStreamService resolves a fresh token and multi-audio master manifest
+      if (
+        videoUrl &&
+        SmartStreamService.isExtractableSource(videoUrl, isSmartHls) &&
+        candidate &&
+        !SmartStreamService.isExtractableSource(candidate, isSmartHls) &&
+        (candidate.includes('?t=') ||
+          candidate.includes('sprintcdn') ||
+          candidate.includes('owphbf') ||
+          candidate.includes('/proxy/m3u8') ||
+          candidate.includes('voe-network') ||
+          candidate.includes('master.m3u8'))
+      ) {
+        return videoUrl;
+      }
+
+      if (candidate) return candidate;
     }
 
     if (videoUrl) return videoUrl;
     return '';
-  }, [qualityLinks, videoSources, videoUrl, currentLanguage, currentQuality, availableLanguages]);
+  }, [qualityLinks, videoSources, videoUrl, currentLanguage, currentQuality, availableLanguages, isSmartHls]);
 
 
   const [embedFallbackUrl, setEmbedFallbackUrl] = useState<string>('');
@@ -771,7 +790,19 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     isHlsStreamRef.current = isHls;
 
     if (isHls && Hls.isSupported()) {
-      const hls = new Hls({ startPosition: targetStartTime });
+      const hls = new Hls({
+        startPosition: targetStartTime,
+        enableWorker: true,
+        lowLatencyMode: false,
+        startFragPrefetch: true,
+        backBufferLength: 30,
+        maxBufferLength: 45,
+        maxMaxBufferLength: 90,
+        maxBufferSize: 60 * 1000 * 1000,
+        fragLoadingMaxRetry: 6,
+        manifestLoadingMaxRetry: 4,
+        levelLoadingMaxRetry: 4
+      });
       hlsRef.current = hls;
       hls.loadSource(resolvedStreamUrl);
       hls.attachMedia(video);
