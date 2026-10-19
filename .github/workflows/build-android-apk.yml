@@ -3,9 +3,11 @@ name: Build MaxPlay Native Kotlin APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - "**"
-  pull_request:
+    branches: [ main, master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-apk:
@@ -15,20 +17,18 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: 20
 
       - name: Install Web Dependencies & Build MaxPlay Frontend Bundle
         run: |
-          if (npm install --legacy-peer-deps || npm install --force) && npx vite build; then
-            rm -rf android-kotlin/app/src/main/assets/webapp/*
-            mkdir -p android-kotlin/app/src/main/assets/webapp
-            cp -r dist/* android-kotlin/app/src/main/assets/webapp/
-          else
-            echo "Using pre-built production webapp bundle from android-kotlin/app/src/main/assets/webapp/"
-          fi
+          npm install
+          npx vite build
+          rm -rf android-kotlin/app/src/main/assets/webapp/*
+          mkdir -p android-kotlin/app/src/main/assets/webapp
+          cp -r dist/* android-kotlin/app/src/main/assets/webapp/
 
       - name: Setup JDK 17 for Kotlin Android Build
         uses: actions/setup-java@v4
@@ -36,14 +36,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses
-        run: |
-          yes | sdkmanager --licenses || yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-      - name: Setup Gradle 8.5
+      - name: Setup Android SDK & Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.5'
@@ -53,7 +46,7 @@ jobs:
         run: |
           rm -f app/release.keystore
           keytool -genkeypair -v -keystore app/release.keystore -alias maxplay -keyalg RSA -keysize 2048 -validity 10000 -storepass maxplay123 -keypass maxplay123 -dname "CN=MaxPlay, OU=App, O=MaxPlay, L=Mumbai, S=MH, C=IN"
-          gradle assembleRelease -x lint -x lintVitalRelease --no-daemon --stacktrace
+          gradle assembleRelease -x lint -x lintVitalRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/MaxPlay.apk
 
       - name: Upload Ready-to-Install MaxPlay APK Artifact
@@ -61,4 +54,5 @@ jobs:
         with:
           name: MaxPlay-Android-Kotlin-APK
           path: android-kotlin/app/build/outputs/apk/release/MaxPlay.apk
+
 
