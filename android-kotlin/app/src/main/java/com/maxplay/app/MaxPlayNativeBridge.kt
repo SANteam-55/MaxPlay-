@@ -21,7 +21,7 @@ import org.json.JSONObject
  * - `setLandscapeOrientation(locked)` -> Hardware sensor landscape lock for fullscreen player
  */
 class MaxPlayNativeBridge(
-    private val activity: Activity,
+    private val activity: MainActivity,
     private val webView: WebView
 ) {
     private val scraper = InbuiltStreamScraper(activity, webView)
@@ -167,6 +167,99 @@ class MaxPlayNativeBridge(
                 ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
         }
+    }
+
+    @JavascriptInterface
+    fun setBrightness(percent: Int) {
+        activity.setHardwareBrightness(percent)
+    }
+
+    @JavascriptInterface
+    fun getBrightness(): Int {
+        return activity.getHardwareBrightness()
+    }
+
+    @JavascriptInterface
+    fun setVolume(percent: Int) {
+        activity.setHardwareVolume(percent)
+    }
+
+    @JavascriptInterface
+    fun getVolume(): Int {
+        return activity.getHardwareVolume()
+    }
+
+    @JavascriptInterface
+    fun enterPipMode(): Boolean {
+        return activity.enterNativePipMode()
+    }
+
+    @JavascriptInterface
+    fun getDeviceStorageStats(): String {
+        return MaxPlayOfflineVault.getDeviceStorageStats(activity.applicationContext).toString()
+    }
+
+    @JavascriptInterface
+    fun downloadSegmentToDisk(
+        storageKey: String,
+        segmentIndex: Int,
+        segmentUrl: String,
+        refererUrl: String,
+        callbackId: String
+    ) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val res = MaxPlayOfflineVault.downloadSegmentToDisk(
+                context = activity.applicationContext,
+                storageKey = storageKey,
+                segmentIndex = segmentIndex,
+                segmentUrl = segmentUrl,
+                refererUrl = refererUrl
+            )
+            val safeCallbackId = JSONObject.quote(callbackId)
+            val escapedJson = JSONObject.quote(res.toString())
+            val jsCode = "window.__onMaxPlaySegmentComplete && window.__onMaxPlaySegmentComplete($safeCallbackId, JSON.parse($escapedJson));"
+            activity.runOnUiThread {
+                try {
+                    webView.evaluateJavascript(jsCode, null)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun saveOfflineManifest(
+        storageKey: String,
+        totalSegments: Int,
+        totalDurationSec: Double,
+        isSingleFile: Boolean
+    ): Boolean {
+        return MaxPlayOfflineVault.saveDownloadManifest(
+            context = activity.applicationContext,
+            storageKey = storageKey,
+            totalSegments = totalSegments,
+            totalDurationSec = totalDurationSec,
+            isSingleFile = isSingleFile
+        )
+    }
+
+    @JavascriptInterface
+    fun getOfflineCheckpointInfo(storageKey: String): String {
+        return MaxPlayOfflineVault.getCheckpointInfo(activity.applicationContext, storageKey).toString()
+    }
+
+    @JavascriptInterface
+    fun hasOfflineItem(storageKey: String): Boolean {
+        return MaxPlayOfflineVault.hasPlayableOfflineItem(activity.applicationContext, storageKey)
+    }
+
+    @JavascriptInterface
+    fun getOfflinePlaybackUrl(storageKey: String): String {
+        return MaxPlayOfflineVault.getLocalPlaybackUrl(storageKey)
+    }
+
+    @JavascriptInterface
+    fun deleteOfflineItem(storageKey: String): Boolean {
+        return MaxPlayOfflineVault.deleteOfflineItem(activity.applicationContext, storageKey)
     }
 
     private fun parseHeadersJson(headersJson: String?): Map<String, String> {

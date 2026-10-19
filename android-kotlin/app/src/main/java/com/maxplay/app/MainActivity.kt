@@ -175,4 +175,89 @@ class MainActivity : AppCompatActivity() {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
+
+    /**
+     * Adjusts Android hardware window screen brightness (10 to 100%).
+     */
+    fun setHardwareBrightness(percent: Int) {
+        runOnUiThread {
+            try {
+                val clamped = percent.coerceIn(5, 100)
+                val lp = window.attributes
+                lp.screenBrightness = (clamped / 100f).coerceIn(0.05f, 1.0f)
+                window.attributes = lp
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Reads current hardware window screen brightness (10 to 100%).
+     */
+    fun getHardwareBrightness(): Int {
+        return try {
+            val current = window.attributes.screenBrightness
+            if (current < 0f) {
+                val sys = android.provider.Settings.System.getInt(
+                    contentResolver,
+                    android.provider.Settings.System.SCREEN_BRIGHTNESS,
+                    128
+                )
+                ((sys / 255f) * 100f).toInt().coerceIn(10, 100)
+            } else {
+                (current * 100f).toInt().coerceIn(10, 100)
+            }
+        } catch (_: Exception) {
+            75
+        }
+    }
+
+    /**
+     * Adjusts Android STREAM_MUSIC hardware volume (0 to 100%).
+     */
+    fun setHardwareVolume(percent: Int) {
+        try {
+            val audioManager = getSystemService(AUDIO_SERVICE) as? android.media.AudioManager ?: return
+            val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val clamped = percent.coerceIn(0, 100)
+            val targetVol = Math.round((clamped / 100f) * maxVol).coerceIn(0, maxVol)
+            audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Reads current Android STREAM_MUSIC hardware volume percentage (0 to 100%).
+     */
+    fun getHardwareVolume(): Int {
+        return try {
+            val audioManager = getSystemService(AUDIO_SERVICE) as? android.media.AudioManager ?: return 100
+            val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val curVol = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            Math.round((curVol.toFloat() / maxVol.toFloat()) * 100f).coerceIn(0, 100)
+        } catch (_: Exception) {
+            100
+        }
+    }
+
+    /**
+     * Enters native Android Picture-in-Picture (PiP) floating window mode (Android 8.0+).
+     */
+    fun enterNativePipMode(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                runOnUiThread {
+                    try {
+                        val params = android.app.PictureInPictureParams.Builder()
+                            .setAspectRatio(android.util.Rational(16, 9))
+                            .build()
+                        enterPictureInPictureMode(params)
+                    } catch (_: Exception) {}
+                }
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
 }

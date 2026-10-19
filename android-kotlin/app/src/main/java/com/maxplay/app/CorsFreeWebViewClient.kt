@@ -75,6 +75,24 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         val reqUrl = uri.toString()
         val method = request.method?.uppercase() ?: "GET"
 
+        // 0. Serve Local Offline Vault Segments & Playlists (https://maxplay.local/offline-vault/{key}/...)
+        if (host == "maxplay.local" && path.startsWith("/offline-vault/")) {
+            if (method == "OPTIONS") {
+                return WebResourceResponse(
+                    "text/plain",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders("text/plain"),
+                    ByteArrayInputStream(ByteArray(0))
+                )
+            }
+            val vaultResp = MaxPlayOfflineVault.interceptOfflineVaultRequest(context.applicationContext, reqUrl)
+            if (vaultResp != null) {
+                return vaultResp
+            }
+        }
+
         // 1. Serve Local Bundled WebApp & Native Proxy on https://appassets.androidplatform.net
         if (host == VIRTUAL_ASSET_HOST) {
             if (method == "OPTIONS") {

@@ -23,6 +23,7 @@ import { SpeedCapsuleHUD } from './SpeedCapsuleHUD';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../context/AuthContext';
 import { SmartStreamService } from '../../services/smartStreamService';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 // Comprehensive ISO 639 & friendly language label mapper
 export const formatLanguageLabel = (name?: string, lang?: string, index?: number): string => {
@@ -1164,6 +1165,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           setIsFullscreen(true);
         }
 
+        NativeBridgeService.setNativeLandscapeOrientation(true);
         if (screen.orientation && (screen.orientation as any).lock) {
           ((screen.orientation as any).lock as any)('landscape').catch(() => {});
         } else if ((screen as any).lockOrientation) {
@@ -1188,6 +1190,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           await (document as any).msExitFullscreen();
         }
 
+        NativeBridgeService.setNativeLandscapeOrientation(false);
         if (screen.orientation && screen.orientation.unlock) {
           ((screen.orientation as any).unlock as any)();
         } else if ((screen as any).unlockOrientation) {
@@ -1200,6 +1203,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   };
   
   const handlePipToggle = async () => {
+    if (NativeBridgeService.enterNativePipMode()) {
+      return;
+    }
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Hls from 'hls.js';
 import {
   Sun,
   SunMedium,
@@ -38,6 +39,7 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
   isExternalFullscreen = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Playback state
@@ -51,8 +53,14 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   // Gesture & HUD States
-  const [brightness, setBrightness] = useState<number>(100);
-  const [volume, setVolume] = useState<number>(100);
+  const [brightness, setBrightness] = useState<number>(() => {
+    const hw = NativeBridgeService.getNativeBrightness();
+    return hw !== null ? hw : 100;
+  });
+  const [volume, setVolume] = useState<number>(() => {
+    const hw = NativeBridgeService.getNativeVolume();
+    return hw !== null ? hw : 100;
+  });
   const [showBrightnessIndicator, setShowBrightnessIndicator] = useState<boolean>(false);
   const [showVolumeIndicator, setShowVolumeIndicator] = useState<boolean>(false);
   const indicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -99,8 +107,76 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
     return () => {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       if (indicatorTimeoutRef.current) clearTimeout(indicatorTimeoutRef.current);
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
     };
   }, []);
+
+  // Attach Hls.js for virtual local HLS playlists (https://maxplay.local/offline-vault/.../index.m3u8 or Blob m3u8)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !blobUrl) return;
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    setIsLoading(true);
+    setPlaybackError(null);
+
+    const isHlsPlaylist =
+      blobUrl.includes('.m3u8') ||
+      blobUrl.includes('/offline-vault/') ||
+      blobUrl.startsWith('blob:');
+
+    if (isHlsPlaylist && Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+      });
+      hlsRef.current = hls;
+      hls.loadSource(blobUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setIsLoading(false);
+        video.playbackRate = playbackRate;
+        video.play().catch(() => {});
+        setIsPlaying(true);
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            // Fallback to direct video src if blobUrl is a single MP4 blob
+            hls.destroy();
+            hlsRef.current = null;
+            video.src = blobUrl;
+            video.load();
+            video.play().catch(() => {});
+          }
+        }
+      });
+    } else {
+      video.src = blobUrl;
+      video.load();
+      video.play().catch(() => {});
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [blobUrl]);
 
   // Update fullscreen state when parent changes or fullscreen event fires
   useEffect(() => {
@@ -125,12 +201,18 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
     };
   }, []);
 
-  // Sync volume with native HTML5 video element
+  // Sync volume with native HTML5 video element & Android Hardware AudioManager
   useEffect(() => {
     if (!videoRef.current) return;
-    const clampedVolume = Math.min(1, Math.max(0, volume / 100));
-    videoRef.current.volume = clampedVolume;
-    videoRef.current.muted = volume === 0;
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      NativeBridgeService.setNativeVolume(Math.min(100, Math.max(0, volume)));
+      videoRef.current.volume = 1;
+      videoRef.current.muted = volume === 0;
+    } else {
+      const clampedVolume = Math.min(1, Math.max(0, volume / 100));
+      videoRef.current.volume = clampedVolume;
+      videoRef.current.muted = volume === 0;
+    }
   }, [volume]);
 
   // Indicator HUD Trigger Helper
@@ -150,19 +232,21 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
     }, 1500);
   };
 
-  // Gesture Callbacks
+  // Gesture Callbacks (Hardware Brightness + CSS Boost)
   const handleBrightnessChange = useCallback((delta: number) => {
     setBrightness((prev) => {
-      const newVal = Math.max(10, Math.min(200, prev + delta));
-      return Math.round(newVal);
+      const newVal = Math.round(Math.max(10, Math.min(200, prev + delta)));
+      NativeBridgeService.setNativeBrightness(Math.min(100, newVal));
+      return newVal;
     });
     showIndicator('brightness');
   }, []);
 
   const handleVolumeChange = useCallback((delta: number) => {
     setVolume((prev) => {
-      const newVal = Math.max(0, Math.min(200, prev + delta));
-      return Math.round(newVal);
+      const newVal = Math.round(Math.max(0, Math.min(200, prev + delta)));
+      NativeBridgeService.setNativeVolume(Math.min(100, newVal));
+      return newVal;
     });
     showIndicator('volume');
   }, []);
@@ -394,14 +478,19 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
         onDoubleTapRewind={handleRewind10}
         onDoubleTapForward={handleForward10}
       >
-        {/* HTML5 Native Video Tag reading from IndexedDB Blob or stream fallback */}
+        {/* HTML5 Native Video Tag driven by Hls.js (for virtual local HLS vault) or direct Blob */}
         {blobUrl ? (
           <video
             ref={videoRef}
-            src={blobUrl}
             autoPlay
             playsInline
-            style={{ filter: `brightness(${brightness}%)` }}
+            style={{
+              filter: NativeBridgeService.isRunningInKotlinApp()
+                ? brightness > 100
+                  ? `brightness(${brightness}%)`
+                  : undefined
+                : `brightness(${brightness}%)`,
+            }}
             onTimeUpdate={onTimeUpdate}
             onLoadedMetadata={onLoadedMetadata}
             onWaiting={() => setIsLoading(true)}
@@ -412,9 +501,11 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
               setIsPlaying(false);
               if (onNext) onNext();
             }}
-            onError={(e: any) => {
-              setIsLoading(false);
-              setPlaybackError('Offline video stream error. Please re-download or check storage.');
+            onError={() => {
+              if (!hlsRef.current) {
+                setIsLoading(false);
+                setPlaybackError('Offline video stream error. Please re-download or check storage.');
+              }
             }}
             className="w-full h-full object-contain pointer-events-none"
           />
@@ -575,6 +666,16 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
           onForward10={handleForward10}
           onNext={onNext}
           onFullscreenToggle={handleToggleFullscreen}
+          onPipToggle={() => {
+            if (NativeBridgeService.enterNativePipMode()) return;
+            try {
+              if (document.pictureInPictureElement) {
+                document.exitPictureInPicture();
+              } else if (videoRef.current && document.pictureInPictureEnabled) {
+                videoRef.current.requestPictureInPicture();
+              }
+            } catch {}
+          }}
           onBack={onBack}
           onSettingsPress={() => setActiveDrawer('language')}
           onSpeedPress={() => setActiveDrawer('speed')}

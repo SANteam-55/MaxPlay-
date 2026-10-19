@@ -39,6 +39,29 @@ interface MaxPlayKotlinBridge {
   fetchUrlCorsFreeAsync?: (targetUrl: string, headersJson: string, callbackId: string) => void;
   fetchBytesBase64CorsFree?: (targetUrl: string, headersJson: string) => string;
   setLandscapeOrientation?: (locked: boolean) => void;
+  setBrightness?: (percent: number) => void;
+  getBrightness?: () => number;
+  setVolume?: (percent: number) => void;
+  getVolume?: () => number;
+  enterPipMode?: () => boolean;
+  getDeviceStorageStats?: () => string;
+  downloadSegmentToDisk?: (
+    storageKey: string,
+    segmentIndex: number,
+    segmentUrl: string,
+    refererUrl: string,
+    callbackId: string
+  ) => void;
+  saveOfflineManifest?: (
+    storageKey: string,
+    totalSegments: number,
+    totalDurationSec: number,
+    isSingleFile: boolean
+  ) => boolean;
+  getOfflineCheckpointInfo?: (storageKey: string) => string;
+  hasOfflineItem?: (storageKey: string) => boolean;
+  getOfflinePlaybackUrl?: (storageKey: string) => string;
+  deleteOfflineItem?: (storageKey: string) => boolean;
 }
 
 declare global {
@@ -46,10 +69,12 @@ declare global {
     MaxPlayNative?: MaxPlayKotlinBridge;
     __maxplaySnifferCallbacks?: Record<string, (resultJson: string) => void>;
     onMaxPlaySnifferResult?: (callbackId: string, resultJson: string) => void;
+    __maxplaySegmentCallbacks?: Record<string, (res: any) => void>;
+    __onMaxPlaySegmentComplete?: (callbackId: string, res: any) => void;
   }
 }
 
-// Initialize global callback receiver for async Headless WebView Sniffer from Kotlin
+// Initialize global callback receiver for async Headless WebView Sniffer & Native Disk Segment Downloader from Kotlin
 if (typeof window !== 'undefined') {
   window.__maxplaySnifferCallbacks = window.__maxplaySnifferCallbacks || {};
   window.onMaxPlaySnifferResult = (callbackId: string, resultJson: string) => {
@@ -57,6 +82,15 @@ if (typeof window !== 'undefined') {
     if (cb) {
       delete window.__maxplaySnifferCallbacks![callbackId];
       cb(resultJson);
+    }
+  };
+
+  window.__maxplaySegmentCallbacks = window.__maxplaySegmentCallbacks || {};
+  window.__onMaxPlaySegmentComplete = (callbackId: string, res: any) => {
+    const cb = window.__maxplaySegmentCallbacks?.[callbackId];
+    if (cb) {
+      delete window.__maxplaySegmentCallbacks![callbackId];
+      cb(res);
     }
   };
 }
@@ -89,6 +123,254 @@ export class NativeBridgeService {
     } catch (err) {
       console.warn('[NativeBridge] Orientation control warning:', err);
     }
+    return false;
+  }
+
+  /**
+   * Adjusts real Android phone hardware screen brightness (10 to 100%).
+   */
+  public static setNativeBrightness(percent: number): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.setBrightness === 'function') {
+        window.MaxPlayNative.setBrightness(Math.round(Math.max(5, Math.min(100, percent))));
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Reads current Android phone hardware screen brightness (10 to 100%).
+   */
+  public static getNativeBrightness(): number | null {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.getBrightness === 'function') {
+        const val = window.MaxPlayNative.getBrightness();
+        if (typeof val === 'number' && !isNaN(val)) return val;
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Adjusts real Android phone STREAM_MUSIC hardware volume (0 to 100%).
+   */
+  public static setNativeVolume(percent: number): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.setVolume === 'function') {
+        window.MaxPlayNative.setVolume(Math.round(Math.max(0, Math.min(100, percent))));
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Reads current Android phone STREAM_MUSIC hardware volume (0 to 100%).
+   */
+  public static getNativeVolume(): number | null {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.getVolume === 'function') {
+        const val = window.MaxPlayNative.getVolume();
+        if (typeof val === 'number' && !isNaN(val)) return val;
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Enters native Android Picture-in-Picture (PiP) floating video window.
+   */
+  public static enterNativePipMode(): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.enterPipMode === 'function') {
+        return Boolean(window.MaxPlayNative.enterPipMode());
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Reads real Android internal storage statistics (totalGb, freeGb, usedByAppMb).
+   */
+  public static getDeviceStorageStats(): {
+    ok: boolean;
+    totalGb: number;
+    freeGb: number;
+    usedByAppMb: number;
+    totalBytes?: number;
+    freeBytes?: number;
+    usedByAppBytes?: number;
+  } | null {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.getDeviceStorageStats === 'function') {
+        const raw = window.MaxPlayNative.getDeviceStorageStats();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.ok) return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Returns true if Native Disk Offline Vault is supported in this APK build.
+   */
+  public static supportsNativeOfflineVault(): boolean {
+    try {
+      return Boolean(
+        this.isRunningInKotlinApp() &&
+          typeof window.MaxPlayNative?.downloadSegmentToDisk === 'function' &&
+          typeof window.MaxPlayNative?.saveOfflineManifest === 'function'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Downloads a single HLS segment (.ts) directly to Android internal storage disk via Kotlin OkHttp.
+   * Automatically reuses existing segment on disk if already downloaded (0ms checkpoint resume).
+   */
+  public static downloadSegmentToDiskNative(
+    storageKey: string,
+    segmentIndex: number,
+    segmentUrl: string,
+    refererUrl: string = ''
+  ): Promise<{ ok: boolean; bytes?: number; cached?: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      if (!this.supportsNativeOfflineVault()) {
+        resolve({ ok: false, error: 'Native vault not supported' });
+        return;
+      }
+
+      const callbackId = `seg_${Date.now()}_${segmentIndex}_${Math.random().toString(36).slice(2, 6)}`;
+      const timer = setTimeout(() => {
+        if (window.__maxplaySegmentCallbacks?.[callbackId]) {
+          delete window.__maxplaySegmentCallbacks[callbackId];
+          resolve({ ok: false, error: 'Segment timeout' });
+        }
+      }, 45000);
+
+      window.__maxplaySegmentCallbacks = window.__maxplaySegmentCallbacks || {};
+      window.__maxplaySegmentCallbacks[callbackId] = (res: any) => {
+        clearTimeout(timer);
+        if (res && res.ok) {
+          resolve({
+            ok: true,
+            bytes: Number(res.bytes || 0),
+            cached: Boolean(res.cached),
+          });
+        } else {
+          resolve({
+            ok: false,
+            error: res?.error || 'Segment download failed',
+          });
+        }
+      };
+
+      try {
+        window.MaxPlayNative!.downloadSegmentToDisk!(
+          storageKey,
+          segmentIndex,
+          segmentUrl,
+          refererUrl,
+          callbackId
+        );
+      } catch (e: any) {
+        clearTimeout(timer);
+        delete window.__maxplaySegmentCallbacks[callbackId];
+        resolve({ ok: false, error: e?.message || 'Bridge exception' });
+      }
+    });
+  }
+
+  /**
+   * Writes the offline HLS manifest (`index.m3u8`) on Android internal storage disk.
+   */
+  public static saveOfflineManifestNative(
+    storageKey: string,
+    totalSegments: number,
+    totalDurationSec: number,
+    isSingleFile: boolean = false
+  ): boolean {
+    try {
+      if (this.supportsNativeOfflineVault()) {
+        return Boolean(
+          window.MaxPlayNative!.saveOfflineManifest!(
+            storageKey,
+            totalSegments,
+            totalDurationSec,
+            isSingleFile
+          )
+        );
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Queries checkpoint status from Android internal storage disk for resumable downloads.
+   */
+  public static getOfflineCheckpointInfoNative(storageKey: string): {
+    exists: boolean;
+    downloadedSegments: number;
+    totalBytes: number;
+    completedIndices: number[];
+    playbackUrl?: string;
+  } | null {
+    try {
+      if (this.supportsNativeOfflineVault() && window.MaxPlayNative?.getOfflineCheckpointInfo) {
+        const raw = window.MaxPlayNative.getOfflineCheckpointInfo(storageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            exists: Boolean(parsed.exists),
+            downloadedSegments: Number(parsed.downloadedSegments || 0),
+            totalBytes: Number(parsed.totalBytes || 0),
+            completedIndices: Array.isArray(parsed.completedIndices) ? parsed.completedIndices : [],
+            playbackUrl: parsed.playbackUrl,
+          };
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Checks if a playable offline item exists on Android internal storage disk.
+   */
+  public static hasOfflineItemNative(storageKey: string): boolean {
+    try {
+      if (this.supportsNativeOfflineVault() && window.MaxPlayNative?.hasOfflineItem) {
+        return Boolean(window.MaxPlayNative.hasOfflineItem(storageKey));
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Gets the virtual local HTTPS URL (`https://maxplay.local/offline-vault/{key}/index.m3u8`) for zero-RAM playback.
+   */
+  public static getOfflinePlaybackUrlNative(storageKey: string): string | null {
+    try {
+      if (this.supportsNativeOfflineVault() && window.MaxPlayNative?.getOfflinePlaybackUrl) {
+        return window.MaxPlayNative.getOfflinePlaybackUrl(storageKey) || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Deletes an offline item's segment directory from Android internal storage disk.
+   */
+  public static deleteOfflineItemNative(storageKey: string): boolean {
+    try {
+      if (this.supportsNativeOfflineVault() && window.MaxPlayNative?.deleteOfflineItem) {
+        return Boolean(window.MaxPlayNative.deleteOfflineItem(storageKey));
+      }
+    } catch {}
     return false;
   }
 

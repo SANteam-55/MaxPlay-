@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Share2, X, RefreshCw, Smartphone, Check, Sparkles } from 'lucide-react';
+import { Download, Share2, X, RefreshCw, Smartphone, Check, Sparkles, HardDrive } from 'lucide-react';
 import { downloadManager, DownloadTask, DownloadedFile } from '../../services/DownloadManager';
 import { DownloadItem } from '../../components/downloads/DownloadItem';
 import { DownloadedItem } from '../../components/downloads/DownloadedItem';
@@ -7,6 +7,7 @@ import { SeriesFolderCard } from '../../components/downloads/SeriesFolderCard';
 import { OfflineDetailScreen } from '../content/OfflineDetailScreen';
 import { ContentCard } from '../../components/common/ContentCard';
 import { NativeBanner } from '../../components/ads/NativeBanner';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 import { useContent } from '../../hooks/useContent';
 
@@ -23,6 +24,39 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [storageInfo, setStorageInfo] = useState<{
+    totalGb: number;
+    freeGb: number;
+    usedByAppMb: number;
+  } | null>(null);
+
+  const refreshStorageStats = () => {
+    const nativeStats = NativeBridgeService.getDeviceStorageStats();
+    if (nativeStats && nativeStats.ok) {
+      setStorageInfo({
+        totalGb: nativeStats.totalGb || 64,
+        freeGb: nativeStats.freeGb || 12,
+        usedByAppMb: nativeStats.usedByAppMb || 0,
+      });
+      return;
+    }
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {
+      navigator.storage
+        .estimate()
+        .then((est) => {
+          if (est && typeof est.quota === 'number' && typeof est.usage === 'number') {
+            const totalGb = Math.max(1, Math.round((est.quota / (1024 * 1024 * 1024)) * 10) / 10);
+            const usedByAppMb = Math.round((est.usage / (1024 * 1024)) * 10) / 10;
+            const freeGb = Math.max(
+              0,
+              Math.round(((est.quota - est.usage) / (1024 * 1024 * 1024)) * 10) / 10
+            );
+            setStorageInfo({ totalGb, freeGb, usedByAppMb });
+          }
+        })
+        .catch(() => {});
+    }
+  };
 
   const triggerToast = (msg: string) => {
     setToastMsg(msg);
@@ -33,11 +67,13 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     const unsubscribe = downloadManager.subscribe((updatedTasks) => {
       setTasks(updatedTasks);
       setCompletedFiles(downloadManager.getCompletedFiles());
+      refreshStorageStats();
     });
 
     // Initial set from manager state (assuming it manages its own persistence or empty state)
     setTasks(downloadManager.getTasks());
     setCompletedFiles(downloadManager.getCompletedFiles());
+    refreshStorageStats();
 
     return () => unsubscribe();
   }, []);
@@ -143,6 +179,26 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           <span>Transfer</span>
         </button>
       </div>
+
+      {/* REAL DEVICE STORAGE BAR */}
+      {storageInfo && (
+        <div className="mt-2 flex items-center justify-between rounded-2xl bg-[#121216] px-3.5 py-2.5 border border-[#1F1F26]">
+          <div className="flex items-center gap-2 text-xs">
+            <HardDrive className="h-4 w-4 text-[#8B5CF6]" />
+            <span className="font-bold text-white">
+              MaxPlay Vault:{' '}
+              <span className="text-[#A855F7]">
+                {storageInfo.usedByAppMb >= 1000
+                  ? `${(storageInfo.usedByAppMb / 1024).toFixed(2)} GB`
+                  : `${Math.round(storageInfo.usedByAppMb)} MB`}
+              </span>
+            </span>
+          </div>
+          <span className="text-[11px] font-bold text-emerald-400">
+            {storageInfo.freeGb} GB Free
+          </span>
+        </div>
+      )}
 
       {/* SECTION 2: DOWNLOADING QUEUE */}
       {activeDownloadingTasks.length > 0 && (
