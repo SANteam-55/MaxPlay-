@@ -23,10 +23,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLDecoder
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.security.KeyPairGenerator
-import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
@@ -485,7 +482,7 @@ class InbuiltStreamScraper(
 
                 val chReq = Request.Builder()
                     .url("$embedOrigin/api/videos/access/challenge")
-                    .post("".toRequestBody(null))
+                    .post("{}".toRequestBody(jsonMediaType))
                     .header("User-Agent", DEFAULT_USER_AGENT)
                     .header("Origin", embedOrigin)
                     .header("Referer", embedFrameUrl)
@@ -567,13 +564,14 @@ class InbuiltStreamScraper(
                         val attResp = okHttpClient.newCall(attReq).execute()
                         if (attResp.isSuccessful) {
                             val attJson = JSONObject(attResp.body?.string() ?: "{}")
-                            fingerprint = JSONObject().apply {
+                            val fObj = JSONObject().apply {
                                 put("token", attJson.optString("token", ""))
                                 put("viewer_id", attJson.optString("viewer_id", ""))
                                 put("device_id", attJson.optString("device_id", ""))
                                 put("confidence", attJson.optDouble("confidence", 0.9))
                             }
-                            byseAttestCache[embedOrigin] = Pair(fingerprint!!, now + 9 * 60 * 1000L)
+                            fingerprint = fObj
+                            byseAttestCache[embedOrigin] = Pair(fObj, now + 9 * 60 * 1000L)
                         }
                     }
                 }

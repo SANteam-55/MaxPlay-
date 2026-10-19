@@ -36,21 +36,60 @@
     <!-- Preconnect Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <script type="module" crossorigin src="/assets/index-BpBRhLww.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DugswqcH.css">
+    <script>
+      (function () {
+        var SW_VERSION = 'maxplay-pwa-v6';
+        try {
+          if (
+            'serviceWorker' in navigator &&
+            navigator.serviceWorker.controller &&
+            localStorage.getItem('MAXPLAY_SW_ACTIVE_VER') !== SW_VERSION
+          ) {
+            localStorage.setItem('MAXPLAY_SW_ACTIVE_VER', SW_VERSION);
+            try { window.stop(); } catch (e) {}
+            navigator.serviceWorker.getRegistrations()
+              .then(function (regs) {
+                return Promise.all(regs.map(function (r) { return r.unregister(); }));
+              })
+              .then(function () {
+                if ('caches' in window) {
+                  return caches.keys().then(function (keys) {
+                    return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+                  });
+                }
+              })
+              .finally(function () {
+                window.location.reload();
+              });
+            return;
+          }
+          if ('caches' in window) {
+            caches.keys().then(function (keys) {
+              var staleKeys = keys.filter(function (k) { return k !== SW_VERSION; });
+              if (staleKeys.length > 0) {
+                Promise.all(staleKeys.map(function (k) { return caches.delete(k); }));
+              }
+            });
+          }
+          localStorage.setItem('MAXPLAY_SW_ACTIVE_VER', SW_VERSION);
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-CgZKv0dk.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CAQBVvOe.css">
   </head>
   <body class="bg-[#0A0A0A] text-white antialiased selection:bg-[#8B5CF6] selection:text-white">
     <div id="root"></div>
     <script>
-      // Register MaxPlay Offline PWA Service Worker
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
+        window.addEventListener('load', function () {
           navigator.serviceWorker
-            .register('/sw.js', { scope: '/' })
-            .then((reg) => {
+            .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+            .then(function (reg) {
+              reg.update();
               console.log('[MaxPlay PWA] Service worker registered successfully:', reg.scope);
             })
-            .catch((err) => {
+            .catch(function (err) {
               console.warn('[MaxPlay PWA] Service worker registration warning:', err);
             });
         });

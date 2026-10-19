@@ -1,5 +1,5 @@
 // MaxPlay PWA Service Worker for Zero-Network Offline App Shell
-const CACHE_NAME = 'maxplay-pwa-v4';
+const CACHE_NAME = 'maxplay-pwa-v6';
 
 const STATIC_ASSETS = [
   '/',
@@ -37,10 +37,17 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
+  if (request.method !== 'GET') return;
   const url = new URL(request.url);
 
-  // Skip API routes, proxy routes, Firebase auth, and external video CDNs / stream chunks
+  // Skip Vite dev server modules, API routes, proxy routes, Firebase auth, and video streams
   if (
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@vite/') ||
+    url.pathname.startsWith('/@react-refresh') ||
+    url.pathname.startsWith('/@fs/') ||
+    url.pathname.startsWith('/@id/') ||
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/proxy/') ||
     url.hostname.includes('firestore.googleapis.com') ||
@@ -48,8 +55,9 @@ self.addEventListener('fetch', (event) => {
     url.hostname.includes('identitytoolkit') ||
     url.hostname.includes('securetoken') ||
     url.hostname.includes('test-streams') ||
-    url.pathname.endsWith('.m3u8') ||
+    url.pathname.endsWith('.tsx') ||
     url.pathname.endsWith('.ts') ||
+    url.pathname.endsWith('.m3u8') ||
     url.pathname.endsWith('.m4s') ||
     url.protocol.startsWith('blob:')
   ) {
@@ -98,26 +106,24 @@ self.addEventListener('fetch', (event) => {
   }
 
   // 2. Static Resources (JS, CSS, Images, Fonts, JSON)
-  // Stale-While-Revalidate: Return cached copy immediately, update in background when online!
+  // Network First -> Update Cache -> Fallback to Cache when offline
   event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      const fetchPromise = fetch(request)
-        .then((networkResponse) => {
-          if (
-            networkResponse &&
-            networkResponse.status === 200 &&
-            (networkResponse.type === 'basic' || networkResponse.type === 'cors' || networkResponse.type === 'opaque')
-          ) {
-            const copy = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          return cachedResponse;
-        });
-
-      return cachedResponse || fetchPromise;
-    })
+    fetch(request)
+      .then((networkResponse) => {
+        if (
+          networkResponse &&
+          networkResponse.status === 200 &&
+          (networkResponse.type === 'basic' || networkResponse.type === 'cors')
+        ) {
+          const copy = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return networkResponse;
+      })
+      .catch(async () => {
+        const cachedResponse = await caches.match(request);
+        if (cachedResponse) return cachedResponse;
+        throw new Error('Network and cache both unavailable');
+      })
   );
 });
