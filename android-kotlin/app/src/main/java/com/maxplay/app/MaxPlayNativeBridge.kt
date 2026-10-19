@@ -213,7 +213,36 @@ class MaxPlayNativeBridge(
                 storageKey = storageKey,
                 segmentIndex = segmentIndex,
                 segmentUrl = segmentUrl,
-                refererUrl = refererUrl
+                refererUrl = refererUrl,
+                isAudio = false
+            )
+            val safeCallbackId = JSONObject.quote(callbackId)
+            val escapedJson = JSONObject.quote(res.toString())
+            val jsCode = "window.__onMaxPlaySegmentComplete && window.__onMaxPlaySegmentComplete($safeCallbackId, JSON.parse($escapedJson));"
+            activity.runOnUiThread {
+                try {
+                    webView.evaluateJavascript(jsCode, null)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun downloadAudioSegmentToDisk(
+        storageKey: String,
+        segmentIndex: Int,
+        segmentUrl: String,
+        refererUrl: String,
+        callbackId: String
+    ) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val res = MaxPlayOfflineVault.downloadSegmentToDisk(
+                context = activity.applicationContext,
+                storageKey = storageKey,
+                segmentIndex = segmentIndex,
+                segmentUrl = segmentUrl,
+                refererUrl = refererUrl,
+                isAudio = true
             )
             val safeCallbackId = JSONObject.quote(callbackId)
             val escapedJson = JSONObject.quote(res.toString())
@@ -238,7 +267,29 @@ class MaxPlayNativeBridge(
             storageKey = storageKey,
             totalSegments = totalSegments,
             totalDurationSec = totalDurationSec,
-            isSingleFile = isSingleFile
+            isSingleFile = isSingleFile,
+            totalAudioSegments = 0,
+            languageLabel = "Default"
+        )
+    }
+
+    @JavascriptInterface
+    fun saveOfflineManifestWithAudio(
+        storageKey: String,
+        totalSegments: Int,
+        totalDurationSec: Double,
+        isSingleFile: Boolean,
+        totalAudioSegments: Int,
+        languageLabel: String
+    ): Boolean {
+        return MaxPlayOfflineVault.saveDownloadManifest(
+            context = activity.applicationContext,
+            storageKey = storageKey,
+            totalSegments = totalSegments,
+            totalDurationSec = totalDurationSec,
+            isSingleFile = isSingleFile,
+            totalAudioSegments = totalAudioSegments,
+            languageLabel = languageLabel
         )
     }
 

@@ -8,10 +8,25 @@
 
 import { NativeBridgeService } from "./nativeBridgeService";
 
+export interface CachedStreamMetadata {
+  qualities?: string[];
+  qualityLinks?: Record<string, string>;
+  downloadQualities?: {
+    id: string;
+    label: string;
+    sizeMb: number;
+    url?: string;
+    bandwidth?: number;
+  }[];
+  audioTracks?: string[];
+  duration?: number;
+}
+
 interface ClientCachedStream {
   m3u8Url: string;
   expiresAt: number;
   cachedAt: number;
+  meta?: CachedStreamMetadata;
 }
 
 const CACHE_PREFIX = "maxplay_hls_stream_";
@@ -189,18 +204,24 @@ export class SmartStreamService {
   }
 
   /**
-   * Stores stream URL in client session storage.
+   * Stores stream URL and optional extracted metadata in client session & local storage.
    */
-  private static setClientCache(sourceUrl: string, m3u8Url: string, expiresAt: number): void {
+  private static setClientCache(
+    sourceUrl: string,
+    m3u8Url: string,
+    expiresAt: number,
+    meta?: CachedStreamMetadata
+  ): void {
     try {
       const key = CACHE_PREFIX + btoa(encodeURIComponent(sourceUrl)).slice(0, 48);
+      const existing = this.getClientCache(sourceUrl);
       const data: ClientCachedStream = {
         m3u8Url,
         expiresAt,
-        cachedAt: Date.now()
+        cachedAt: Date.now(),
+        meta: meta || existing?.meta,
       };
       sessionStorage.setItem(key, JSON.stringify(data));
-      // Also cache in localStorage for fast resumes across tabs
       localStorage.setItem(key, JSON.stringify(data));
     } catch (e) {
       console.warn("[SmartStreamService] Failed to write cache:", e);
@@ -214,6 +235,30 @@ export class SmartStreamService {
     if (!sourceUrl || !sourceUrl.trim()) return null;
     const cached = this.getClientCache(sourceUrl.trim());
     return cached?.m3u8Url || null;
+  }
+
+  /**
+   * Public synchronous lookup for already-parsed stream metadata (qualities, audioTracks, downloadQualities).
+   */
+  public static getCachedStreamMeta(sourceUrl: string): CachedStreamMetadata | null {
+    if (!sourceUrl || !sourceUrl.trim()) return null;
+    const cached = this.getClientCache(sourceUrl.trim());
+    return cached?.meta || null;
+  }
+
+  /**
+   * Updates cached stream metadata for a source URL (or direct m3u8 URL).
+   */
+  public static setCachedStreamMeta(sourceUrl: string, meta: CachedStreamMetadata): void {
+    if (!sourceUrl || !sourceUrl.trim()) return;
+    const trimmed = sourceUrl.trim();
+    const existing = this.getClientCache(trimmed);
+    const m3u8Url = existing?.m3u8Url || trimmed;
+    const expiresAt = existing?.expiresAt || Date.now() + 170 * 60 * 1000;
+    this.setClientCache(trimmed, m3u8Url, expiresAt, {
+      ...(existing?.meta || {}),
+      ...meta,
+    });
   }
 
   /**
@@ -326,7 +371,13 @@ export class SmartStreamService {
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = Date.now() + ttlMs;
-          this.setClientCache(trimmed, nativeRes.m3u8Url, expiresAt);
+          this.setClientCache(trimmed, nativeRes.m3u8Url, expiresAt, {
+            qualities: nativeRes.qualities,
+            qualityLinks: nativeRes.qualityLinks,
+            downloadQualities: nativeRes.downloadQualities,
+            audioTracks: nativeRes.audioTracks,
+            duration: nativeRes.duration,
+          });
           return {
             streamUrl: nativeRes.m3u8Url,
             isExtracted: true,
@@ -370,7 +421,17 @@ export class SmartStreamService {
             NativeBridgeService.fetchTextCorsFree(chosenM3u8, result.headers).catch(() => {});
           }
           if (result.expiresAt) {
-            this.setClientCache(trimmed, chosenM3u8, result.expiresAt);
+            const meta: CachedStreamMetadata | undefined =
+              result.downloadQualities || result.audioTracks || result.qualities
+                ? {
+                    qualities: result.qualities,
+                    qualityLinks: result.qualityLinks,
+                    downloadQualities: result.downloadQualities,
+                    audioTracks: result.audioTracks,
+                    duration: result.duration,
+                  }
+                : undefined;
+            this.setClientCache(trimmed, chosenM3u8, result.expiresAt, meta);
           }
           return {
             streamUrl: chosenM3u8,

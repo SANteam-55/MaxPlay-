@@ -274,6 +274,40 @@ class DownloadManagerService {
     };
 
     const primaryResolved = await tryResolveUrl(task.videoUrl);
+    if (primaryResolved && task.secondaryVideoUrl && task.language && task.language !== 'Default') {
+      // If user requested a specific language (e.g. Hindi), check if primary stream has separate audio tracks
+      // that lack the target language while backup server has it.
+      try {
+        const primaryMeta =
+          SmartStreamService.getCachedStreamMeta(task.videoUrl || '') ||
+          (await ClientHlsDownloader.probeMasterPlaylist(primaryResolved, 0));
+        if (
+          primaryMeta &&
+          Array.isArray(primaryMeta.audioTracks) &&
+          primaryMeta.audioTracks.length > 0 &&
+          !primaryMeta.audioTracks.some(
+            (l) => l.toLowerCase() === task.language!.toLowerCase()
+          )
+        ) {
+          const secondaryResolved = await tryResolveUrl(task.secondaryVideoUrl);
+          if (secondaryResolved) {
+            const secMeta =
+              SmartStreamService.getCachedStreamMeta(task.secondaryVideoUrl) ||
+              (await ClientHlsDownloader.probeMasterPlaylist(secondaryResolved, 0));
+            if (
+              secMeta &&
+              Array.isArray(secMeta.audioTracks) &&
+              secMeta.audioTracks.some(
+                (l) => l.toLowerCase() === task.language!.toLowerCase()
+              )
+            ) {
+              return secondaryResolved;
+            }
+          }
+        }
+      } catch {}
+    }
+
     if (primaryResolved) return primaryResolved;
 
     if (task.secondaryVideoUrl) {
@@ -292,7 +326,7 @@ class DownloadManagerService {
       const resolvedStreamUrl = await this.resolveStreamForTask(task);
 
       const result = await ClientHlsDownloader.downloadStream(
-        task.storageKey,
+        task.storageKey!,
         resolvedStreamUrl,
         task.quality,
         (info) => {
@@ -306,7 +340,8 @@ class DownloadManagerService {
           current.downloadSpeedMb =
             Math.round((info.speedBps / (1024 * 1024)) * 10) / 10;
           this.notify();
-        }
+        },
+        task.language || 'Hindi'
       );
 
       // Remove from active tasks list and move to completedFiles

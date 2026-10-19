@@ -52,11 +52,26 @@ interface MaxPlayKotlinBridge {
     refererUrl: string,
     callbackId: string
   ) => void;
+  downloadAudioSegmentToDisk?: (
+    storageKey: string,
+    segmentIndex: number,
+    segmentUrl: string,
+    refererUrl: string,
+    callbackId: string
+  ) => void;
   saveOfflineManifest?: (
     storageKey: string,
     totalSegments: number,
     totalDurationSec: number,
     isSingleFile: boolean
+  ) => boolean;
+  saveOfflineManifestWithAudio?: (
+    storageKey: string,
+    totalSegments: number,
+    totalDurationSec: number,
+    isSingleFile: boolean,
+    totalAudioSegments: number,
+    languageLabel: string
   ) => boolean;
   getOfflineCheckpointInfo?: (storageKey: string) => string;
   hasOfflineItem?: (storageKey: string) => boolean;
@@ -230,6 +245,21 @@ export class NativeBridgeService {
   }
 
   /**
+   * Returns true if the installed APK build supports separate audio rendition segment downloads on disk.
+   */
+  public static supportsNativeAudioVault(): boolean {
+    try {
+      return Boolean(
+        this.supportsNativeOfflineVault() &&
+          typeof window.MaxPlayNative?.downloadAudioSegmentToDisk === 'function' &&
+          typeof window.MaxPlayNative?.saveOfflineManifestWithAudio === 'function'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Downloads a single HLS segment (.ts) directly to Android internal storage disk via Kotlin OkHttp.
    * Automatically reuses existing segment on disk if already downloaded (0ms checkpoint resume).
    */
@@ -237,7 +267,8 @@ export class NativeBridgeService {
     storageKey: string,
     segmentIndex: number,
     segmentUrl: string,
-    refererUrl: string = ''
+    refererUrl: string = '',
+    isAudio: boolean = false
   ): Promise<{ ok: boolean; bytes?: number; cached?: boolean; error?: string }> {
     return new Promise((resolve) => {
       if (!this.supportsNativeOfflineVault()) {
@@ -245,7 +276,7 @@ export class NativeBridgeService {
         return;
       }
 
-      const callbackId = `seg_${Date.now()}_${segmentIndex}_${Math.random().toString(36).slice(2, 6)}`;
+      const callbackId = `seg_${Date.now()}_${isAudio ? 'a' : 'v'}${segmentIndex}_${Math.random().toString(36).slice(2, 6)}`;
       const timer = setTimeout(() => {
         if (window.__maxplaySegmentCallbacks?.[callbackId]) {
           delete window.__maxplaySegmentCallbacks[callbackId];
@@ -271,13 +302,23 @@ export class NativeBridgeService {
       };
 
       try {
-        window.MaxPlayNative!.downloadSegmentToDisk!(
-          storageKey,
-          segmentIndex,
-          segmentUrl,
-          refererUrl,
-          callbackId
-        );
+        if (isAudio && typeof window.MaxPlayNative!.downloadAudioSegmentToDisk === 'function') {
+          window.MaxPlayNative!.downloadAudioSegmentToDisk!(
+            storageKey,
+            segmentIndex,
+            segmentUrl,
+            refererUrl,
+            callbackId
+          );
+        } else {
+          window.MaxPlayNative!.downloadSegmentToDisk!(
+            storageKey,
+            segmentIndex,
+            segmentUrl,
+            refererUrl,
+            callbackId
+          );
+        }
       } catch (e: any) {
         clearTimeout(timer);
         delete window.__maxplaySegmentCallbacks[callbackId];
@@ -293,10 +334,27 @@ export class NativeBridgeService {
     storageKey: string,
     totalSegments: number,
     totalDurationSec: number,
-    isSingleFile: boolean = false
+    isSingleFile: boolean = false,
+    totalAudioSegments: number = 0,
+    languageLabel: string = 'Default'
   ): boolean {
     try {
       if (this.supportsNativeOfflineVault()) {
+        if (
+          totalAudioSegments > 0 &&
+          typeof window.MaxPlayNative!.saveOfflineManifestWithAudio === 'function'
+        ) {
+          return Boolean(
+            window.MaxPlayNative!.saveOfflineManifestWithAudio!(
+              storageKey,
+              totalSegments,
+              totalDurationSec,
+              isSingleFile,
+              totalAudioSegments,
+              languageLabel
+            )
+          );
+        }
         return Boolean(
           window.MaxPlayNative!.saveOfflineManifest!(
             storageKey,
@@ -318,6 +376,7 @@ export class NativeBridgeService {
     downloadedSegments: number;
     totalBytes: number;
     completedIndices: number[];
+    completedAudioIndices: number[];
     playbackUrl?: string;
   } | null {
     try {
@@ -330,6 +389,9 @@ export class NativeBridgeService {
             downloadedSegments: Number(parsed.downloadedSegments || 0),
             totalBytes: Number(parsed.totalBytes || 0),
             completedIndices: Array.isArray(parsed.completedIndices) ? parsed.completedIndices : [],
+            completedAudioIndices: Array.isArray(parsed.completedAudioIndices)
+              ? parsed.completedAudioIndices
+              : [],
             playbackUrl: parsed.playbackUrl,
           };
         }
@@ -625,14 +687,20 @@ export class NativeBridgeService {
         const langMatch = line.match(/LANGUAGE="([^"]+)"/i) || line.match(/LANGUAGE=([^\s,]+)/i);
         const rawName = (nameMatch ? nameMatch[1] : '').trim();
         const rawLang = (langMatch ? langMatch[1] : '').trim();
-        let friendly = rawName || rawLang || 'Default Audio';
-        const code = (rawLang || rawName).toLowerCase();
-        if (code.includes('hin') || code.includes('hi')) friendly = 'Hindi';
-        else if (code.includes('eng') || code.includes('en')) friendly = 'English';
-        else if (code.includes('jpn') || code.includes('ja') || code.includes('jap')) friendly = 'Japanese';
-        else if (code.includes('tam') || code.includes('ta')) friendly = 'Tamil';
-        else if (code.includes('tel') || code.includes('te')) friendly = 'Telugu';
-        else if (code.includes('kor') || code.includes('ko')) friendly = 'Korean';
+        let friendly = rawName || rawLang || '';
+        const code = `${rawLang} ${rawName}`.toLowerCase();
+        if (code.includes('hin') || /\bhi\b/.test(code)) friendly = 'Hindi';
+        else if (code.includes('eng') || /\ben\b/.test(code)) friendly = 'English';
+        else if (code.includes('jpn') || code.includes('jap') || /\bja\b/.test(code)) friendly = 'Japanese';
+        else if (code.includes('tam') || /\bta\b/.test(code)) friendly = 'Tamil';
+        else if (code.includes('tel') || /\bte\b/.test(code)) friendly = 'Telugu';
+        else if (code.includes('mal') || /\bml\b/.test(code)) friendly = 'Malayalam';
+        else if (code.includes('kan') || /\bkn\b/.test(code)) friendly = 'Kannada';
+        else if (code.includes('kor') || /\bko\b/.test(code)) friendly = 'Korean';
+        else if (code.includes('spa') || /\bes\b/.test(code)) friendly = 'Spanish';
+        else if (code.includes('fre') || code.includes('fra') || /\bfr\b/.test(code)) friendly = 'French';
+        else if (code.includes('rus') || /\bru\b/.test(code)) friendly = 'Russian';
+        else if (code.includes('ind') || /\bid\b/.test(code)) friendly = 'Indonesian';
 
         if (friendly && !audioTracks.includes(friendly)) {
           audioTracks.push(friendly);
@@ -678,7 +746,11 @@ export class NativeBridgeService {
                 ? '480p'
                 : height > 0
                 ? `${height}p`
-                : '720p';
+                : detectedBw >= 2000000
+                ? '1080p'
+                : detectedBw >= 900000
+                ? '720p'
+                : '480p';
 
             if (detectedBw > 0) {
               bandwidthsByQuality[qLabel] = detectedBw;
@@ -705,11 +777,21 @@ export class NativeBridgeService {
         }
       }
 
-      const finalDuration = detectedDuration > 0 ? detectedDuration : durationSec > 0 ? durationSec : 1440;
+      const finalDuration =
+        detectedDuration > 0
+          ? detectedDuration > 300
+            ? detectedDuration
+            : detectedDuration * 60
+          : durationSec > 0
+          ? durationSec > 300
+            ? durationSec
+            : durationSec * 60
+          : 1440;
 
       if (qualities.length === 0) {
-        qualities.push('1080p');
+        qualities.push('1080p', '720p');
         qualityLinks['1080p'] = m3u8Url;
+        qualityLinks['720p'] = m3u8Url;
       }
 
       for (const q of qualities) {
@@ -741,7 +823,7 @@ export class NativeBridgeService {
         qualities,
         qualityLinks,
         downloadQualities,
-        audioTracks: audioTracks.length > 0 ? audioTracks : fallbackAudios,
+        audioTracks,
         duration: finalDuration,
       };
     } catch {
@@ -749,7 +831,7 @@ export class NativeBridgeService {
         qualities: fallbackQualities,
         qualityLinks: { '1080p': m3u8Url, '720p': m3u8Url },
         downloadQualities: fallbackDownloadQualities,
-        audioTracks: fallbackAudios,
+        audioTracks: [],
         duration: durationSec || 1440,
       };
     }

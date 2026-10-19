@@ -3266,6 +3266,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         initialSeasonIndex={selectedSeasonIndex}
         initialEpisodeIndex={selectedEpisodeIndex}
         selectedServer={selectedServer}
+        activePrimaryUrl={primaryServerUrl}
+        activeSecondaryUrl={secondaryServerUrl}
         onClose={() => setShowDownloadModal(false)}
         onSuccessToast={(msg) => {
           setToastMessage(msg);

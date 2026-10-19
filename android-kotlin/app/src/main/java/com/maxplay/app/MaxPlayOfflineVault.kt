@@ -66,7 +66,7 @@ object MaxPlayOfflineVault {
     }
 
     /**
-     * Downloads a single HLS segment or MP4 chunk directly to internal storage via OkHttp.
+     * Downloads a single HLS segment (video or audio) or MP4 chunk directly to internal storage via OkHttp.
      * If the segment already exists on disk and has > 512 bytes, returns its size immediately (0ms checkpoint resume).
      */
     fun downloadSegmentToDisk(
@@ -74,12 +74,14 @@ object MaxPlayOfflineVault {
         storageKey: String,
         segmentIndex: Int,
         segmentUrl: String,
-        refererUrl: String = ""
+        refererUrl: String = "",
+        isAudio: Boolean = false
     ): JSONObject {
         val res = JSONObject()
         try {
             val itemDir = getItemDir(context, storageKey)
-            val segFile = File(itemDir, "seg_${segmentIndex}.ts")
+            val prefix = if (isAudio) "aud_" else "seg_"
+            val segFile = File(itemDir, "${prefix}${segmentIndex}.ts")
 
             // Checkpoint Resume: If segment was already downloaded in an earlier session, reuse it!
             if (segFile.exists() && segFile.length() > 512L) {
@@ -122,7 +124,7 @@ object MaxPlayOfflineVault {
                     return res
                 }
 
-                val tmpFile = File(itemDir, "seg_${segmentIndex}.tmp")
+                val tmpFile = File(itemDir, "${prefix}${segmentIndex}.tmp")
                 body.byteStream().use { input ->
                     FileOutputStream(tmpFile).use { output ->
                         val buffer = ByteArray(32 * 1024)
@@ -157,14 +159,16 @@ object MaxPlayOfflineVault {
 
     /**
      * Writes metadata for a completed or in-progress HLS download so that we can generate
-     * a valid local HLS playlist (index.m3u8) with exact segment count and durations.
+     * a valid local HLS playlist (index.m3u8, plus video.m3u8 & audio.m3u8 when separate audio track exists).
      */
     fun saveDownloadManifest(
         context: Context,
         storageKey: String,
         totalSegments: Int,
         totalDurationSec: Double,
-        isSingleFile: Boolean = false
+        isSingleFile: Boolean = false,
+        totalAudioSegments: Int = 0,
+        languageLabel: String = "Default"
     ): Boolean {
         return try {
             val itemDir = getItemDir(context, storageKey)
@@ -172,14 +176,16 @@ object MaxPlayOfflineVault {
             val json = JSONObject().apply {
                 put("storageKey", storageKey)
                 put("totalSegments", totalSegments)
+                put("totalAudioSegments", totalAudioSegments)
+                put("languageLabel", languageLabel)
                 put("totalDurationSec", totalDurationSec)
                 put("isSingleFile", isSingleFile)
                 put("updatedAt", System.currentTimeMillis())
             }
             metaFile.writeText(json.toString())
 
-            // Also pre-generate index.m3u8 on disk for instant playback
-            generateLocalM3u8File(itemDir, totalSegments, totalDurationSec)
+            // Pre-generate local m3u8 playlist(s) on disk for instant playback
+            generateLocalM3u8File(itemDir, totalSegments, totalDurationSec, totalAudioSegments, languageLabel)
             true
         } catch (_: Exception) {
             false
@@ -189,7 +195,9 @@ object MaxPlayOfflineVault {
     private fun generateLocalM3u8File(
         itemDir: File,
         totalSegments: Int,
-        totalDurationSec: Double
+        totalDurationSec: Double,
+        totalAudioSegments: Int = 0,
+        languageLabel: String = "Default"
     ) {
         if (totalSegments <= 0) return
         val avgSegDur = if (totalDurationSec > 0 && totalSegments > 0) {
@@ -198,29 +206,73 @@ object MaxPlayOfflineVault {
             4.0
         }
         val targetDur = kotlin.math.ceil(avgSegDur + 2.0).toInt().coerceAtLeast(6)
-
-        val sb = StringBuilder()
-        sb.appendLine("#EXTM3U")
-        sb.appendLine("#EXT-X-VERSION:3")
-        sb.appendLine("#EXT-X-TARGETDURATION:$targetDur")
-        sb.appendLine("#EXT-X-MEDIA-SEQUENCE:0")
-        sb.appendLine("#EXT-X-PLAYLIST-TYPE:VOD")
-
         val segDurFormatted = String.format(java.util.Locale.US, "%.3f", avgSegDur)
+
+        val videoSb = StringBuilder()
+        videoSb.appendLine("#EXTM3U")
+        videoSb.appendLine("#EXT-X-VERSION:3")
+        videoSb.appendLine("#EXT-X-TARGETDURATION:$targetDur")
+        videoSb.appendLine("#EXT-X-MEDIA-SEQUENCE:0")
+        videoSb.appendLine("#EXT-X-PLAYLIST-TYPE:VOD")
+
         for (i in 0 until totalSegments) {
             val segFile = File(itemDir, "seg_${i}.ts")
             if (segFile.exists() && segFile.length() > 0L) {
-                sb.appendLine("#EXTINF:$segDurFormatted,")
-                sb.appendLine("seg_${i}.ts")
+                videoSb.appendLine("#EXTINF:$segDurFormatted,")
+                videoSb.appendLine("seg_${i}.ts")
             }
         }
-        sb.appendLine("#EXT-X-ENDLIST")
+        videoSb.appendLine("#EXT-X-ENDLIST")
 
-        File(itemDir, "index.m3u8").writeText(sb.toString())
+        // Check if separate audio segments exist on disk
+        val hasAudioSegments = totalAudioSegments > 0 && File(itemDir, "aud_0.ts").exists()
+        if (hasAudioSegments) {
+            // Write video.m3u8
+            File(itemDir, "video.m3u8").writeText(videoSb.toString())
+
+            // Write audio.m3u8
+            val avgAudDur = if (totalDurationSec > 0 && totalAudioSegments > 0) {
+                (totalDurationSec / totalAudioSegments).coerceIn(1.5, 12.0)
+            } else {
+                avgSegDur
+            }
+            val audTargetDur = kotlin.math.ceil(avgAudDur + 2.0).toInt().coerceAtLeast(6)
+            val audDurFormatted = String.format(java.util.Locale.US, "%.3f", avgAudDur)
+
+            val audioSb = StringBuilder()
+            audioSb.appendLine("#EXTM3U")
+            audioSb.appendLine("#EXT-X-VERSION:3")
+            audioSb.appendLine("#EXT-X-TARGETDURATION:$audTargetDur")
+            audioSb.appendLine("#EXT-X-MEDIA-SEQUENCE:0")
+            audioSb.appendLine("#EXT-X-PLAYLIST-TYPE:VOD")
+
+            for (i in 0 until totalAudioSegments) {
+                val audFile = File(itemDir, "aud_${i}.ts")
+                if (audFile.exists() && audFile.length() > 0L) {
+                    audioSb.appendLine("#EXTINF:$audDurFormatted,")
+                    audioSb.appendLine("aud_${i}.ts")
+                }
+            }
+            audioSb.appendLine("#EXT-X-ENDLIST")
+            File(itemDir, "audio.m3u8").writeText(audioSb.toString())
+
+            // Write Master index.m3u8 binding video.m3u8 + audio.m3u8
+            val safeLangName = languageLabel.replace("\"", "").ifBlank { "Selected Audio" }
+            val masterSb = StringBuilder()
+            masterSb.appendLine("#EXTM3U")
+            masterSb.appendLine("#EXT-X-VERSION:3")
+            masterSb.appendLine("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"offline_audio\",NAME=\"$safeLangName\",LANGUAGE=\"$safeLangName\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio.m3u8\"")
+            masterSb.appendLine("#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO=\"offline_audio\"")
+            masterSb.appendLine("video.m3u8")
+            File(itemDir, "index.m3u8").writeText(masterSb.toString())
+        } else {
+            // Single muxed stream: index.m3u8 is the media playlist directly
+            File(itemDir, "index.m3u8").writeText(videoSb.toString())
+        }
     }
 
     /**
-     * Returns checkpoint status for a storageKey (how many segments exist on disk and total bytes).
+     * Returns checkpoint status for a storageKey (how many video & audio segments exist on disk and total bytes).
      */
     fun getCheckpointInfo(context: Context, storageKey: String): JSONObject {
         val json = JSONObject()
@@ -237,6 +289,7 @@ object MaxPlayOfflineVault {
             var count = 0
             var bytes = 0L
             val completedIndices = JSONArray()
+            val completedAudioIndices = JSONArray()
             val files = itemDir.listFiles() ?: emptyArray()
             for (f in files) {
                 if (f.name.startsWith("seg_") && f.name.endsWith(".ts") && f.length() > 512L) {
@@ -244,6 +297,10 @@ object MaxPlayOfflineVault {
                     bytes += f.length()
                     val idxStr = f.name.removePrefix("seg_").removeSuffix(".ts")
                     idxStr.toIntOrNull()?.let { completedIndices.put(it) }
+                } else if (f.name.startsWith("aud_") && f.name.endsWith(".ts") && f.length() > 512L) {
+                    bytes += f.length()
+                    val idxStr = f.name.removePrefix("aud_").removeSuffix(".ts")
+                    idxStr.toIntOrNull()?.let { completedAudioIndices.put(it) }
                 }
             }
 
@@ -251,6 +308,7 @@ object MaxPlayOfflineVault {
             json.put("downloadedSegments", count)
             json.put("totalBytes", bytes)
             json.put("completedIndices", completedIndices)
+            json.put("completedAudioIndices", completedAudioIndices)
             json.put("playbackUrl", getLocalPlaybackUrl(storageKey))
         } catch (e: Exception) {
             json.put("exists", false)
@@ -356,18 +414,23 @@ object MaxPlayOfflineVault {
                 "Cache-Control" to "no-cache"
             )
 
-            if (fileName == "index.m3u8") {
-                val m3u8File = File(itemDir, "index.m3u8")
-                if (!m3u8File.exists()) {
-                    // Dynamically build index.m3u8 from whatever seg_*.ts files exist on disk
+            if (fileName == "index.m3u8" || fileName == "video.m3u8" || fileName == "audio.m3u8") {
+                val m3u8File = File(itemDir, fileName)
+                if (!m3u8File.exists() && fileName == "index.m3u8") {
+                    // Dynamically build index.m3u8 from whatever seg_*.ts and aud_*.ts files exist on disk
                     val segFiles = (itemDir.listFiles { _, name ->
                         name.startsWith("seg_") && name.endsWith(".ts")
                     } ?: emptyArray()).sortedBy {
                         it.name.removePrefix("seg_").removeSuffix(".ts").toIntOrNull() ?: 0
                     }
+                    val audFiles = (itemDir.listFiles { _, name ->
+                        name.startsWith("aud_") && name.endsWith(".ts")
+                    } ?: emptyArray()).sortedBy {
+                        it.name.removePrefix("aud_").removeSuffix(".ts").toIntOrNull() ?: 0
+                    }
 
                     if (segFiles.isEmpty()) return null
-                    generateLocalM3u8File(itemDir, segFiles.size, segFiles.size * 4.0)
+                    generateLocalM3u8File(itemDir, segFiles.size, segFiles.size * 4.0, audFiles.size, "Selected Audio")
                 }
 
                 if (m3u8File.exists()) {
@@ -381,7 +444,7 @@ object MaxPlayOfflineVault {
                         ByteArrayInputStream(bytes)
                     )
                 }
-            } else if (fileName.startsWith("seg_") && fileName.endsWith(".ts")) {
+            } else if ((fileName.startsWith("seg_") || fileName.startsWith("aud_")) && fileName.endsWith(".ts")) {
                 val segFile = File(itemDir, fileName)
                 if (segFile.exists() && segFile.length() > 0L) {
                     val fileHeaders = corsHeaders + ("Content-Length" to segFile.length().toString())

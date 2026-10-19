@@ -155,13 +155,256 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Resolves a Master Playlist to a specific quality variant URL, or returns the URL if already a Media Playlist.
+   * Normalizes raw HLS audio track NAME / LANGUAGE attributes into friendly language names.
+   */
+  public static normalizeLanguageLabel(rawName: string, rawLang: string): string {
+    const combined = `${rawLang} ${rawName}`.toLowerCase().trim();
+    if (!combined) return '';
+    if (combined.includes('hin') || /\bhi\b/.test(combined)) return 'Hindi';
+    if (combined.includes('eng') || /\ben\b/.test(combined)) return 'English';
+    if (combined.includes('jpn') || combined.includes('jap') || /\bja\b/.test(combined)) return 'Japanese';
+    if (combined.includes('tam') || /\bta\b/.test(combined)) return 'Tamil';
+    if (combined.includes('tel') || /\bte\b/.test(combined)) return 'Telugu';
+    if (combined.includes('mal') || /\bml\b/.test(combined)) return 'Malayalam';
+    if (combined.includes('kan') || /\bkn\b/.test(combined)) return 'Kannada';
+    if (combined.includes('kor') || /\bko\b/.test(combined)) return 'Korean';
+    if (combined.includes('spa') || /\bes\b/.test(combined)) return 'Spanish';
+    if (combined.includes('fre') || combined.includes('fra') || /\bfr\b/.test(combined)) return 'French';
+    if (combined.includes('rus') || /\bru\b/.test(combined)) return 'Russian';
+    if (combined.includes('ind') || /\bid\b/.test(combined)) return 'Indonesian';
+    if (combined.includes('ara') || /\bar\b/.test(combined)) return 'Arabic';
+    if (combined.includes('por') || /\bpt\b/.test(combined)) return 'Portuguese';
+    if (combined.includes('ger') || combined.includes('deu') || /\bde\b/.test(combined)) return 'German';
+    if (combined.includes('ita') || /\bit\b/.test(combined)) return 'Italian';
+    return (rawName || rawLang).trim();
+  }
+
+  /**
+   * Checks whether an HLS audio track matches the user's selected language.
+   */
+  private static matchesTargetLanguage(
+    track: { name: string; language: string; friendly: string },
+    targetLanguage?: string
+  ): boolean {
+    if (!targetLanguage || targetLanguage === 'Default') return false;
+    const target = targetLanguage.toLowerCase().trim();
+    const friendly = track.friendly.toLowerCase();
+    const rawName = track.name.toLowerCase();
+    const rawLang = track.language.toLowerCase();
+
+    if (friendly === target || rawName === target || rawLang === target) return true;
+    if (friendly.includes(target) || target.includes(friendly)) return true;
+    if (rawName && (rawName.includes(target) || target.includes(rawName))) return true;
+
+    const normalizedTarget = this.normalizeLanguageLabel(targetLanguage, targetLanguage).toLowerCase();
+    if (normalizedTarget && friendly === normalizedTarget) return true;
+    return false;
+  }
+
+  /**
+   * Fast universal Master/Media HLS Playlist prober for both Android APK and Web Browser.
+   * Extracts real available video qualities, bitrates, estimated MB sizes, and real #EXT-X-MEDIA:TYPE=AUDIO tracks.
+   */
+  public static async probeMasterPlaylist(
+    m3u8Url: string,
+    requestedDurationSec: number = 0
+  ): Promise<{
+    qualities: string[];
+    qualityLinks: Record<string, string>;
+    downloadQualities: {
+      id: string;
+      label: string;
+      sizeMb: number;
+      url: string;
+      bandwidth: number;
+    }[];
+    audioTracks: string[];
+    duration: number;
+  } | null> {
+    try {
+      const rawMasterUrl = unwrapProxyUrl(m3u8Url);
+      if (!rawMasterUrl) return null;
+
+      if (NativeBridgeService.isRunningInKotlinApp()) {
+        const nativeParsed = await NativeBridgeService.parseHlsManifestOnDevice(
+          rawMasterUrl,
+          {},
+          requestedDurationSec
+        );
+        if (nativeParsed && nativeParsed.downloadQualities.length > 0) {
+          return nativeParsed;
+        }
+      }
+
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(wrapProxyUrl(rawMasterUrl), { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) return null;
+
+      const text = await res.text();
+      if (!text || !text.includes('#EXTM3U')) return null;
+
+      const qualities: string[] = [];
+      const qualityLinks: Record<string, string> = {};
+      const bandwidthsByQuality: Record<string, number> = {};
+      const audioTracks: string[] = [];
+
+      const lines = text.split(/\r?\n/).map((l) => l.trim());
+
+      // 1. Parse #EXT-X-MEDIA:TYPE=AUDIO
+      for (const line of lines) {
+        if (line.startsWith('#EXT-X-MEDIA:') && line.includes('TYPE=AUDIO')) {
+          const nameMatch = line.match(/NAME="([^"]+)"/i) || line.match(/NAME=([^\s,]+)/i);
+          const langMatch = line.match(/LANGUAGE="([^"]+)"/i) || line.match(/LANGUAGE=([^\s,]+)/i);
+          const rawName = (nameMatch ? nameMatch[1] : '').trim();
+          const rawLang = (langMatch ? langMatch[1] : '').trim();
+          const friendly = this.normalizeLanguageLabel(rawName, rawLang);
+          if (friendly && !audioTracks.includes(friendly)) {
+            audioTracks.push(friendly);
+          }
+        }
+      }
+
+      // 2. Parse #EXT-X-STREAM-INF video variants
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('#EXT-X-STREAM-INF:')) {
+          const resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+          const height = resMatch ? parseInt(resMatch[1], 10) : 0;
+          const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+          const avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
+          const detectedBw = avgBwMatch
+            ? parseInt(avgBwMatch[1], 10)
+            : bwMatch
+            ? parseInt(bwMatch[1], 10)
+            : 0;
+
+          let nextUrl = '';
+          for (let j = i + 1; j < lines.length; j++) {
+            if (lines[j] && !lines[j].startsWith('#')) {
+              nextUrl = lines[j];
+              break;
+            }
+          }
+
+          if (nextUrl) {
+            const resolvedUrl = resolveRelativeUrl(rawMasterUrl, nextUrl);
+            const qLabel =
+              height >= 1000
+                ? '1080p'
+                : height >= 700
+                ? '720p'
+                : height >= 450
+                ? '480p'
+                : height > 0
+                ? `${height}p`
+                : detectedBw >= 2000000
+                ? '1080p'
+                : detectedBw >= 900000
+                ? '720p'
+                : '480p';
+
+            if (detectedBw > 0) {
+              bandwidthsByQuality[qLabel] = detectedBw;
+            }
+            if (!qualities.includes(qLabel)) {
+              qualities.push(qLabel);
+              qualityLinks[qLabel] = resolvedUrl;
+            }
+          }
+        }
+      }
+
+      // 3. Duration calculation
+      let detectedDuration = requestedDurationSec > 0 ? requestedDurationSec : 0;
+      if (text.includes('#EXTINF:')) {
+        let segSum = 0;
+        const extinfRegex = /#EXTINF:([\d.]+)/g;
+        let eMatch: RegExpExecArray | null;
+        while ((eMatch = extinfRegex.exec(text)) !== null) {
+          segSum += parseFloat(eMatch[1]) || 0;
+        }
+        if (segSum > 5) {
+          detectedDuration = Math.round(segSum);
+        }
+      }
+
+      const finalDuration =
+        detectedDuration > 0
+          ? detectedDuration > 300
+            ? detectedDuration
+            : detectedDuration * 60
+          : requestedDurationSec > 0
+          ? requestedDurationSec > 300
+            ? requestedDurationSec
+            : requestedDurationSec * 60
+          : 1440;
+
+      if (qualities.length === 0) {
+        qualities.push('1080p', '720p');
+        qualityLinks['1080p'] = rawMasterUrl;
+        qualityLinks['720p'] = rawMasterUrl;
+      }
+
+      const downloadQualities: {
+        id: string;
+        label: string;
+        sizeMb: number;
+        url: string;
+        bandwidth: number;
+      }[] = [];
+
+      for (const q of qualities) {
+        const url = qualityLinks[q] || rawMasterUrl;
+        const defaultBps = q.includes('1080')
+          ? 2400000
+          : q.includes('720')
+          ? 1200000
+          : q.includes('480')
+          ? 600000
+          : 300000;
+        const actualBps = bandwidthsByQuality[q] || defaultBps;
+        const estBytes = (actualBps * finalDuration) / 8;
+        const sizeMb = Math.max(15, Math.round(estBytes / (1024 * 1024)));
+
+        downloadQualities.push({
+          id: q,
+          label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : 'Standard'}`,
+          sizeMb,
+          url,
+          bandwidth: actualBps,
+        });
+      }
+
+      qualities.sort((a, b) => parseInt(b) - parseInt(a));
+      downloadQualities.sort((a, b) => parseInt(b.id) - parseInt(a.id));
+
+      return {
+        qualities,
+        qualityLinks,
+        downloadQualities,
+        audioTracks,
+        duration: finalDuration,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Resolves a Master Playlist to a specific quality video variant URL AND matching separate audio rendition URL (if any).
    */
   private static async resolveMediaPlaylist(
     masterUrl: string,
     targetQuality: string,
+    targetLanguage: string,
     signal: AbortSignal
-  ): Promise<string> {
+  ): Promise<{
+    videoPlaylistUrl: string;
+    audioPlaylistUrl: string | null;
+    matchedAudioLabel: string;
+  }> {
     const rawMasterUrl = unwrapProxyUrl(masterUrl);
     let text = '';
 
@@ -178,22 +421,65 @@ export class ClientHlsDownloader {
       text = await res.text();
     }
 
-    // If it already has segments (#EXTINF), it IS a media playlist
+    // If it already has segments (#EXTINF), it IS a media playlist directly
     if (text.includes('#EXTINF:')) {
-      return rawMasterUrl;
+      return {
+        videoPlaylistUrl: rawMasterUrl,
+        audioPlaylistUrl: null,
+        matchedAudioLabel: targetLanguage || 'Default',
+      };
     }
 
-    // Parse #EXT-X-STREAM-INF variants
     const lines = text.split(/\r?\n/).map((l) => l.trim());
-    const variants: { height: number; bandwidth: number; url: string }[] = [];
+
+    // 1. Parse all #EXT-X-MEDIA:TYPE=AUDIO renditions
+    interface AudioRendition {
+      groupId: string;
+      name: string;
+      language: string;
+      friendly: string;
+      uri: string;
+      isDefault: boolean;
+    }
+    const audioRenditions: AudioRendition[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith('#EXT-X-MEDIA:') && line.includes('TYPE=AUDIO')) {
+        const groupMatch = line.match(/GROUP-ID="([^"]+)"/i) || line.match(/GROUP-ID=([^\s,]+)/i);
+        const nameMatch = line.match(/NAME="([^"]+)"/i) || line.match(/NAME=([^\s,]+)/i);
+        const langMatch = line.match(/LANGUAGE="([^"]+)"/i) || line.match(/LANGUAGE=([^\s,]+)/i);
+        const uriMatch = line.match(/URI="([^"]+)"/i) || line.match(/URI=([^\s,]+)/i);
+        const defMatch = line.match(/DEFAULT=(YES|TRUE)/i);
+
+        const groupId = (groupMatch ? groupMatch[1] : '').trim();
+        const rawName = (nameMatch ? nameMatch[1] : '').trim();
+        const rawLang = (langMatch ? langMatch[1] : '').trim();
+        const rawUri = (uriMatch ? uriMatch[1] : '').trim();
+        const friendly = this.normalizeLanguageLabel(rawName, rawLang);
+
+        audioRenditions.push({
+          groupId,
+          name: rawName,
+          language: rawLang,
+          friendly,
+          uri: rawUri ? resolveRelativeUrl(rawMasterUrl, rawUri) : '',
+          isDefault: Boolean(defMatch),
+        });
+      }
+    }
+
+    // 2. Parse #EXT-X-STREAM-INF video variants
+    const variants: { height: number; bandwidth: number; audioGroup: string; url: string }[] = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (line.startsWith('#EXT-X-STREAM-INF:')) {
         const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
         const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+        const audioGroupMatch = line.match(/AUDIO="([^"]+)"/i) || line.match(/AUDIO=([^\s,]+)/i);
         const height = resMatch ? parseInt(resMatch[2], 10) : 0;
         const bandwidth = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+        const audioGroup = (audioGroupMatch ? audioGroupMatch[1] : '').trim();
 
         let nextUri = '';
         for (let j = i + 1; j < lines.length; j++) {
@@ -206,6 +492,7 @@ export class ClientHlsDownloader {
           variants.push({
             height,
             bandwidth,
+            audioGroup,
             url: resolveRelativeUrl(rawMasterUrl, nextUri),
           });
         }
@@ -213,14 +500,41 @@ export class ClientHlsDownloader {
     }
 
     if (variants.length === 0) {
-      return rawMasterUrl;
+      return {
+        videoPlaylistUrl: rawMasterUrl,
+        audioPlaylistUrl: null,
+        matchedAudioLabel: targetLanguage || 'Default',
+      };
     }
 
+    // Pick closest height to targetQuality (e.g. if user requested 1080p on a series where Ep 5 maxes at 720p, automatically selects 720p)
     const reqHeight = parseInt(targetQuality.replace(/\D/g, ''), 10) || 720;
     variants.sort(
       (a, b) => Math.abs(a.height - reqHeight) - Math.abs(b.height - reqHeight)
     );
-    return variants[0].url;
+    const chosenVariant = variants[0];
+
+    // 3. Resolve matching #EXT-X-MEDIA:TYPE=AUDIO rendition for targetLanguage
+    let chosenAudio: AudioRendition | undefined;
+    if (audioRenditions.length > 0) {
+      const groupFiltered = chosenVariant.audioGroup
+        ? audioRenditions.filter((a) => !a.groupId || a.groupId === chosenVariant.audioGroup)
+        : audioRenditions;
+      const pool = groupFiltered.length > 0 ? groupFiltered : audioRenditions;
+
+      // Match user's selected language first
+      chosenAudio =
+        pool.find((a) => this.matchesTargetLanguage(a, targetLanguage)) ||
+        audioRenditions.find((a) => this.matchesTargetLanguage(a, targetLanguage)) ||
+        pool.find((a) => a.isDefault) ||
+        pool[0];
+    }
+
+    return {
+      videoPlaylistUrl: chosenVariant.url,
+      audioPlaylistUrl: chosenAudio && chosenAudio.uri ? chosenAudio.uri : null,
+      matchedAudioLabel: chosenAudio?.friendly || targetLanguage || 'Default',
+    };
   }
 
   /**
@@ -271,14 +585,15 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Downloads an HLS stream or direct MP4 file with 6x parallel segment fetching
-   * and True Checkpoint Resume (both on Android Native Disk Vault and Browser IndexedDB).
+   * Downloads an HLS stream (including separate #EXT-X-MEDIA:TYPE=AUDIO track if selected) or direct MP4 file
+   * with 6x parallel segment fetching and True Checkpoint Resume.
    */
   public static async downloadStream(
     storageKey: string,
     streamUrl: string,
     quality: string,
-    onProgress: (info: HlsDownloadProgress) => void
+    onProgress: (info: HlsDownloadProgress) => void,
+    language: string = 'Hindi'
   ): Promise<{ totalBytes: number }> {
     this.abortDownload(storageKey);
     const controller = new AbortController();
@@ -367,29 +682,59 @@ export class ClientHlsDownloader {
         return { totalBytes: downloadedBytes };
       }
 
-      // HLS Stream Download Flow
-      const mediaPlaylistUrl = await this.resolveMediaPlaylist(cleanUrl, quality, signal);
-      const { segments, totalDurationSec } = await this.parseSegments(mediaPlaylistUrl, signal);
+      // HLS Stream Download Flow (Video Variant + Optional Separate Audio Rendition)
+      const { videoPlaylistUrl, audioPlaylistUrl, matchedAudioLabel } =
+        await this.resolveMediaPlaylist(cleanUrl, quality, language, signal);
 
-      if (segments.length === 0) {
+      const { segments: videoSegments, totalDurationSec } = await this.parseSegments(
+        videoPlaylistUrl,
+        signal
+      );
+
+      if (videoSegments.length === 0) {
         throw new Error('No video segments found in HLS playlist');
       }
 
-      const totalSegments = segments.length;
+      let audioSegments: string[] = [];
+      const canStoreSeparateAudio =
+        !useNativeDisk || NativeBridgeService.supportsNativeAudioVault();
+
+      if (audioPlaylistUrl && audioPlaylistUrl !== videoPlaylistUrl && canStoreSeparateAudio) {
+        try {
+          const parsedAudio = await this.parseSegments(audioPlaylistUrl, signal);
+          if (parsedAudio.segments.length > 0) {
+            audioSegments = parsedAudio.segments;
+          }
+        } catch (audioErr) {
+          console.warn('[ClientHlsDownloader] Separate audio playlist fetch fallback:', audioErr);
+        }
+      }
+
+      const totalVideoSegments = videoSegments.length;
+      const totalAudioSegments = audioSegments.length;
+      const totalSegments = totalVideoSegments + totalAudioSegments;
+
       let completedSegments = 0;
       let sessionDownloadedBytes = 0;
 
-      // Check existing checkpoint on Native Disk or IndexedDB for True Resume
-      const alreadyDoneSet = new Set<number>();
+      // Check existing checkpoint on Native Disk for True Resume
+      const alreadyDoneVideoSet = new Set<number>();
+      const alreadyDoneAudioSet = new Set<number>();
+
       if (useNativeDisk) {
         const checkpoint = NativeBridgeService.getOfflineCheckpointInfoNative(storageKey);
-        if (checkpoint && checkpoint.exists && checkpoint.completedIndices.length > 0) {
+        if (checkpoint && checkpoint.exists) {
           checkpoint.completedIndices.forEach((idx) => {
-            if (idx >= 0 && idx < totalSegments) {
-              alreadyDoneSet.add(idx);
+            if (idx >= 0 && idx < totalVideoSegments) {
+              alreadyDoneVideoSet.add(idx);
             }
           });
-          completedSegments = alreadyDoneSet.size;
+          checkpoint.completedAudioIndices.forEach((idx) => {
+            if (idx >= 0 && idx < totalAudioSegments) {
+              alreadyDoneAudioSet.add(idx);
+            }
+          });
+          completedSegments = alreadyDoneVideoSet.size + alreadyDoneAudioSet.size;
           downloadedBytes = checkpoint.totalBytes || 0;
         }
       }
@@ -408,21 +753,37 @@ export class ClientHlsDownloader {
         });
       }
 
+      // Build unified task items list: video segments first, or interleaved with audio segments
+      interface SegmentJob {
+        isAudio: boolean;
+        segIndex: number;
+        url: string;
+      }
+      const jobs: SegmentJob[] = [];
+      for (let i = 0; i < totalVideoSegments; i++) {
+        jobs.push({ isAudio: false, segIndex: i, url: videoSegments[i] });
+      }
+      for (let i = 0; i < totalAudioSegments; i++) {
+        jobs.push({ isAudio: true, segIndex: i, url: audioSegments[i] });
+      }
+
       // 6x parallel segment workers (optimal throughput without overwhelming mobile sockets)
       const CONCURRENCY = useNativeDisk ? 6 : 5;
-      let nextIndex = 0;
+      let nextJobIdx = 0;
 
       const worker = async () => {
-        while (nextIndex < totalSegments) {
+        while (nextJobIdx < jobs.length) {
           if (signal.aborted) throw new Error('Download aborted');
-          const currentIndex = nextIndex++;
+          const job = jobs[nextJobIdx++];
 
           // Skip already checkpointed segments in 0ms!
-          if (alreadyDoneSet.has(currentIndex)) {
+          if (!job.isAudio && alreadyDoneVideoSet.has(job.segIndex)) {
+            continue;
+          }
+          if (job.isAudio && alreadyDoneAudioSet.has(job.segIndex)) {
             continue;
           }
 
-          const segUrl = segments[currentIndex];
           let segBytes = 0;
           let success = false;
 
@@ -432,8 +793,10 @@ export class ClientHlsDownloader {
               if (useNativeDisk) {
                 const diskRes = await NativeBridgeService.downloadSegmentToDiskNative(
                   storageKey,
-                  currentIndex,
-                  unwrapProxyUrl(segUrl)
+                  job.segIndex,
+                  unwrapProxyUrl(job.url),
+                  '',
+                  job.isAudio
                 );
                 if (diskRes.ok && (diskRes.bytes || 0) > 0) {
                   segBytes = diskRes.bytes || 0;
@@ -444,11 +807,14 @@ export class ClientHlsDownloader {
                   break;
                 }
               } else {
-                const resp = await fetch(wrapProxyUrl(segUrl), { signal });
+                const resp = await fetch(wrapProxyUrl(job.url), { signal });
                 if (!resp.ok) throw new Error(`Segment HTTP ${resp.status}`);
                 const buf = await resp.arrayBuffer();
                 if (buf && buf.byteLength > 0) {
-                  await putChunk(`${storageKey}_chunk_${currentIndex}`, buf);
+                  const chunkKey = job.isAudio
+                    ? `${storageKey}_aud_chunk_${job.segIndex}`
+                    : `${storageKey}_chunk_${job.segIndex}`;
+                  await putChunk(chunkKey, buf);
                   segBytes = buf.byteLength;
                   sessionDownloadedBytes += segBytes;
                   success = true;
@@ -463,7 +829,9 @@ export class ClientHlsDownloader {
           }
 
           if (!success) {
-            throw new Error(`Segment ${currentIndex} failed after retries`);
+            throw new Error(
+              `${job.isAudio ? 'Audio' : 'Video'} segment ${job.segIndex} failed after retries`
+            );
           }
 
           downloadedBytes += segBytes;
@@ -487,7 +855,7 @@ export class ClientHlsDownloader {
       };
 
       const workers = Array.from(
-        { length: Math.min(CONCURRENCY, totalSegments) },
+        { length: Math.min(CONCURRENCY, jobs.length) },
         () => worker()
       );
       await Promise.all(workers);
@@ -495,12 +863,15 @@ export class ClientHlsDownloader {
       if (useNativeDisk) {
         NativeBridgeService.saveOfflineManifestNative(
           storageKey,
-          totalSegments,
+          totalVideoSegments,
           totalDurationSec,
-          false
+          false,
+          totalAudioSegments,
+          matchedAudioLabel || language
         );
       } else {
-        await putChunk(`${storageKey}_totalChunks`, totalSegments);
+        await putChunk(`${storageKey}_totalChunks`, totalVideoSegments);
+        await putChunk(`${storageKey}_totalAudioChunks`, totalAudioSegments);
         await putChunk(`${storageKey}_durationSec`, totalDurationSec);
       }
 
@@ -522,7 +893,7 @@ export class ClientHlsDownloader {
   /**
    * Returns a playable Offline URL for a downloaded item:
    * - In Kotlin APK: Returns `https://maxplay.local/offline-vault/{safeKey}/index.m3u8` (0 MB RAM!).
-   * - In Web Browser: Builds an in-memory HLS `.m3u8` Blob playlist over IndexedDB segment blobs.
+   * - In Web Browser: Builds an in-memory HLS `.m3u8` Blob playlist (including separate audio track if present) over IndexedDB segment blobs.
    */
   public static async getOfflineBlobUrl(storageKey: string): Promise<string | null> {
     try {
@@ -559,13 +930,14 @@ export class ClientHlsDownloader {
         return url;
       }
 
-      // Multi-segment HLS stream in Browser IndexedDB: create segment blob URLs + local .m3u8 playlist blob
+      // Multi-segment HLS stream in Browser IndexedDB
       const totalDurationSec = (await getChunk<number>(`${storageKey}_durationSec`)) || totalChunks * 4;
+      const totalAudioChunks = (await getChunk<number>(`${storageKey}_totalAudioChunks`)) || 0;
       const avgDur = Math.max(1.5, Math.min(12, totalDurationSec / totalChunks));
       const targetDur = Math.ceil(avgDur + 2);
       const createdUrls: string[] = [];
 
-      const m3u8Lines: string[] = [
+      const videoM3u8Lines: string[] = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
         `#EXT-X-TARGETDURATION:${targetDur}`,
@@ -579,22 +951,70 @@ export class ClientHlsDownloader {
           const segBlob = new Blob([chunk], { type: 'video/mp2t' });
           const segUrl = URL.createObjectURL(segBlob);
           createdUrls.push(segUrl);
-          m3u8Lines.push(`#EXTINF:${avgDur.toFixed(3)},`);
-          m3u8Lines.push(segUrl);
+          videoM3u8Lines.push(`#EXTINF:${avgDur.toFixed(3)},`);
+          videoM3u8Lines.push(segUrl);
         }
       }
 
       if (createdUrls.length === 0) return null;
-      m3u8Lines.push('#EXT-X-ENDLIST');
+      videoM3u8Lines.push('#EXT-X-ENDLIST');
 
-      const playlistBlob = new Blob([m3u8Lines.join('\n')], {
+      const videoPlaylistBlob = new Blob([videoM3u8Lines.join('\n')], {
         type: 'application/vnd.apple.mpegurl',
       });
-      const playlistUrl = URL.createObjectURL(playlistBlob);
-      createdUrls.push(playlistUrl);
-      this.activeBlobUrls.set(storageKey, createdUrls);
+      const videoPlaylistUrl = URL.createObjectURL(videoPlaylistBlob);
+      createdUrls.push(videoPlaylistUrl);
 
-      return playlistUrl;
+      // If separate audio rendition chunks exist, build audio playlist blob + Master playlist blob
+      if (totalAudioChunks > 0) {
+        const avgAudDur = Math.max(1.5, Math.min(12, totalDurationSec / totalAudioChunks));
+        const audTargetDur = Math.ceil(avgAudDur + 2);
+        const audioM3u8Lines: string[] = [
+          '#EXTM3U',
+          '#EXT-X-VERSION:3',
+          `#EXT-X-TARGETDURATION:${audTargetDur}`,
+          '#EXT-X-MEDIA-SEQUENCE:0',
+          '#EXT-X-PLAYLIST-TYPE:VOD',
+        ];
+        let addedAudio = 0;
+        for (let i = 0; i < totalAudioChunks; i++) {
+          const audChunk = await getChunk<ArrayBuffer>(`${storageKey}_aud_chunk_${i}`);
+          if (audChunk) {
+            const audBlob = new Blob([audChunk], { type: 'video/mp2t' });
+            const audUrl = URL.createObjectURL(audBlob);
+            createdUrls.push(audUrl);
+            audioM3u8Lines.push(`#EXTINF:${avgAudDur.toFixed(3)},`);
+            audioM3u8Lines.push(audUrl);
+            addedAudio++;
+          }
+        }
+        if (addedAudio > 0) {
+          audioM3u8Lines.push('#EXT-X-ENDLIST');
+          const audioPlaylistBlob = new Blob([audioM3u8Lines.join('\n')], {
+            type: 'application/vnd.apple.mpegurl',
+          });
+          const audioPlaylistUrl = URL.createObjectURL(audioPlaylistBlob);
+          createdUrls.push(audioPlaylistUrl);
+
+          const masterLines = [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="offline_audio",NAME="Selected Audio",DEFAULT=YES,AUTOSELECT=YES,URI="${audioPlaylistUrl}"`,
+            '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="offline_audio"',
+            videoPlaylistUrl,
+          ];
+          const masterBlob = new Blob([masterLines.join('\n')], {
+            type: 'application/vnd.apple.mpegurl',
+          });
+          const masterUrl = URL.createObjectURL(masterBlob);
+          createdUrls.push(masterUrl);
+          this.activeBlobUrls.set(storageKey, createdUrls);
+          return masterUrl;
+        }
+      }
+
+      this.activeBlobUrls.set(storageKey, createdUrls);
+      return videoPlaylistUrl;
     } catch (e) {
       console.error('[ClientHlsDownloader] Failed to assemble offline stream:', e);
       return null;
