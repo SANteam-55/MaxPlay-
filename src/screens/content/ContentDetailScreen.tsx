@@ -663,17 +663,25 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   // Auto-detect and switch to Server 2 if Server 1 is not provided/empty
   useEffect(() => {
     if (!content) return;
+    const ep0 = content.episodesList?.[0] || content.seasonsData?.[0]?.episodes?.[0];
     const hasS1 = Boolean(
       content.videoUrl ||
       (content.qualityLinks && Object.keys(content.qualityLinks).length > 0) ||
       (content.videoSources && Object.keys(content.videoSources).length > 0) ||
+      ep0?.videoUrl ||
+      (ep0?.qualityLinks && Object.keys(ep0.qualityLinks).length > 0) ||
       (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'string' ? Boolean(p) : Boolean(p?.videoUrl || (p?.videoSources && Object.keys(p.videoSources).length > 0) || (p?.qualityLinks && Object.keys(p.qualityLinks).length > 0))))
     );
     const hasS2 = Boolean(
       content.secondaryVideoUrl ||
+      (content as any).secondaryServerUrl ||
       (content as any).secondaryUrl ||
       (content.secondaryQualityLinks && Object.keys(content.secondaryQualityLinks).length > 0) ||
-      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryUrl)))
+      ((content as any).secondaryServerQualityLinks && Object.keys((content as any).secondaryServerQualityLinks).length > 0) ||
+      (ep0 as any)?.secondaryServerUrl ||
+      (ep0 as any)?.secondaryVideoUrl ||
+      ((ep0 as any)?.secondaryServerQualityLinks && Object.keys((ep0 as any).secondaryServerQualityLinks).length > 0) ||
+      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryServerUrl || p?.secondaryUrl)))
     );
     if (!hasS1 && hasS2) {
       setSelectedServer('server2');
@@ -1074,59 +1082,92 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
       if (selectedPartIndex === 0) {
         // Part 1 (Main)
+        const epQualityObj =
+          (currentEp.qualityLinks && typeof currentEp.qualityLinks === 'object' && Object.keys(currentEp.qualityLinks).length > 0)
+            ? currentEp.qualityLinks
+            : (content.qualityLinks && typeof content.qualityLinks === 'object' && Object.keys(content.qualityLinks).length > 0)
+            ? content.qualityLinks
+            : {};
+
         if (currentEp.videoSources && typeof currentEp.videoSources === 'object' && Object.keys(currentEp.videoSources).length > 0) {
           playerVideoSources = currentEp.videoSources;
           const targetLang = (activeLanguage && currentEp.videoSources[activeLanguage]) ? activeLanguage : Object.keys(currentEp.videoSources)[0];
-          if (targetLang && currentEp.videoSources[targetLang]) {
-            playerQualityLinks = currentEp.videoSources[targetLang];
-            playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-              ? playerQualityLinks[activeQuality]
-              : (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '');
+          const langEntry = targetLang ? currentEp.videoSources[targetLang] : undefined;
+          if (langEntry && typeof langEntry === 'object') {
+            playerQualityLinks = { ...epQualityObj, ...langEntry };
+          } else {
+            playerQualityLinks = { ...epQualityObj };
           }
-        } else if (content.videoSources && Object.keys(content.videoSources).length > 0) {
+          const smartInit = SmartStreamService.selectSourceUrlForQuality(
+            typeof langEntry === 'string' ? langEntry : (currentEp.videoUrl || content.videoUrl || ''),
+            playerQualityLinks,
+            activeQuality
+          );
+          playerVideoUrl = smartInit.chosenUrl;
+        } else if (content.videoSources && typeof content.videoSources === 'object' && Object.keys(content.videoSources).length > 0) {
           playerVideoSources = content.videoSources;
           const targetLang = (activeLanguage && content.videoSources[activeLanguage]) ? activeLanguage : Object.keys(content.videoSources)[0];
-          if (targetLang && content.videoSources[targetLang]) {
-            playerQualityLinks = content.videoSources[targetLang];
-            playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-              ? playerQualityLinks[activeQuality]
-              : (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '');
+          const langEntry = targetLang ? content.videoSources[targetLang] : undefined;
+          if (langEntry && typeof langEntry === 'object') {
+            playerQualityLinks = { ...epQualityObj, ...langEntry };
+          } else {
+            playerQualityLinks = { ...epQualityObj };
           }
+          const smartInit = SmartStreamService.selectSourceUrlForQuality(
+            typeof langEntry === 'string' ? langEntry : (currentEp.videoUrl || content.videoUrl || ''),
+            playerQualityLinks,
+            activeQuality
+          );
+          playerVideoUrl = smartInit.chosenUrl;
         } else {
-          if (currentEp.qualityLinks && typeof currentEp.qualityLinks === 'object') {
-            playerQualityLinks = currentEp.qualityLinks;
-          }
-          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-            ? playerQualityLinks[activeQuality]
-            : (currentEp.videoUrl || (playerQualityLinks ? (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '') : ''));
+          playerQualityLinks = { ...epQualityObj };
+          const smartInit = SmartStreamService.selectSourceUrlForQuality(
+            currentEp.videoUrl || content.videoUrl || '',
+            playerQualityLinks,
+            activeQuality
+          );
+          playerVideoUrl = smartInit.chosenUrl;
         }
         if (currentEp.chunks) playerChunks = currentEp.chunks;
       } else if (selectedPartIndex > 0 && epExtraParts[selectedPartIndex - 1]) {
         // Extra Part (Part 2, Part 3...) - Fully independent quality and language system!
         const extraPartObj = epExtraParts[selectedPartIndex - 1];
         playerTitle = `${playerTitle} (Part ${selectedPartIndex + 1})`;
+        const partQualityObj =
+          (typeof extraPartObj === 'object' && extraPartObj?.qualityLinks && typeof extraPartObj.qualityLinks === 'object')
+            ? extraPartObj.qualityLinks
+            : {};
 
         if (typeof extraPartObj === 'object' && extraPartObj.videoSources && Object.keys(extraPartObj.videoSources).length > 0) {
           playerVideoSources = extraPartObj.videoSources;
           const targetLang = (activeLanguage && extraPartObj.videoSources[activeLanguage]) ? activeLanguage : Object.keys(extraPartObj.videoSources)[0];
-          if (targetLang && extraPartObj.videoSources[targetLang]) {
-            playerQualityLinks = extraPartObj.videoSources[targetLang];
-            playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-              ? playerQualityLinks[activeQuality]
-              : (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '');
+          const langEntry = targetLang ? extraPartObj.videoSources[targetLang] : undefined;
+          if (langEntry && typeof langEntry === 'object') {
+            playerQualityLinks = { ...partQualityObj, ...langEntry };
+          } else {
+            playerQualityLinks = { ...partQualityObj };
           }
-        } else if (typeof extraPartObj === 'object' && extraPartObj.qualityLinks && Object.keys(extraPartObj.qualityLinks).length > 0) {
-          playerQualityLinks = extraPartObj.qualityLinks;
-          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-            ? playerQualityLinks[activeQuality]
-            : (extraPartObj.videoUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
+          const smartPart = SmartStreamService.selectSourceUrlForQuality(
+            typeof langEntry === 'string' ? langEntry : (extraPartObj.videoUrl || ''),
+            playerQualityLinks,
+            activeQuality
+          );
+          playerVideoUrl = smartPart.chosenUrl;
+        } else if (typeof extraPartObj === 'object' && Object.keys(partQualityObj).length > 0) {
+          playerQualityLinks = { ...partQualityObj };
+          const smartPart = SmartStreamService.selectSourceUrlForQuality(
+            extraPartObj.videoUrl || '',
+            playerQualityLinks,
+            activeQuality
+          );
+          playerVideoUrl = smartPart.chosenUrl;
           playerVideoSources = {};
         } else if (typeof extraPartObj === 'object' && extraPartObj.videoUrl) {
-          playerVideoUrl = extraPartObj.videoUrl;
+          playerVideoUrl = SmartStreamService.sanitizeStreamUrl(extraPartObj.videoUrl);
           playerVideoSources = {};
           playerQualityLinks = {};
         } else if (typeof extraPartObj === 'string') {
-          playerVideoUrl = extraPartObj;
+          playerVideoUrl = SmartStreamService.sanitizeStreamUrl(extraPartObj);
           playerVideoSources = {};
           playerQualityLinks = {};
         }
@@ -1159,6 +1200,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) ||
                 p.videoUrl ||
                 p.secondaryVideoUrl ||
+                p.secondaryServerUrl ||
                 p.secondaryUrl
               )
         )
@@ -1167,11 +1209,23 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         moviePartsList = validLinks;
         movieTotalParts = moviePartsList.length;
       } else {
-        moviePartsList = [{ videoSources: content.videoSources, qualityLinks: content.qualityLinks, videoUrl: content.videoUrl, secondaryVideoUrl: content.secondaryVideoUrl }];
+        moviePartsList = [{
+          videoSources: content.videoSources,
+          qualityLinks: content.qualityLinks,
+          videoUrl: content.videoUrl,
+          secondaryVideoUrl: content.secondaryVideoUrl || (content as any).secondaryServerUrl,
+          secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks
+        }];
         movieTotalParts = 1;
       }
     } else {
-      moviePartsList = [{ videoSources: content.videoSources, qualityLinks: content.qualityLinks, videoUrl: content.videoUrl, secondaryVideoUrl: content.secondaryVideoUrl }];
+      moviePartsList = [{
+        videoSources: content.videoSources,
+        qualityLinks: content.qualityLinks,
+        videoUrl: content.videoUrl,
+        secondaryVideoUrl: content.secondaryVideoUrl || (content as any).secondaryServerUrl,
+        secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks
+      }];
       movieTotalParts = 1;
     }
 
@@ -1179,39 +1233,64 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     playerTitle = selectedPartIndex > 0 ? `${content.title} (Part ${selectedPartIndex + 1})` : content.title;
 
     if (activeMoviePart) {
+      const movieQualityObj =
+        (typeof activeMoviePart === 'object' && activeMoviePart?.qualityLinks && typeof activeMoviePart.qualityLinks === 'object' && Object.keys(activeMoviePart.qualityLinks).length > 0)
+          ? activeMoviePart.qualityLinks
+          : (content.qualityLinks && typeof content.qualityLinks === 'object' && Object.keys(content.qualityLinks).length > 0)
+          ? content.qualityLinks
+          : {};
+
       if (typeof activeMoviePart === 'object' && activeMoviePart.videoSources && Object.keys(activeMoviePart.videoSources).length > 0) {
         playerVideoSources = activeMoviePart.videoSources;
         const targetLang = (activeLanguage && activeMoviePart.videoSources[activeLanguage]) ? activeLanguage : Object.keys(activeMoviePart.videoSources)[0];
-        if (targetLang && activeMoviePart.videoSources[targetLang]) {
-          playerQualityLinks = activeMoviePart.videoSources[targetLang];
-          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-            ? playerQualityLinks[activeQuality]
-            : (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '');
+        const langEntry = targetLang ? activeMoviePart.videoSources[targetLang] : undefined;
+        if (langEntry && typeof langEntry === 'object') {
+          playerQualityLinks = { ...movieQualityObj, ...langEntry };
+        } else {
+          playerQualityLinks = { ...movieQualityObj };
         }
-      } else if (typeof activeMoviePart === 'object' && activeMoviePart.qualityLinks && Object.keys(activeMoviePart.qualityLinks).length > 0) {
-        playerQualityLinks = activeMoviePart.qualityLinks;
-        playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-          ? playerQualityLinks[activeQuality]
-          : (activeMoviePart.videoUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
+        const smartMovie = SmartStreamService.selectSourceUrlForQuality(
+          typeof langEntry === 'string' ? langEntry : (activeMoviePart.videoUrl || content.videoUrl || ''),
+          playerQualityLinks,
+          activeQuality
+        );
+        playerVideoUrl = smartMovie.chosenUrl;
+      } else if (typeof activeMoviePart === 'object' && Object.keys(movieQualityObj).length > 0) {
+        playerQualityLinks = { ...movieQualityObj };
+        const smartMovie = SmartStreamService.selectSourceUrlForQuality(
+          activeMoviePart.videoUrl || content.videoUrl || '',
+          playerQualityLinks,
+          activeQuality
+        );
+        playerVideoUrl = smartMovie.chosenUrl;
         playerVideoSources = {};
       } else if (typeof activeMoviePart === 'string') {
-        playerVideoUrl = activeMoviePart;
+        playerVideoUrl = SmartStreamService.sanitizeStreamUrl(activeMoviePart);
         playerVideoSources = {};
         playerQualityLinks = {};
       } else if (content.videoSources && Object.keys(content.videoSources).length > 0) {
         playerVideoSources = content.videoSources;
         const targetLang = (activeLanguage && content.videoSources[activeLanguage]) ? activeLanguage : Object.keys(content.videoSources)[0];
-        if (targetLang && content.videoSources[targetLang]) {
-          playerQualityLinks = content.videoSources[targetLang];
-          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-            ? playerQualityLinks[activeQuality]
-            : (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || '');
+        const langEntry = targetLang ? content.videoSources[targetLang] : undefined;
+        if (langEntry && typeof langEntry === 'object') {
+          playerQualityLinks = { ...movieQualityObj, ...langEntry };
+        } else {
+          playerQualityLinks = { ...movieQualityObj };
         }
+        const smartMovie = SmartStreamService.selectSourceUrlForQuality(
+          typeof langEntry === 'string' ? langEntry : (content.videoUrl || ''),
+          playerQualityLinks,
+          activeQuality
+        );
+        playerVideoUrl = smartMovie.chosenUrl;
       } else {
-        playerQualityLinks = content.qualityLinks || {};
-        playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-          ? playerQualityLinks[activeQuality]
-          : (content.videoUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
+        playerQualityLinks = { ...movieQualityObj };
+        const smartMovie = SmartStreamService.selectSourceUrlForQuality(
+          (typeof activeMoviePart === 'object' ? activeMoviePart?.videoUrl : '') || content.videoUrl || '',
+          playerQualityLinks,
+          activeQuality
+        );
+        playerVideoUrl = smartMovie.chosenUrl;
       }
     }
 
@@ -1221,7 +1300,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }
 
   // 3. DUAL-SERVER RESOLUTION (Server 1: Primary Voe.sx / HLS | Server 2: Secondary Filemoon / Byse)
-  let primaryServerUrl = playerVideoUrl || content.videoUrl || '';
+  let primaryServerUrl = SmartStreamService.sanitizeStreamUrl(playerVideoUrl || content.videoUrl || '');
   let secondaryServerUrl = '';
   let secondaryServerQualityLinks: Record<string, string> = {};
 
@@ -1229,50 +1308,104 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     const epExtraParts = Array.isArray(currentEpisode.videoLinks) ? currentEpisode.videoLinks : [];
     if (selectedPartIndex > 0 && epExtraParts[selectedPartIndex - 1] && typeof epExtraParts[selectedPartIndex - 1] === 'object') {
       const extraPartObj = epExtraParts[selectedPartIndex - 1];
-      secondaryServerUrl = extraPartObj.secondaryVideoUrl || extraPartObj.secondaryUrl || '';
-      secondaryServerQualityLinks = extraPartObj.secondaryQualityLinks || {};
+      secondaryServerUrl = SmartStreamService.sanitizeStreamUrl(
+        extraPartObj.secondaryServerUrl || extraPartObj.secondaryVideoUrl || extraPartObj.secondaryUrl || ''
+      );
+      secondaryServerQualityLinks =
+        extraPartObj.secondaryServerQualityLinks ||
+        extraPartObj.secondaryQualityLinks ||
+        {};
     } else {
-      secondaryServerUrl = currentEpisode.secondaryVideoUrl || (currentEpisode as any).secondaryUrl || content.secondaryVideoUrl || (content as any).secondaryUrl || '';
-      secondaryServerQualityLinks = currentEpisode.secondaryQualityLinks || content.secondaryQualityLinks || {};
+      const rawSecLinks =
+        (currentEpisode.secondaryServerQualityLinks && Object.keys(currentEpisode.secondaryServerQualityLinks).length > 0)
+          ? currentEpisode.secondaryServerQualityLinks
+          : (currentEpisode.secondaryQualityLinks && Object.keys(currentEpisode.secondaryQualityLinks).length > 0)
+          ? currentEpisode.secondaryQualityLinks
+          : ((content as any).secondaryServerQualityLinks && Object.keys((content as any).secondaryServerQualityLinks).length > 0)
+          ? (content as any).secondaryServerQualityLinks
+          : (content.secondaryQualityLinks || {});
+      secondaryServerQualityLinks = rawSecLinks;
+      secondaryServerUrl = SmartStreamService.sanitizeStreamUrl(
+        (currentEpisode as any).secondaryServerUrl ||
+        currentEpisode.secondaryVideoUrl ||
+        (currentEpisode as any).secondaryUrl ||
+        (content as any).secondaryServerUrl ||
+        content.secondaryVideoUrl ||
+        (content as any).secondaryUrl ||
+        Object.values(rawSecLinks)[0] ||
+        ''
+      );
     }
   } else {
     if (activeMoviePart && typeof activeMoviePart === 'object') {
-      secondaryServerUrl = activeMoviePart.secondaryVideoUrl || activeMoviePart.secondaryUrl || content.secondaryVideoUrl || (content as any).secondaryUrl || '';
-      secondaryServerQualityLinks = (activeMoviePart.secondaryQualityLinks && Object.keys(activeMoviePart.secondaryQualityLinks).length > 0)
-        ? activeMoviePart.secondaryQualityLinks
-        : (content.secondaryQualityLinks || {});
+      const rawSecLinks =
+        (activeMoviePart.secondaryServerQualityLinks && Object.keys(activeMoviePart.secondaryServerQualityLinks).length > 0)
+          ? activeMoviePart.secondaryServerQualityLinks
+          : (activeMoviePart.secondaryQualityLinks && Object.keys(activeMoviePart.secondaryQualityLinks).length > 0)
+          ? activeMoviePart.secondaryQualityLinks
+          : ((content as any).secondaryServerQualityLinks && Object.keys((content as any).secondaryServerQualityLinks).length > 0)
+          ? (content as any).secondaryServerQualityLinks
+          : (content.secondaryQualityLinks || {});
+      secondaryServerQualityLinks = rawSecLinks;
+      secondaryServerUrl = SmartStreamService.sanitizeStreamUrl(
+        activeMoviePart.secondaryServerUrl ||
+        activeMoviePart.secondaryVideoUrl ||
+        activeMoviePart.secondaryUrl ||
+        (content as any).secondaryServerUrl ||
+        content.secondaryVideoUrl ||
+        (content as any).secondaryUrl ||
+        Object.values(rawSecLinks)[0] ||
+        ''
+      );
     } else {
-      secondaryServerUrl = content.secondaryVideoUrl || (content as any).secondaryUrl || '';
-      secondaryServerQualityLinks = content.secondaryQualityLinks || {};
+      const rawSecLinks =
+        ((content as any).secondaryServerQualityLinks && Object.keys((content as any).secondaryServerQualityLinks).length > 0)
+          ? (content as any).secondaryServerQualityLinks
+          : (content.secondaryQualityLinks || {});
+      secondaryServerQualityLinks = rawSecLinks;
+      secondaryServerUrl = SmartStreamService.sanitizeStreamUrl(
+        (content as any).secondaryServerUrl ||
+        content.secondaryVideoUrl ||
+        (content as any).secondaryUrl ||
+        Object.values(rawSecLinks)[0] ||
+        ''
+      );
     }
   }
 
   if (!offlineVideoUrl) {
     if (selectedServer === 'server2') {
       if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
-        playerQualityLinks = secondaryServerQualityLinks;
         const smartS2 = SmartStreamService.selectSourceUrlForQuality(
           secondaryServerUrl,
           secondaryServerQualityLinks,
           activeQuality
         );
-        playerVideoUrl = smartS2.url || secondaryServerUrl;
+        playerQualityLinks = smartS2.cleanQualityLinks;
+        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
         playerVideoSources = {};
       }
     } else if (selectedServer === 'server1') {
-      if (playerQualityLinks && Object.keys(playerQualityLinks).length > 0) {
+      if (playerQualityLinks && typeof playerQualityLinks === 'object' && Object.keys(playerQualityLinks).length > 0) {
         const smartS1 = SmartStreamService.selectSourceUrlForQuality(
           playerVideoUrl,
           playerQualityLinks,
           activeQuality
         );
-        if (smartS1.url) {
-          playerVideoUrl = smartS1.url;
+        playerQualityLinks = smartS1.cleanQualityLinks;
+        if (smartS1.chosenUrl) {
+          playerVideoUrl = smartS1.chosenUrl;
+          primaryServerUrl = smartS1.chosenUrl;
         }
-      } else if (!playerVideoUrl && secondaryServerUrl) {
+      } else if (!playerVideoUrl && (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0)) {
         // Automatic fallback if only Server 2 link was filled
-        playerQualityLinks = secondaryServerQualityLinks;
-        playerVideoUrl = secondaryServerUrl;
+        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+          secondaryServerUrl,
+          secondaryServerQualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS2.cleanQualityLinks;
+        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
       }
     }
   }
@@ -1292,7 +1425,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }, [primaryServerUrl, secondaryServerUrl]);
 
-  // Derive available languages dynamically for the current part (Merges live discovered HLS audio tracks + configured languages)
+  // Derive available languages dynamically for the current part (Merges live discovered HLS audio tracks + configured languages across BOTH servers)
   const availableLanguages = useMemo(() => {
     const merged: string[] = [];
     const addUnique = (lang?: string) => {
@@ -1318,13 +1451,22 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
 
-    // 3. Explicit multi-language videoSources
+    // 3. Explicit multi-language videoSources (Check episode, movie part, and content level so Server 2 NEVER loses the Audio Selector box!)
     if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
       Object.keys(playerVideoSources).forEach(addUnique);
     }
+    if (currentEpisode?.videoSources && typeof currentEpisode.videoSources === 'object') {
+      Object.keys(currentEpisode.videoSources).forEach(addUnique);
+    }
+    if (activeMoviePart && typeof activeMoviePart === 'object' && activeMoviePart.videoSources && typeof activeMoviePart.videoSources === 'object') {
+      Object.keys(activeMoviePart.videoSources).forEach(addUnique);
+    }
+    if (content.videoSources && typeof content.videoSources === 'object') {
+      Object.keys(content.videoSources).forEach(addUnique);
+    }
 
     // 4. Episode / Movie / Content configured languages
-    const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks;
+    const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks || (currentEpisode as any)?.audioLanguages;
     if (Array.isArray(partLangs) && partLangs.length > 0) {
       partLangs.forEach((l: any) => addUnique(typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)));
     }
@@ -1338,7 +1480,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       (content as any).audioLanguages.forEach(addUnique);
     }
     return merged;
-  }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
+  }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.videoSources, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {

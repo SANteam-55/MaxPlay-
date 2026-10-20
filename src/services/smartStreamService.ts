@@ -170,11 +170,54 @@ export class SmartStreamService {
   }
 
   /**
+   * Sanitizes a raw stream URL, stripping accidental labels like " 1080p" or "1080p: "
+   * while preserving valid URLs, blob:, filesystem:, and relative API paths.
+   */
+  public static sanitizeStreamUrl(rawUrl?: string | null): string {
+    if (!rawUrl || typeof rawUrl !== "string") return "";
+    const trimmed = rawUrl.trim();
+    if (!trimmed) return "";
+    if (
+      trimmed.startsWith("blob:") ||
+      trimmed.startsWith("filesystem:") ||
+      trimmed.startsWith("data:") ||
+      trimmed.startsWith("/")
+    ) {
+      return trimmed;
+    }
+    const httpMatch = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+    if (httpMatch && httpMatch[0]) {
+      return httpMatch[0].trim();
+    }
+    return trimmed.split(/\s+/)[0];
+  }
+
+  /**
+   * Generates a collision-free cache key for a source URL (including hash + tail of URL).
+   */
+  private static getCacheKey(sourceUrl: string): string {
+    const clean = this.sanitizeStreamUrl(sourceUrl) || sourceUrl.trim();
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < clean.length; i++) {
+      const c = clean.charCodeAt(i);
+      h1 ^= c;
+      h1 = Math.imul(h1, 0x01000193) >>> 0;
+      h2 ^= c;
+      h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+    }
+    const tail = clean.replace(/[^a-zA-Z0-9]/g, "").slice(-24);
+    return `${CACHE_PREFIX}v2_${h1.toString(36)}_${h2.toString(36)}_${tail}`;
+  }
+
+  /**
    * Retrieves client-side cached stream URL if still valid.
    */
   private static getClientCache(sourceUrl: string): ClientCachedStream | null {
     try {
-      const key = CACHE_PREFIX + btoa(encodeURIComponent(sourceUrl)).slice(0, 48);
+      const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+      if (!cleanUrl) return null;
+      const key = this.getCacheKey(cleanUrl);
       const raw = sessionStorage.getItem(key) || localStorage.getItem(key);
       if (!raw) return null;
 
@@ -187,7 +230,7 @@ export class SmartStreamService {
         data?.m3u8Url &&
         data.m3u8Url.includes("/proxy/m3u8")
       ) {
-        this.clearClientCache(sourceUrl);
+        this.clearClientCache(cleanUrl);
         return null;
       }
 
@@ -196,7 +239,7 @@ export class SmartStreamService {
         return data;
       }
       // Stale or expired
-      this.clearClientCache(sourceUrl);
+      this.clearClientCache(cleanUrl);
       return null;
     } catch {
       return null;
@@ -213,8 +256,10 @@ export class SmartStreamService {
     meta?: CachedStreamMetadata
   ): void {
     try {
-      const key = CACHE_PREFIX + btoa(encodeURIComponent(sourceUrl)).slice(0, 48);
-      const existing = this.getClientCache(sourceUrl);
+      const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+      if (!cleanUrl) return;
+      const key = this.getCacheKey(cleanUrl);
+      const existing = this.getClientCache(cleanUrl);
       const data: ClientCachedStream = {
         m3u8Url,
         expiresAt,
@@ -232,8 +277,9 @@ export class SmartStreamService {
    * Public synchronous lookup for already-resolved cached stream URL (0ms for Download Modal).
    */
   public static getCachedStreamUrl(sourceUrl: string): string | null {
-    if (!sourceUrl || !sourceUrl.trim()) return null;
-    const cached = this.getClientCache(sourceUrl.trim());
+    const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+    if (!cleanUrl) return null;
+    const cached = this.getClientCache(cleanUrl);
     return cached?.m3u8Url || null;
   }
 
@@ -241,8 +287,9 @@ export class SmartStreamService {
    * Public synchronous lookup for already-parsed stream metadata (qualities, audioTracks, downloadQualities).
    */
   public static getCachedStreamMeta(sourceUrl: string): CachedStreamMetadata | null {
-    if (!sourceUrl || !sourceUrl.trim()) return null;
-    const cached = this.getClientCache(sourceUrl.trim());
+    const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+    if (!cleanUrl) return null;
+    const cached = this.getClientCache(cleanUrl);
     return cached?.meta || null;
   }
 
@@ -250,12 +297,12 @@ export class SmartStreamService {
    * Updates cached stream metadata for a source URL (or direct m3u8 URL).
    */
   public static setCachedStreamMeta(sourceUrl: string, meta: CachedStreamMetadata): void {
-    if (!sourceUrl || !sourceUrl.trim()) return;
-    const trimmed = sourceUrl.trim();
-    const existing = this.getClientCache(trimmed);
-    const m3u8Url = existing?.m3u8Url || trimmed;
+    const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+    if (!cleanUrl) return;
+    const existing = this.getClientCache(cleanUrl);
+    const m3u8Url = existing?.m3u8Url || cleanUrl;
     const expiresAt = existing?.expiresAt || Date.now() + 170 * 60 * 1000;
-    this.setClientCache(trimmed, m3u8Url, expiresAt, {
+    this.setClientCache(cleanUrl, m3u8Url, expiresAt, {
       ...(existing?.meta || {}),
       ...meta,
     });
@@ -266,7 +313,9 @@ export class SmartStreamService {
    */
   public static clearClientCache(sourceUrl: string): void {
     try {
-      const key = CACHE_PREFIX + btoa(encodeURIComponent(sourceUrl)).slice(0, 48);
+      const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
+      if (!cleanUrl) return;
+      const key = this.getCacheKey(cleanUrl);
       sessionStorage.removeItem(key);
       localStorage.removeItem(key);
     } catch {
@@ -287,8 +336,8 @@ export class SmartStreamService {
    */
   public static prefetchStream(sourceUrl?: string): void {
     if (!sourceUrl || typeof sourceUrl !== "string") return;
-    const trimmed = sourceUrl.trim();
-    if (!this.isExtractableSource(trimmed)) return;
+    const trimmed = this.sanitizeStreamUrl(sourceUrl);
+    if (!trimmed || !this.isExtractableSource(trimmed)) return;
     if (this.getClientCache(trimmed) || this.inFlightMap.has(trimmed)) return;
     this.resolveStream(trimmed, { forceRefresh: false }).catch(() => {});
   }
@@ -308,11 +357,10 @@ export class SmartStreamService {
     isEmbed?: boolean;
     expiresAt?: number;
   }> {
-    if (!sourceUrl || !sourceUrl.trim()) {
+    const trimmed = this.sanitizeStreamUrl(sourceUrl);
+    if (!trimmed) {
       throw new Error("Missing video source URL");
     }
-
-    const trimmed = sourceUrl.trim();
 
     // Check if it's already a direct HLS master or MP4
     if (!this.isExtractableSource(trimmed)) {
@@ -580,22 +628,38 @@ export class SmartStreamService {
    * (`1080p`, `720p`, `480p`, `360p`) or a single default URL.
    */
   public static selectSourceUrlForQuality(
-    defaultUrl?: string,
-    qualityLinks?: Record<string, string>,
+    defaultUrlOrLinks?: string | Record<string, string>,
+    qualityLinksOrFallback?: Record<string, string> | string,
     requestedQuality?: string
   ): {
+    url: string;
+    quality: string;
     chosenUrl: string;
     chosenQuality: string;
     availableQualities: string[];
     cleanQualityLinks: Record<string, string>;
   } {
+    const defaultUrl =
+      typeof defaultUrlOrLinks === "string"
+        ? this.sanitizeStreamUrl(defaultUrlOrLinks)
+        : typeof qualityLinksOrFallback === "string"
+        ? this.sanitizeStreamUrl(qualityLinksOrFallback)
+        : "";
+    const qualityLinks =
+      defaultUrlOrLinks && typeof defaultUrlOrLinks === "object"
+        ? defaultUrlOrLinks
+        : qualityLinksOrFallback && typeof qualityLinksOrFallback === "object"
+        ? qualityLinksOrFallback
+        : undefined;
+
     const cleanLinks: Record<string, string> = {};
     if (qualityLinks && typeof qualityLinks === "object") {
       const order = ["1080p", "720p", "480p", "360p"];
       for (const k of Object.keys(qualityLinks)) {
         const val = qualityLinks[k];
         if (typeof val === "string" && val.trim().length > 0 && k.toLowerCase() !== "default") {
-          cleanLinks[k] = val.trim();
+          const sanitized = this.sanitizeStreamUrl(val);
+          if (sanitized) cleanLinks[k] = sanitized;
         }
       }
       // Sort keys in standard resolution order
@@ -608,14 +672,19 @@ export class SmartStreamService {
       for (const k of sortedKeys) {
         orderedLinks[k] = cleanLinks[k];
       }
+      Object.keys(cleanLinks).forEach((k) => delete cleanLinks[k]);
       Object.assign(cleanLinks, orderedLinks);
     }
 
     const availableQualities = Object.keys(cleanLinks);
     if (availableQualities.length === 0) {
+      const fallback = this.sanitizeStreamUrl(defaultUrl);
+      const q = requestedQuality || "auto";
       return {
-        chosenUrl: (defaultUrl || "").trim(),
-        chosenQuality: requestedQuality || "auto",
+        url: fallback,
+        quality: q,
+        chosenUrl: fallback,
+        chosenQuality: q,
         availableQualities: [],
         cleanQualityLinks: {},
       };
@@ -629,6 +698,8 @@ export class SmartStreamService {
       );
       if (exactKey && cleanLinks[exactKey]) {
         return {
+          url: cleanLinks[exactKey],
+          quality: exactKey,
           chosenUrl: cleanLinks[exactKey],
           chosenQuality: exactKey,
           availableQualities,
@@ -639,9 +710,14 @@ export class SmartStreamService {
 
     // Otherwise auto-select optimal quality for user's network & RAM
     const optimalQ = this.getOptimalInitialQuality(availableQualities);
-    const chosenUrl = cleanLinks[optimalQ] || cleanLinks[availableQualities[0]] || (defaultUrl || "").trim();
+    const chosenUrl =
+      cleanLinks[optimalQ] ||
+      cleanLinks[availableQualities[0]] ||
+      this.sanitizeStreamUrl(defaultUrl);
 
     return {
+      url: chosenUrl,
+      quality: optimalQ,
       chosenUrl,
       chosenQuality: optimalQ,
       availableQualities,

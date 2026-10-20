@@ -284,21 +284,34 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
           ? data.episodesList
           : (data.seasonsData && data.seasonsData.length > 0 ? data.seasonsData.flatMap((s: any) => s.episodes || []) : null),
         videoUrl: data.videoUrl || null,
+        secondaryVideoUrl: data.secondaryVideoUrl || data.secondaryServerUrl || data.secondaryUrl || undefined,
+        secondaryServerUrl: data.secondaryServerUrl || data.secondaryVideoUrl || data.secondaryUrl || undefined,
         videoLinks: data.videoLinks || null,
+        movieParts: data.movieParts || undefined,
         uploader: data.uploader || { name: 'MaxPlay Admin', verified: true },
         trending: data.trending || false,
         featured: data.featured || false,
         views: data.views || 0,
         availableLanguages: data.availableLanguages || (Array.isArray(data.languages) ? data.languages : undefined),
+        audioLanguages: data.audioLanguages || undefined,
+        audioTracks: data.audioTracks || undefined,
         videoSources: data.videoSources || undefined,
         qualityLinks: data.qualityLinks || undefined,
+        secondaryQualityLinks: data.secondaryQualityLinks || data.secondaryServerQualityLinks || undefined,
+        secondaryServerQualityLinks: data.secondaryServerQualityLinks || data.secondaryQualityLinks || undefined,
+        downloadQualities: data.downloadQualities || undefined,
+        secondaryDownloadQualities: data.secondaryDownloadQualities || undefined,
+        isSmartHls: data.isSmartHls || undefined,
+        skipMarkers: data.skipMarkers || undefined,
         chunks: data.chunks || undefined,
         language: data.language || undefined,
         languages: Array.isArray(data.languages) && data.languages.length > 0
           ? data.languages
           : (Array.isArray(data.availableLanguages) && data.availableLanguages.length > 0
               ? data.availableLanguages
-              : (data.language ? [data.language] : [])),
+              : (Array.isArray(data.audioLanguages) && data.audioLanguages.length > 0
+                  ? data.audioLanguages
+                  : (data.language ? [data.language] : []))),
         createdAt: data.createdAt || new Date().toISOString(),
         homeRows: data.homeRows || [],
         searchHotSection: data.searchHotSection || null,

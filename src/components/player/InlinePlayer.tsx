@@ -493,29 +493,35 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   // Derive available languages for current videoSources, dynamic HLS audio tracks, or passed content languages
   const availableLanguages = useMemo(() => {
     const list: string[] = [];
+    const addLang = (raw?: string) => {
+      if (!raw || typeof raw !== 'string') return;
+      const clean = raw.trim();
+      if (!clean || clean.toLowerCase() === 'default' || clean.toLowerCase() === 'default audio') return;
+      if (!list.some((existing) => existing.toLowerCase() === clean.toLowerCase())) {
+        list.push(clean);
+      }
+    };
 
     // 1. Dynamic HLS audio tracks from master playlist
     if (hlsAudioTracks.length > 0) {
-      hlsAudioTracks.forEach(t => {
-        if (t.name && !list.includes(t.name)) list.push(t.name);
-      });
+      hlsAudioTracks.forEach((t) => addLang(t.name));
     }
 
     // 2. Multi-language videoSources
     if (videoSources && typeof videoSources === 'object') {
-      const keys = Object.keys(videoSources).filter(k => videoSources[k] && Object.keys(videoSources[k]).length > 0);
-      keys.forEach(k => {
-        if (!list.includes(k)) list.push(k);
+      Object.keys(videoSources).forEach((k) => {
+        const val = videoSources[k];
+        if (typeof val === 'string' && val.trim().length > 0) {
+          addLang(k);
+        } else if (val && typeof val === 'object' && Object.keys(val).length > 0) {
+          addLang(k);
+        }
       });
     }
 
     // 3. Known content languages from props (e.g. ['Hindi', 'English', 'Japanese'])
     if (propAvailableLanguages && Array.isArray(propAvailableLanguages) && propAvailableLanguages.length > 0) {
-      propAvailableLanguages.forEach(l => {
-        if (l && !list.some(existing => existing.toLowerCase() === l.toLowerCase())) {
-          list.push(l);
-        }
-      });
+      propAvailableLanguages.forEach((l) => addLang(l));
     }
 
     return list;
@@ -545,34 +551,36 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   // Derive available qualities based on Admin multi-quality server links AND dynamic HLS levels
   const availableQualities = useMemo(() => {
     let links: Record<string, string> | null = null;
-    
+
     if (videoSources && typeof videoSources === 'object' && Object.keys(videoSources).length > 0) {
-      if (currentLanguage && videoSources[currentLanguage]) {
-        links = videoSources[currentLanguage];
-      } else if (availableLanguages.length > 0 && videoSources[availableLanguages[0]]) {
-        links = videoSources[availableLanguages[0]];
-      } else {
-        const firstKey = Object.keys(videoSources)[0];
-        if (firstKey && videoSources[firstKey]) {
-          links = videoSources[firstKey];
-        }
+      const langKey =
+        currentLanguage && videoSources[currentLanguage]
+          ? currentLanguage
+          : availableLanguages.length > 0 && videoSources[availableLanguages[0]]
+          ? availableLanguages[0]
+          : Object.keys(videoSources)[0];
+      const langVal = langKey ? videoSources[langKey] : null;
+      if (langVal && typeof langVal === 'object') {
+        links = { ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}), ...langVal };
       }
     }
-    
-    if (!links && qualityLinks && Object.keys(qualityLinks).length > 0) {
+
+    if (!links && qualityLinks && typeof qualityLinks === 'object' && Object.keys(qualityLinks).length > 0) {
       links = qualityLinks;
     }
 
     const combinedSet = new Set<string>();
     if (links && typeof links === 'object') {
       Object.keys(links).forEach((q) => {
-        if (links![q] && String(links![q]).trim().length > 0) {
+        if (q.toLowerCase() !== 'default' && links![q] && String(links![q]).trim().length > 0) {
           combinedSet.add(q);
         }
       });
     }
     if (hlsQualities.length > 0) {
-      hlsQualities.forEach((q) => combinedSet.add(q));
+      hlsQualities.forEach((q) => {
+        if (q.toLowerCase() !== 'auto') combinedSet.add(q);
+      });
     }
 
     if (combinedSet.size > 0) {
@@ -586,31 +594,34 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   // Pick the optimal video URL based on language, quality, and Smart Network/RAM detection
   const activeVideoUrl = useMemo(() => {
     let links: Record<string, string> | null = null;
-    
+    let langStringUrl = '';
+
     if (videoSources && typeof videoSources === 'object' && Object.keys(videoSources).length > 0) {
-      if (currentLanguage && videoSources[currentLanguage]) {
-        links = videoSources[currentLanguage];
-      } else if (availableLanguages.length > 0 && videoSources[availableLanguages[0]]) {
-        links = videoSources[availableLanguages[0]];
-      } else {
-        const firstKey = Object.keys(videoSources)[0];
-        if (firstKey && videoSources[firstKey]) {
-          links = videoSources[firstKey];
-        }
+      const langKey =
+        currentLanguage && videoSources[currentLanguage]
+          ? currentLanguage
+          : availableLanguages.length > 0 && videoSources[availableLanguages[0]]
+          ? availableLanguages[0]
+          : Object.keys(videoSources)[0];
+      const langVal = langKey ? videoSources[langKey] : null;
+      if (langVal && typeof langVal === 'object') {
+        links = { ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}), ...langVal };
+      } else if (typeof langVal === 'string' && langVal.trim().length > 0) {
+        langStringUrl = SmartStreamService.sanitizeStreamUrl(langVal);
       }
     }
-    
-    if (!links && qualityLinks && Object.keys(qualityLinks).length > 0) {
+
+    if (!links && qualityLinks && typeof qualityLinks === 'object' && Object.keys(qualityLinks).length > 0) {
       links = qualityLinks;
     }
 
     if (links && typeof links === 'object' && Object.keys(links).length > 0) {
       const smartSelected = SmartStreamService.selectSourceUrlForQuality(
-        videoUrl,
+        videoUrl || langStringUrl,
         links,
         currentQuality
       );
-      const candidate = smartSelected.url;
+      const candidate = smartSelected.chosenUrl || smartSelected.url;
 
       // Only override candidate with videoUrl if candidate is an expired temporary token AND user did not configure separate hoster links
       if (
@@ -626,13 +637,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           candidate.includes('voe-network') ||
           candidate.includes('master.m3u8'))
       ) {
-        return videoUrl;
+        return SmartStreamService.sanitizeStreamUrl(videoUrl);
       }
 
-      if (candidate) return candidate;
+      if (candidate) return SmartStreamService.sanitizeStreamUrl(candidate);
     }
 
-    if (videoUrl) return videoUrl;
+    if (videoUrl) return SmartStreamService.sanitizeStreamUrl(videoUrl);
+    if (langStringUrl) return langStringUrl;
     return '';
   }, [qualityLinks, videoSources, videoUrl, currentLanguage, currentQuality, availableLanguages, isSmartHls]);
 

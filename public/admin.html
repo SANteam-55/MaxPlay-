@@ -5863,23 +5863,12 @@
         if (data.ok && data.m3u8Url) {
           const ep = activeSeason.episodes[epIdx];
           if (ep) {
-            ep.videoUrl = data.m3u8Url;
             ep.downloadQualities = data.downloadQualities || [];
             ep.audioTracks = data.audioTracks || [];
             ep.qualities = data.qualities || [];
-            ep.qualityLinks = data.qualityLinks || {};
             ep.availableLanguages = data.audioTracks || [];
             if (data.duration && data.duration > 0) {
               ep.duration = data.duration;
-            }
-
-            if (!ep.videoSources) ep.videoSources = {};
-            if (data.audioTracks && data.audioTracks.length > 0) {
-              data.audioTracks.forEach(l => {
-                ep.videoSources[l] = data.qualityLinks || { '1080p': data.m3u8Url };
-              });
-            } else {
-              ep.videoSources['Default'] = data.qualityLinks || { '1080p': data.m3u8Url };
             }
           }
 
@@ -6149,13 +6138,23 @@
     };
 
     // Helper functions for 4-Quality Server 1 & Server 2 inputs (1080p, 720p, 480p, 360p)
+    window.sanitizeAdminStreamUrl = function(rawUrl) {
+      if (!rawUrl || typeof rawUrl !== 'string') return '';
+      const trimmed = rawUrl.trim();
+      if (!trimmed) return '';
+      const httpMatch = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+      if (httpMatch && httpMatch[0]) return httpMatch[0].trim();
+      return trimmed.split(/\s+/)[0];
+    };
+
     window.syncMovieSmartServerInputs = function() {
       const s1Links = {};
       document.querySelectorAll('.movie-s1-q-input').forEach(inp => {
         const row = inp.closest('.server-q-row');
         if (row && row.style.display === 'none') return;
         const q = inp.getAttribute('data-quality');
-        const val = inp.value.trim();
+        const val = window.sanitizeAdminStreamUrl(inp.value);
+        if (inp.value && val && inp.value !== val) inp.value = val;
         if (q && val) s1Links[q] = val;
       });
       const primaryS1 = s1Links['1080p'] || s1Links['720p'] || s1Links['480p'] || s1Links['360p'] || '';
@@ -6167,7 +6166,8 @@
         const row = inp.closest('.server-q-row');
         if (row && row.style.display === 'none') return;
         const q = inp.getAttribute('data-quality');
-        const val = inp.value.trim();
+        const val = window.sanitizeAdminStreamUrl(inp.value);
+        if (inp.value && val && inp.value !== val) inp.value = val;
         if (q && val) s2Links[q] = val;
       });
       const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || '';
@@ -6182,7 +6182,7 @@
         const row = inp.closest('.server-q-row');
         if (row && row.style.display === 'none') return;
         const q = inp.getAttribute('data-quality');
-        const val = inp.value.trim();
+        const val = window.sanitizeAdminStreamUrl(inp.value);
         if (q && val) links[q] = val;
       });
       return links;
@@ -7024,34 +7024,51 @@
             const row = qInp.closest('.server-q-row');
             if (row && row.style.display === 'none') return;
             const q = qInp.getAttribute('data-quality');
-            const val = qInp.value.trim();
+            const val = window.sanitizeAdminStreamUrl(qInp.value);
+            if (qInp.value && val && qInp.value !== val) qInp.value = val;
             if (q && val) s1Links[q] = val;
           });
-          const primaryS1 = s1Links['1080p'] || s1Links['720p'] || s1Links['480p'] || s1Links['360p'] || (hlsInp ? hlsInp.value.trim() : '');
+          const primaryS1 = s1Links['1080p'] || s1Links['720p'] || s1Links['480p'] || s1Links['360p'] || (hlsInp ? window.sanitizeAdminStreamUrl(hlsInp.value) : '');
           if (hlsInp) hlsInp.value = primaryS1;
 
           ep.videoUrl = primaryS1;
           ep.qualityLinks = Object.keys(s1Links).length > 0 ? s1Links : (primaryS1 ? { '1080p': primaryS1 } : {});
-          if (!ep.videoSources) ep.videoSources = {};
-          ep.videoSources['Default'] = { ...ep.qualityLinks };
+          const epLangs = (Array.isArray(ep.availableLanguages) && ep.availableLanguages.length > 0)
+            ? ep.availableLanguages
+            : (Array.isArray(window.activeLanguages) && window.activeLanguages.length > 0 ? window.activeLanguages : ['Default']);
+          ep.videoSources = {};
+          epLangs.forEach(l => {
+            if (l && Object.keys(ep.qualityLinks).length > 0) {
+              ep.videoSources[l] = { ...ep.qualityLinks };
+            }
+          });
+          if (Object.keys(ep.videoSources).length === 0 && Object.keys(ep.qualityLinks).length > 0) {
+            ep.videoSources['Default'] = { ...ep.qualityLinks };
+          }
 
           const s2Links = {};
           card.querySelectorAll('.ep-s2-q-input').forEach(qInp => {
             const row = qInp.closest('.server-q-row');
             if (row && row.style.display === 'none') return;
             const q = qInp.getAttribute('data-quality');
-            const val = qInp.value.trim();
+            const val = window.sanitizeAdminStreamUrl(qInp.value);
+            if (qInp.value && val && qInp.value !== val) qInp.value = val;
             if (q && val) s2Links[q] = val;
           });
-          const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || (secHlsInp ? secHlsInp.value.trim() : '');
+          const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || (secHlsInp ? window.sanitizeAdminStreamUrl(secHlsInp.value) : '');
           if (secHlsInp) secHlsInp.value = primaryS2;
 
           if (primaryS2) {
+            const finalS2Obj = Object.keys(s2Links).length > 0 ? s2Links : { '1080p': primaryS2 };
             ep.secondaryVideoUrl = primaryS2;
-            ep.secondaryQualityLinks = Object.keys(s2Links).length > 0 ? s2Links : { '1080p': primaryS2 };
+            ep.secondaryServerUrl = primaryS2;
+            ep.secondaryQualityLinks = finalS2Obj;
+            ep.secondaryServerQualityLinks = finalS2Obj;
           } else {
             delete ep.secondaryVideoUrl;
+            delete ep.secondaryServerUrl;
             delete ep.secondaryQualityLinks;
+            delete ep.secondaryServerQualityLinks;
           }
 
           // Preserve & sync episode download sizes if edited
@@ -8033,6 +8050,10 @@
           duration: ep.duration || 1420
         }));
 
+        const configuredLangs = (window.activeLanguages && window.activeLanguages.length > 0)
+          ? window.activeLanguages.filter(l => l && l.toLowerCase() !== 'default')
+          : [];
+
         const rawDoc = {
           id: contentId,
           title,
@@ -8054,10 +8075,10 @@
           videoUrl: firstVideoUrl,
           qualityLinks: mainQualityLinks,
           videoSources: mainVideoSources,
-          availableLanguages: window.isSmartHlsMode ? ['Default'] : (window.activeLanguages || ['Hindi', 'English']),
-          videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryUrl))).length > 0
-            ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryUrl)))
-            : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: document.getElementById('movie-secondary-hls-url')?.value.trim() }] : [])),
+          availableLanguages: configuredLangs.length > 0 ? configuredLangs : ['Hindi', 'English'],
+          videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl))).length > 0
+            ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl)))
+            : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-secondary-hls-url')?.value) }] : [])),
           seasonsData: activeSeasons,
           episodesList: lightweightEpisodes,
           trending: selectedRows.length > 0,
@@ -8069,16 +8090,20 @@
         }
 
         if (isMovieUpload) {
-          const movieSecUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || '';
+          const movieSecUrl = window.sanitizeAdminStreamUrl(document.getElementById('movie-secondary-hls-url')?.value || '');
           const s2QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(2) : {};
-          if (movieSecUrl) {
-            rawDoc.secondaryVideoUrl = movieSecUrl;
-            if (Object.keys(s2QualityMap).length > 0) {
-              rawDoc.secondaryQualityLinks = s2QualityMap;
-            }
+          if (movieSecUrl || Object.keys(s2QualityMap).length > 0) {
+            const finalSecUrl = movieSecUrl || Object.values(s2QualityMap)[0] || '';
+            const finalSecLinks = Object.keys(s2QualityMap).length > 0 ? s2QualityMap : { '1080p': finalSecUrl };
+            rawDoc.secondaryVideoUrl = finalSecUrl;
+            rawDoc.secondaryServerUrl = finalSecUrl;
+            rawDoc.secondaryQualityLinks = finalSecLinks;
+            rawDoc.secondaryServerQualityLinks = finalSecLinks;
           } else {
             delete rawDoc.secondaryVideoUrl;
+            delete rawDoc.secondaryServerUrl;
             delete rawDoc.secondaryQualityLinks;
+            delete rawDoc.secondaryServerQualityLinks;
           }
           if (window.extractedMovieSecondaryDownloadQualities && window.extractedMovieSecondaryDownloadQualities.length > 0) {
             rawDoc.secondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities;
@@ -8091,16 +8116,28 @@
             rawDoc.availableLanguages = window.extractedMovieAudioTracks;
             rawDoc.languages = window.extractedMovieAudioTracks;
           }
-          if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
-            rawDoc.qualityLinks = { ...window.extractedMovieQualityLinks, ...mainQualityLinks };
+          if (Object.keys(mainQualityLinks).length > 0) {
+            rawDoc.qualityLinks = mainQualityLinks;
+          } else if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
+            rawDoc.qualityLinks = window.extractedMovieQualityLinks;
           }
           if (window.extractedMovieQualities && window.extractedMovieQualities.length > 0) {
             rawDoc.qualities = window.extractedMovieQualities;
           }
-        } else if (activeEpisodesList.length > 0 && activeEpisodesList[0]?.secondaryVideoUrl) {
-          rawDoc.secondaryVideoUrl = activeEpisodesList[0].secondaryVideoUrl;
-          if (activeEpisodesList[0]?.secondaryQualityLinks) {
-            rawDoc.secondaryQualityLinks = activeEpisodesList[0].secondaryQualityLinks;
+        } else if (activeEpisodesList.length > 0) {
+          const ep0 = activeEpisodesList[0];
+          const ep0SecUrl = ep0?.secondaryServerUrl || ep0?.secondaryVideoUrl || '';
+          const ep0SecLinks = ep0?.secondaryServerQualityLinks || ep0?.secondaryQualityLinks;
+          if (ep0SecUrl) {
+            rawDoc.secondaryVideoUrl = ep0SecUrl;
+            rawDoc.secondaryServerUrl = ep0SecUrl;
+          }
+          if (ep0SecLinks && Object.keys(ep0SecLinks).length > 0) {
+            rawDoc.secondaryQualityLinks = ep0SecLinks;
+            rawDoc.secondaryServerQualityLinks = ep0SecLinks;
+          }
+          if (ep0?.qualityLinks && Object.keys(ep0.qualityLinks).length > 0) {
+            rawDoc.qualityLinks = ep0.qualityLinks;
           }
         }
 
