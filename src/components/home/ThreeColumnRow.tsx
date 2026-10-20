@@ -10,7 +10,7 @@ interface ThreeColumnRowProps {
   onSeeAll?: () => void;
 }
 
-export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = ({
+export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = React.memo(({
   title,
   icon,
   items,
@@ -19,10 +19,14 @@ export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = ({
 }) => {
   const [displayCount, setDisplayCount] = useState<number>(9);
   const observerTarget = useRef<HTMLDivElement>(null);
+  const prevTitleRef = useRef<string>(title);
 
   useEffect(() => {
-    setDisplayCount(9);
-  }, [items]);
+    if (prevTitleRef.current !== title) {
+      prevTitleRef.current = title;
+      setDisplayCount(9);
+    }
+  }, [title]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -96,6 +100,7 @@ export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = ({
                   alt={displayTitle}
                   className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                   loading="lazy"
+                  decoding="async"
                 />
 
                 {/* Gradient Shadow Overlay */}
@@ -137,4 +142,5 @@ export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = ({
       )}
     </div>
   );
-};
+});
+

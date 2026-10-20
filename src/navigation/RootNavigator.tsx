@@ -100,12 +100,13 @@ export const RootNavigator: React.FC = () => {
 
   const isCurrentDetailOpen = Boolean(detailOpenByTab[activeTab]);
 
-  // Sync PWA active tab state
+  // Sync PWA active tab state without triggering hash-anchor scroll-to-top
   const setActiveTab = (tab: TabType) => {
     setActiveTabState(tab);
     localStorage.setItem('MAXPLAY_PWA_LAST_TAB', tab);
     try {
-      window.history.pushState({ tab, isDetailOpen: false }, '', `/#${tab}`);
+      const cleanUrl = window.location.pathname + window.location.search;
+      window.history.pushState({ tab, isDetailOpen: false }, '', cleanUrl);
     } catch (_) {}
   };
 
@@ -113,12 +114,15 @@ export const RootNavigator: React.FC = () => {
   useEffect(() => {
     sessionStorage.setItem('MAXPLAY_SESSION_ACTIVE', 'true');
     try {
-      // Ensure we always have a dummy history state on PWA start so that a back gesture is intercepted instead of closing the app immediately
-      window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', window.location.hash || `/#${activeTab}`);
+      if ('scrollRestoration' in window.history) {
+        window.history.scrollRestoration = 'manual';
+      }
+      const cleanUrl = window.location.pathname + window.location.search;
+      window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', cleanUrl);
     } catch (_) {}
   }, []);
 
-  // Handle Detail Open changes and push history state
+  // Handle Detail Open changes and push history state without hash jump
   const handleDetailOpenChange = useCallback((tab: string, isOpen: boolean) => {
     setDetailOpenByTab(prev => {
       if (prev[tab] === isOpen) return prev;
@@ -127,7 +131,8 @@ export const RootNavigator: React.FC = () => {
 
     try {
       if (isOpen) {
-        window.history.pushState({ tab, isDetailOpen: true }, '', `/#${tab}-detail`);
+        const cleanUrl = window.location.pathname + window.location.search;
+        window.history.pushState({ tab, isDetailOpen: true }, '', cleanUrl);
       }
     } catch (_) {}
   }, []);
@@ -140,6 +145,7 @@ export const RootNavigator: React.FC = () => {
   // Hardware/Phone Triangle Back Button Interceptor
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
+      const cleanUrl = window.location.pathname + window.location.search;
       // 1. If a detail modal or sub-screen is open on active tab, pop it
       if (isCurrentDetailOpen) {
         const eventName = `MAXPLAY_POP_STACK_${activeTab.toUpperCase()}`;
@@ -151,21 +157,18 @@ export const RootNavigator: React.FC = () => {
       if (activeTab !== 'home') {
         setActiveTabState('home');
         localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
-        // Put the history state back for Home tab
-        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', '/#home');
+        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
         return;
       }
 
       // 3. If already on Home tab with no details open, handle Double-Back to Exit
       const now = Date.now();
       if (now - lastBackPressTime.current < 2500) {
-        // Allow app exit / native back - we don't push state back, so the next back gesture exits the PWA container
         setExitToastVisible(false);
       } else {
         lastBackPressTime.current = now;
         setExitToastVisible(true);
-        // Push state back so app doesn't immediately close on first back press
-        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', '/#home');
+        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
         setTimeout(() => setExitToastVisible(false), 2500);
       }
     };

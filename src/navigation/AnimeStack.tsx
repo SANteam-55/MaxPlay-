@@ -25,11 +25,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
 
   const handleBack = () => {
     pop();
-    try {
-      if (window.location.hash.includes('-detail')) {
-        window.history.back();
-      }
-    } catch (_) {}
+    window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_ANIME'));
   };
 
   const current = stack[stack.length - 1];
@@ -42,12 +38,16 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
     if (prevIsOpenRef.current !== isDetailOpen) {
       prevIsOpenRef.current = isDetailOpen;
       onDetailOpenChangeRef.current?.(isDetailOpen);
+      if (!isDetailOpen) {
+        window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_ANIME'));
+      }
     }
   }, [isDetailOpen]);
 
   React.useEffect(() => {
     const handlePopStack = () => {
       pop();
+      window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_ANIME'));
     };
     window.addEventListener('MAXPLAY_POP_STACK_ANIME', handlePopStack);
     return () => {
@@ -56,6 +56,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
   }, []);
 
   const handleSelect = (item: ContentItem) => {
+    window.dispatchEvent(new CustomEvent('MAXPLAY_SAVE_SCROLL_ANIME'));
     push({ name: 'detail', item });
     if (onSelectContent) {
       onSelectContent(item);
@@ -65,7 +66,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
   return (
     <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
       {/* Base AnimeScreen - Permanently Mounted */}
-      <div className={`h-full w-full ${current.name !== 'anime' ? 'pointer-events-none' : ''}`}>
+      <div className={`h-full w-full ${current.name !== 'anime' ? 'pointer-events-none invisible' : 'visible'}`}>
         <AnimeScreen
           onSelectContent={handleSelect}
           onOpenSearch={onOpenSearch}

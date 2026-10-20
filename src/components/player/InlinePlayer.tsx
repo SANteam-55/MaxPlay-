@@ -106,6 +106,7 @@ interface InlinePlayerProps {
   onGlobalSeek?: (targetTime: number) => void;
   skipMarkers?: any;
   isSmartHls?: boolean;
+  onDiscoveredAudioTracks?: (tracks: string[]) => void;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -133,6 +134,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onGlobalSeek,
   skipMarkers,
   isSmartHls,
+  onDiscoveredAudioTracks,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -140,9 +142,15 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const prevStreamKeyRef = useRef<string | undefined>(streamKey);
   
-  // Gesture and volume states
-  const [brightness, setBrightness] = useState<number>(100);
-  const [volume, setVolume] = useState<number>(100);
+  // Gesture and volume states (synced with real Android hardware inside APK)
+  const [brightness, setBrightness] = useState<number>(() => {
+    const nativeB = NativeBridgeService.getNativeBrightness();
+    return nativeB !== null && nativeB > 0 ? nativeB : 100;
+  });
+  const [volume, setVolume] = useState<number>(() => {
+    const nativeV = NativeBridgeService.getNativeVolume();
+    return nativeV !== null && nativeV >= 0 ? nativeV : 100;
+  });
   const [showBrightnessIndicator, setShowBrightnessIndicator] = useState(false);
   const [showVolumeIndicator, setShowVolumeIndicator] = useState(false);
   const indicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -180,6 +188,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [activeMenu, setActiveMenu] = useState<'language' | 'quality' | 'speed' | null>(null);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProgressEmitRef = useRef<number>(0);
+  const lastTimeStateUpdateRef = useRef<number>(0);
   const recoverDecodingErrorDateRef = useRef<number>(0);
 
   // Normalize skipMarkers from any structure or format (numbers, strings, mm:ss)
@@ -334,26 +343,39 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
   const handleBrightnessChange = useCallback((delta: number) => {
     setBrightness((prev) => {
-      const newVal = Math.max(10, Math.min(200, prev + delta));
-      return Math.round(newVal);
+      const newVal = Math.round(Math.max(10, Math.min(200, prev + delta)));
+      // Control real Android phone screen brightness inside APK (0-100%)
+      if (NativeBridgeService.isRunningInKotlinApp()) {
+        NativeBridgeService.setNativeBrightness(Math.min(100, Math.max(5, newVal)));
+      }
+      return newVal;
     });
     showIndicator('brightness');
   }, []);
 
   const handleVolumeChange = useCallback((delta: number) => {
     setVolume((prev) => {
-      const newVal = Math.max(0, Math.min(200, prev + delta));
-      return Math.round(newVal);
+      const newVal = Math.round(Math.max(0, Math.min(200, prev + delta)));
+      // Control real Android phone hardware media volume inside APK (0-100%)
+      if (NativeBridgeService.isRunningInKotlinApp()) {
+        NativeBridgeService.setNativeVolume(Math.min(100, Math.max(0, newVal)));
+      }
+      return newVal;
     });
     showIndicator('volume');
   }, []);
 
-  // Apply volume changes directly to native HTML5 video element (unblocks audio and prevents Web Audio CORS muting)
+  // Apply volume changes directly to native HTML5 video element (when running in APK, hardware AudioManager handles 0-100% so keep HTML5 video at 1.0 unless muted)
   useEffect(() => {
     if (!videoRef.current) return;
-    const clampedVolume = Math.min(1, Math.max(0, volume / 100));
-    videoRef.current.volume = clampedVolume;
-    videoRef.current.muted = volume === 0;
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      videoRef.current.volume = volume === 0 ? 0 : 1;
+      videoRef.current.muted = volume === 0;
+    } else {
+      const clampedVolume = Math.min(1, Math.max(0, volume / 100));
+      videoRef.current.volume = clampedVolume;
+      videoRef.current.muted = volume === 0;
+    }
   }, [volume]);
 
   const handleLongPressStart = useCallback(() => {
@@ -520,7 +542,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
   }, [activeQuality]);
 
-  // Derive available qualities based on selected language and dynamic HLS levels
+  // Derive available qualities based on Admin multi-quality server links AND dynamic HLS levels
   const availableQualities = useMemo(() => {
     let links: Record<string, string> | null = null;
     
@@ -541,26 +563,27 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       links = qualityLinks;
     }
 
-    if (links && typeof links === 'object' && Object.keys(links).length > 0) {
-      const validQualities = Object.keys(links).filter(q => Boolean(links![q]));
-      if (validQualities.length === 1) {
-        return validQualities;
-      }
-      return ['auto', ...validQualities];
+    const combinedSet = new Set<string>();
+    if (links && typeof links === 'object') {
+      Object.keys(links).forEach((q) => {
+        if (links![q] && String(links![q]).trim().length > 0) {
+          combinedSet.add(q);
+        }
+      });
+    }
+    if (hlsQualities.length > 0) {
+      hlsQualities.forEach((q) => combinedSet.add(q));
     }
 
-    // Dynamic HLS qualities extracted from master .m3u8 playlist
-    if (hlsQualities.length > 0) {
-      if (hlsQualities.length === 1) {
-        return hlsQualities;
-      }
-      return ['auto', ...hlsQualities];
+    if (combinedSet.size > 0) {
+      const sorted = Array.from(combinedSet).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+      return ['auto', ...sorted];
     }
 
     return ['auto'];
   }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities]);
 
-  // Pick the best video URL based on language and quality
+  // Pick the optimal video URL based on language, quality, and Smart Network/RAM detection
   const activeVideoUrl = useMemo(() => {
     let links: Record<string, string> | null = null;
     
@@ -582,22 +605,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
 
     if (links && typeof links === 'object' && Object.keys(links).length > 0) {
-      let candidate = '';
-      if (currentQuality && currentQuality !== 'auto' && links[currentQuality]) {
-        candidate = links[currentQuality];
-      } else {
-        // Auto selection logic: highest available
-        candidate = links['1080p'] || links['720p'] || links['480p'] || links['360p'] || '';
-        if (!candidate) {
-          const firstKey = Object.keys(links)[0];
-          if (firstKey && links[firstKey]) candidate = links[firstKey];
-        }
-      }
+      const smartSelected = SmartStreamService.selectSourceUrlForQuality(
+        videoUrl,
+        links,
+        currentQuality
+      );
+      const candidate = smartSelected.url;
 
-      // If videoUrl is an extractable hoster (e.g. Filemoon / Byse / VOE) and candidate is a temporary/expiring CDN .m3u8,
-      // prefer videoUrl so SmartStreamService resolves a fresh token and multi-audio master manifest
+      // Only override candidate with videoUrl if candidate is an expired temporary token AND user did not configure separate hoster links
       if (
         videoUrl &&
+        Object.keys(links).length === 1 &&
         SmartStreamService.isExtractableSource(videoUrl, isSmartHls) &&
         candidate &&
         !SmartStreamService.isExtractableSource(candidate, isSmartHls) &&
@@ -834,6 +852,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
+          if (onDiscoveredAudioTracks) {
+            onDiscoveredAudioTracks(
+              Array.from(new Set(parsedAudio.map((a) => a.name).filter(Boolean)))
+            );
+          }
 
           const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
           if (req) {
@@ -873,6 +896,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lang: t.lang || ''
           }));
           setHlsAudioTracks(parsedAudio);
+          if (onDiscoveredAudioTracks) {
+            onDiscoveredAudioTracks(
+              Array.from(new Set(parsedAudio.map((a: any) => a.name).filter(Boolean)))
+            );
+          }
 
           const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
           if (req) {
@@ -1283,6 +1311,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   
   const changeQuality = (qual: string) => {
     setCurrentQuality(qual);
+    try {
+      localStorage.setItem('maxplay_preferred_quality', qual);
+    } catch {}
     if (onQualityChange) onQualityChange(qual);
 
     // If HLS stream has internal multi-quality levels, switch level seamlessly
@@ -1409,12 +1440,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime;
             const d = e.currentTarget.duration || duration || 0;
-            setCurrentTime(t);
+            const now = Date.now();
+            // 4GB RAM Optimization: Throttle React state updates to 250ms when controls are open, and 950ms when controls are hidden
+            const minInterval = showControls || normalizedSkipMarkers ? 250 : 950;
+            if (now - lastTimeStateUpdateRef.current >= minInterval) {
+              lastTimeStateUpdateRef.current = now;
+              setCurrentTime(t);
+            }
             // Ignore time updates during initial seek phase if time is near 0 but target was > 2
             if (targetSeekTimeRef.current > 2 && t < 1 && !isInitialSeekDoneRef.current) {
               return;
             }
-            const now = Date.now();
             if (!isSwitchingSourceRef.current && (now - lastProgressEmitRef.current >= 1500)) {
               lastProgressEmitRef.current = now;
               onProgress?.(t, false, d);

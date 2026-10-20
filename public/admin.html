@@ -1662,50 +1662,102 @@
 
               <!-- SMART HLS SINGLE MOVIE STREAM CONTAINER (ACTIVE WHEN TOGGLE IS ON AND MODE IS MOVIE) -->
               <div id="movie-hls-container" style="display:none; background:var(--bg-tertiary); border:1px solid rgba(168,85,247,0.3); border-radius:14px; padding:18px; margin-bottom:20px;">
-                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                  <i class="fa-solid fa-play-circle" style="color:var(--accent-purple); font-size:16px;"></i>
-                  <h3 style="font-size:15px; font-weight:800; margin:0; color:#fff;">Movie HLS / Master Stream Link</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fa-solid fa-play-circle" style="color:var(--accent-purple); font-size:16px;"></i>
+                    <h3 style="font-size:15px; font-weight:800; margin:0; color:#fff;">Movie Smart HLS Stream Links (Multi-Quality Server 1 & Server 2)</h3>
+                  </div>
+                  <span style="font-size:11px; color:var(--text-tertiary);">Optional 1080p / 720p / 480p / 360p per server • Click × to remove unused boxes</span>
                 </div>
                 <p style="font-size:12px; color:var(--text-secondary); margin-bottom:14px;">
-                  Paste your raw or VOE stream link below. MaxPlay backend proxy automatically resolves and streams optimal HLS qualities with full token security.
+                  Paste single or multi-quality links for Server 1 and Server 2. Users on slow networks automatically get lower-quality links for instant playback, while audio tracks remain identical.
                 </p>
-                <div class="form-group" style="margin-bottom:16px;">
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+
+                <!-- SERVER 1 MULTI-QUALITY BOX -->
+                <div class="form-group" style="margin-bottom:16px; background:rgba(0,0,0,0.28); padding:14px; border-radius:12px; border:1px solid rgba(168,85,247,0.28);">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                     <label class="form-label" style="font-size:11px; font-weight:800; color:var(--accent-cyan); margin:0; display:flex; align-items:center; gap:6px;">
-                      <i class="fa-solid fa-server"></i> Server 1 — Primary Stream URL (Voe.sx / Master HLS)
-                      <span style="font-size:9px; background:rgba(6,182,212,0.15); color:var(--accent-cyan); padding:2px 6px; border-radius:4px; font-weight:700;">OPTIONAL</span>
+                      <i class="fa-solid fa-server"></i> Server 1 — Multi-Quality Stream Links
+                      <span style="font-size:9px; background:rgba(6,182,212,0.15); color:var(--accent-cyan); padding:2px 6px; border-radius:4px; font-weight:700;">1080p / 720p / 480p / 360p</span>
                     </label>
-                    <span style="font-size:10px; color:var(--text-tertiary);">Primary VOE.sx or direct .m3u8 source</span>
+                    <div style="display:flex; gap:8px;">
+                      <button type="button" id="btn-test-movie-hls" class="btn-primary" onclick="syncMovieSmartServerInputs(); testAndExtractMovieStream()" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
+                        <i class="fa-solid fa-bolt"></i> Verify S1
+                      </button>
+                      <button type="button" id="btn-clear-movie-hls" class="btn-secondary" onclick="clearMovieServer1()" title="Clear Server 1" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                        <i class="fa-solid fa-trash-can"></i> Clear
+                      </button>
+                    </div>
                   </div>
-                  <div style="display:flex; gap:10px;">
-                    <input type="text" id="movie-hls-url" class="input-control" placeholder="https://voe.sx/yz8csmojmi6a or https://...master.m3u8" style="font-family:monospace; font-size:13px; font-weight:600; border-color:rgba(168,85,247,0.4);" oninput="updateMovieHlsPreview()">
-                    <button type="button" id="btn-test-movie-hls" class="btn-primary" onclick="testAndExtractMovieStream()" style="white-space:nowrap; padding:0 16px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
-                      <i class="fa-solid fa-bolt"></i> Verify S1
-                    </button>
-                    <button type="button" id="btn-clear-movie-hls" class="btn-secondary" onclick="clearMovieServer1()" title="Clear Server 1" style="white-space:nowrap; padding:0 12px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
-                      <i class="fa-solid fa-trash-can"></i> Clear
-                    </button>
+
+                  <input type="hidden" id="movie-hls-url" value="">
+                  <div id="movie-s1-qualities-grid" style="display:flex; flex-direction:column; gap:8px;">
+                    <div class="server-q-row" data-server="1" data-quality="1080p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#A78BFA; background:rgba(168,85,247,0.15); border:1px solid rgba(168,85,247,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟣 1080p</span>
+                      <input type="text" id="movie-s1-q-1080p" class="input-control movie-s1-q-input" data-quality="1080p" placeholder="Server 1 — 1080p Link (or Master Stream URL)..." oninput="syncMovieSmartServerInputs(); updateMovieHlsPreview()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s1')" title="Remove 1080p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="1" data-quality="720p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#60A5FA; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🔵 720p</span>
+                      <input type="text" id="movie-s1-q-720p" class="input-control movie-s1-q-input" data-quality="720p" placeholder="Server 1 — 720p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s1')" title="Remove 720p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="1" data-quality="480p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#34D399; background:rgba(52,211,153,0.15); border:1px solid rgba(52,211,153,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟢 480p</span>
+                      <input type="text" id="movie-s1-q-480p" class="input-control movie-s1-q-input" data-quality="480p" placeholder="Server 1 — 480p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s1')" title="Remove 480p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="1" data-quality="360p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#FBBF24; background:rgba(251,191,36,0.15); border:1px solid rgba(251,191,36,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟡 360p</span>
+                      <input type="text" id="movie-s1-q-360p" class="input-control movie-s1-q-input" data-quality="360p" placeholder="Server 1 — 360p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s1')" title="Remove 360p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
                   </div>
+                  <div id="movie-s1-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;"></div>
                   <div id="movie-hls-extract-result" style="display:none; margin-top:8px;"></div>
                 </div>
 
-                <div class="form-group" style="margin-bottom:16px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.28); border-radius:10px; padding:12px;">
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <!-- SERVER 2 MULTI-QUALITY BOX -->
+                <div class="form-group" style="margin-bottom:16px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.28); border-radius:12px; padding:14px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                     <label class="form-label" style="font-size:11px; font-weight:800; color:#FBBF24; margin:0; display:flex; align-items:center; gap:6px;">
-                      <i class="fa-solid fa-moon"></i> Server 2 — Secondary Stream URL (Filemoon / Byse)
-                      <span style="font-size:9px; background:rgba(245,158,11,0.18); color:#FBBF24; padding:2px 6px; border-radius:4px; font-weight:700;">OPTIONAL</span>
+                      <i class="fa-solid fa-moon"></i> Server 2 — Multi-Quality Stream Links
+                      <span style="font-size:9px; background:rgba(245,158,11,0.18); color:#FBBF24; padding:2px 6px; border-radius:4px; font-weight:700;">1080p / 720p / 480p / 360p</span>
                     </label>
-                    <span style="font-size:10px; color:var(--text-tertiary);">Filemoon / Byse link (e.g. https://byseraguci.com/d/...)</span>
+                    <div style="display:flex; gap:8px;">
+                      <button type="button" id="btn-test-movie-secondary-hls" class="btn-secondary" onclick="syncMovieSmartServerInputs(); testAndExtractMovieSecondaryStream()" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; border-color:rgba(245,158,11,0.45); color:#FBBF24;">
+                        <i class="fa-solid fa-bolt"></i> Verify S2
+                      </button>
+                      <button type="button" id="btn-clear-movie-secondary-hls" class="btn-secondary" onclick="clearMovieServer2()" title="Clear Server 2" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                        <i class="fa-solid fa-trash-can"></i> Clear
+                      </button>
+                    </div>
                   </div>
-                  <div style="display:flex; gap:10px;">
-                    <input type="text" id="movie-secondary-hls-url" class="input-control" placeholder="https://byseraguci.com/d/euhf0n80b2ue or https://filemoon.sx/e/..." style="font-family:monospace; font-size:13px; font-weight:600; border-color:rgba(245,158,11,0.4);">
-                    <button type="button" id="btn-test-movie-secondary-hls" class="btn-secondary" onclick="testAndExtractMovieSecondaryStream()" style="white-space:nowrap; padding:0 16px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:6px; border-color:rgba(245,158,11,0.45); color:#FBBF24;">
-                      <i class="fa-solid fa-bolt"></i> Verify S2
-                    </button>
-                    <button type="button" id="btn-clear-movie-secondary-hls" class="btn-secondary" onclick="clearMovieServer2()" title="Clear Server 2" style="white-space:nowrap; padding:0 12px; height:42px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
-                      <i class="fa-solid fa-trash-can"></i> Clear
-                    </button>
+
+                  <input type="hidden" id="movie-secondary-hls-url" value="">
+                  <div id="movie-s2-qualities-grid" style="display:flex; flex-direction:column; gap:8px;">
+                    <div class="server-q-row" data-server="2" data-quality="1080p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#A78BFA; background:rgba(168,85,247,0.15); border:1px solid rgba(168,85,247,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟣 1080p</span>
+                      <input type="text" id="movie-s2-q-1080p" class="input-control movie-s2-q-input" data-quality="1080p" placeholder="Server 2 — 1080p Link (or Master Stream URL)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s2')" title="Remove 1080p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="2" data-quality="720p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#60A5FA; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🔵 720p</span>
+                      <input type="text" id="movie-s2-q-720p" class="input-control movie-s2-q-input" data-quality="720p" placeholder="Server 2 — 720p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s2')" title="Remove 720p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="2" data-quality="480p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#34D399; background:rgba(52,211,153,0.15); border:1px solid rgba(52,211,153,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟢 480p</span>
+                      <input type="text" id="movie-s2-q-480p" class="input-control movie-s2-q-input" data-quality="480p" placeholder="Server 2 — 480p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s2')" title="Remove 480p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="2" data-quality="360p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#FBBF24; background:rgba(251,191,36,0.15); border:1px solid rgba(251,191,36,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟡 360p</span>
+                      <input type="text" id="movie-s2-q-360p" class="input-control movie-s2-q-input" data-quality="360p" placeholder="Server 2 — 360p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s2')" title="Remove 360p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
                   </div>
+                  <div id="movie-s2-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;"></div>
                   <div id="movie-secondary-hls-extract-result" style="display:none; margin-top:8px;"></div>
                 </div>
 
@@ -5245,24 +5297,38 @@
         }
         renderMovieLinksUI(links);
 
-        // Pre-fill movie smart HLS url if present
-        const movieHlsInput = document.getElementById('movie-hls-url');
-        const movieSecHlsInput = document.getElementById('movie-secondary-hls-url');
+        // Pre-fill movie smart HLS multi-quality urls if present
         const itemSecUrl = item.secondaryVideoUrl || item.secondaryUrl || '';
         let itemPrimaryUrl = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
 
-        // If primary URL is identical to secondary URL (from earlier single-server save bug), don't duplicate into Server 1
         if (itemSecUrl && itemPrimaryUrl === itemSecUrl) {
           itemPrimaryUrl = '';
         }
 
-        if (movieHlsInput) {
-          movieHlsInput.value = itemPrimaryUrl;
+        const s1Quals = item.qualityLinks || item.videoSources?.Default || {};
+        const s2Quals = item.secondaryQualityLinks || {};
+        ['1080p', '720p', '480p', '360p'].forEach(q => {
+          const s1Inp = document.getElementById(`movie-s1-q-${q}`);
+          const s1Row = s1Inp ? s1Inp.closest('.server-q-row') : null;
+          if (s1Inp) {
+            s1Inp.value = s1Quals[q] || (q === '1080p' ? itemPrimaryUrl : '') || '';
+            if (s1Row) s1Row.style.display = 'flex';
+          }
+          const s2Inp = document.getElementById(`movie-s2-q-${q}`);
+          const s2Row = s2Inp ? s2Inp.closest('.server-q-row') : null;
+          if (s2Inp) {
+            s2Inp.value = s2Quals[q] || (q === '1080p' ? itemSecUrl : '') || '';
+            if (s2Row) s2Row.style.display = 'flex';
+          }
+        });
+        if (typeof window.syncMovieSmartServerInputs === 'function') {
+          window.syncMovieSmartServerInputs();
         }
-        if (movieSecHlsInput) {
-          movieSecHlsInput.value = itemSecUrl;
+        if (typeof window.renderServerRestoreBar === 'function') {
+          window.renderServerRestoreBar('movie-s1');
+          window.renderServerRestoreBar('movie-s2');
         }
-        
+
         // Restore movie download qualities and metadata
         if (item.downloadQualities && item.downloadQualities.length > 0) {
           window.extractedMovieDownloadQualities = item.downloadQualities;
@@ -5362,6 +5428,24 @@
       if (movieHlsUrlEl) movieHlsUrlEl.value = '';
       const movieSecHlsUrlEl = document.getElementById('movie-secondary-hls-url');
       if (movieSecHlsUrlEl) movieSecHlsUrlEl.value = '';
+      ['1080p', '720p', '480p', '360p'].forEach(q => {
+        const s1Inp = document.getElementById(`movie-s1-q-${q}`);
+        if (s1Inp) {
+          s1Inp.value = '';
+          const r = s1Inp.closest('.server-q-row');
+          if (r) r.style.display = 'flex';
+        }
+        const s2Inp = document.getElementById(`movie-s2-q-${q}`);
+        if (s2Inp) {
+          s2Inp.value = '';
+          const r = s2Inp.closest('.server-q-row');
+          if (r) r.style.display = 'flex';
+        }
+      });
+      if (typeof window.renderServerRestoreBar === 'function') {
+        window.renderServerRestoreBar('movie-s1');
+        window.renderServerRestoreBar('movie-s2');
+      }
       const movieHlsIntroS = document.getElementById('movie-hls-intro-start');
       if (movieHlsIntroS) movieHlsIntroS.value = '';
       const movieHlsIntroE = document.getElementById('movie-hls-intro-end');
@@ -6064,25 +6148,155 @@
       }
     };
 
+    // Helper functions for 4-Quality Server 1 & Server 2 inputs (1080p, 720p, 480p, 360p)
+    window.syncMovieSmartServerInputs = function() {
+      const s1Links = {};
+      document.querySelectorAll('.movie-s1-q-input').forEach(inp => {
+        const row = inp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = inp.getAttribute('data-quality');
+        const val = inp.value.trim();
+        if (q && val) s1Links[q] = val;
+      });
+      const primaryS1 = s1Links['1080p'] || s1Links['720p'] || s1Links['480p'] || s1Links['360p'] || '';
+      const hlsInp = document.getElementById('movie-hls-url');
+      if (hlsInp) hlsInp.value = primaryS1;
+
+      const s2Links = {};
+      document.querySelectorAll('.movie-s2-q-input').forEach(inp => {
+        const row = inp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = inp.getAttribute('data-quality');
+        const val = inp.value.trim();
+        if (q && val) s2Links[q] = val;
+      });
+      const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || '';
+      const secHlsInp = document.getElementById('movie-secondary-hls-url');
+      if (secHlsInp) secHlsInp.value = primaryS2;
+    };
+
+    window.collectMovieServerQualityLinks = function(serverNum) {
+      const links = {};
+      const selector = serverNum === 1 ? '.movie-s1-q-input' : '.movie-s2-q-input';
+      document.querySelectorAll(selector).forEach(inp => {
+        const row = inp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = inp.getAttribute('data-quality');
+        const val = inp.value.trim();
+        if (q && val) links[q] = val;
+      });
+      return links;
+    };
+
+    window.hideServerQualityRow = function(btn, groupPrefix) {
+      const row = btn.closest('.server-q-row');
+      if (!row) return;
+      const inp = row.querySelector('input');
+      if (inp) inp.value = '';
+      row.style.display = 'none';
+      if (groupPrefix.startsWith('movie-')) {
+        window.syncMovieSmartServerInputs();
+        window.renderServerRestoreBar(groupPrefix);
+      } else if (groupPrefix.startsWith('ep-')) {
+        window.syncEpisodesFromDOM();
+        window.renderEpisodeServerRestoreBar(row.closest('.episode-card'));
+      }
+    };
+
+    window.restoreServerQualityRow = function(groupPrefix, quality) {
+      const grid = document.getElementById(`${groupPrefix}-qualities-grid`);
+      if (!grid) return;
+      const row = grid.querySelector(`.server-q-row[data-quality="${quality}"]`);
+      if (row) {
+        row.style.display = 'flex';
+        const inp = row.querySelector('input');
+        if (inp) inp.focus();
+      }
+      window.renderServerRestoreBar(groupPrefix);
+    };
+
+    window.renderServerRestoreBar = function(groupPrefix) {
+      const grid = document.getElementById(`${groupPrefix}-qualities-grid`);
+      const bar = document.getElementById(`${groupPrefix}-restore-bar`);
+      if (!grid || !bar) return;
+      const hiddenQualities = [];
+      grid.querySelectorAll('.server-q-row').forEach(row => {
+        if (row.style.display === 'none') {
+          hiddenQualities.push(row.getAttribute('data-quality'));
+        }
+      });
+      if (hiddenQualities.length === 0) {
+        bar.innerHTML = '';
+        return;
+      }
+      bar.innerHTML = `<span style="font-size:10px; color:var(--text-tertiary); align-self:center;">Restore quality box:</span>` +
+        hiddenQualities.map(q => `<button type="button" onclick="restoreServerQualityRow('${groupPrefix}', '${q}')" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); color:#E4E4E7; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700; cursor:pointer;">+ ${q}</button>`).join('');
+    };
+
+    window.restoreEpisodeServerQualityRow = function(btn, serverNum, quality) {
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const row = card.querySelector(`.ep-s${serverNum}-q-row[data-quality="${quality}"]`);
+      if (row) {
+        row.style.display = 'flex';
+        const inp = row.querySelector('input');
+        if (inp) inp.focus();
+      }
+      window.renderEpisodeServerRestoreBar(card);
+      window.syncEpisodesFromDOM();
+    };
+
+    window.renderEpisodeServerRestoreBar = function(card) {
+      if (!card) return;
+      [1, 2].forEach(sNum => {
+        const bar = card.querySelector(`.ep-s${sNum}-restore-bar`);
+        if (!bar) return;
+        const hidden = [];
+        card.querySelectorAll(`.ep-s${sNum}-q-row`).forEach(row => {
+          if (row.style.display === 'none') {
+            hidden.push(row.getAttribute('data-quality'));
+          }
+        });
+        if (hidden.length === 0) {
+          bar.innerHTML = '';
+        } else {
+          bar.innerHTML = `<span style="font-size:10px; color:var(--text-tertiary); align-self:center;">Add quality:</span>` +
+            hidden.map(q => `<button type="button" onclick="restoreEpisodeServerQualityRow(this, ${sNum}, '${q}')" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); color:#E4E4E7; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700; cursor:pointer;">+ ${q}</button>`).join('');
+        }
+      });
+    };
+
     window.clearMovieServer1 = function() {
       const inp = document.getElementById('movie-hls-url');
       if (inp) inp.value = '';
+      document.querySelectorAll('.movie-s1-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderServerRestoreBar('movie-s1');
       const res = document.getElementById('movie-hls-extract-result');
       if (res) { res.style.display = 'none'; res.innerHTML = ''; }
       window.extractedMovieDownloadQualities = [];
       window.extractedMovieQualityLinks = {};
       window.extractedMovieAudioTracks = [];
       window.extractedMovieQualities = [];
-      showToast('Server 1 link cleared', 'info');
+      showToast('Server 1 links cleared', 'info');
     };
 
     window.clearMovieServer2 = function() {
       const inp = document.getElementById('movie-secondary-hls-url');
       if (inp) inp.value = '';
+      document.querySelectorAll('.movie-s2-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderServerRestoreBar('movie-s2');
       const res = document.getElementById('movie-secondary-hls-extract-result');
       if (res) { res.style.display = 'none'; res.innerHTML = ''; }
       window.extractedMovieSecondaryDownloadQualities = [];
-      showToast('Server 2 link cleared', 'info');
+      showToast('Server 2 links cleared', 'info');
     };
 
     window.toggleAdminStreamPreview = function(containerId, streamUrl) {
@@ -6130,6 +6344,12 @@
       if (!card) return;
       const inp = card.querySelector('.ep-hls-stream-input');
       if (inp) inp.value = '';
+      card.querySelectorAll('.ep-s1-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderEpisodeServerRestoreBar(card);
       const statusEl = card.querySelector('.ep-hls-extract-status');
       if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
@@ -6139,7 +6359,7 @@
         delete activeSeason.episodes[epIdx].qualityLinks;
       }
       if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
-      showToast(`Episode ${epIdx + 1} Server 1 link cleared`, 'info');
+      showToast(`Episode ${epIdx + 1} Server 1 links cleared`, 'info');
     };
 
     window.clearEpisodeServer2 = function(epIdx, btn) {
@@ -6147,15 +6367,22 @@
       if (!card) return;
       const inp = card.querySelector('.ep-secondary-hls-stream-input');
       if (inp) inp.value = '';
+      card.querySelectorAll('.ep-s2-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderEpisodeServerRestoreBar(card);
       const statusEl = card.querySelector('.ep-secondary-hls-extract-status');
       if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes[epIdx]) {
         delete activeSeason.episodes[epIdx].secondaryVideoUrl;
+        delete activeSeason.episodes[epIdx].secondaryQualityLinks;
         delete activeSeason.episodes[epIdx].secondaryDownloadQualities;
       }
       if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
-      showToast(`Episode ${epIdx + 1} Server 2 link cleared`, 'info');
+      showToast(`Episode ${epIdx + 1} Server 2 links cleared`, 'info');
     };
 
     window.promptAndExtractMovieStream = async function(btn) {
@@ -6790,25 +7017,43 @@
         // Smart HLS vs Normal Part 1 Multi-Language Video Sources
         const hlsInp = card.querySelector('.ep-hls-stream-input');
         const secHlsInp = card.querySelector('.ep-secondary-hls-stream-input');
-        if (secHlsInp) {
-          const secSmartUrl = secHlsInp.value.trim();
-          if (secSmartUrl) {
-            ep.secondaryVideoUrl = secSmartUrl;
+
+        if (window.isSmartHlsMode) {
+          const s1Links = {};
+          card.querySelectorAll('.ep-s1-q-input').forEach(qInp => {
+            const row = qInp.closest('.server-q-row');
+            if (row && row.style.display === 'none') return;
+            const q = qInp.getAttribute('data-quality');
+            const val = qInp.value.trim();
+            if (q && val) s1Links[q] = val;
+          });
+          const primaryS1 = s1Links['1080p'] || s1Links['720p'] || s1Links['480p'] || s1Links['360p'] || (hlsInp ? hlsInp.value.trim() : '');
+          if (hlsInp) hlsInp.value = primaryS1;
+
+          ep.videoUrl = primaryS1;
+          ep.qualityLinks = Object.keys(s1Links).length > 0 ? s1Links : (primaryS1 ? { '1080p': primaryS1 } : {});
+          if (!ep.videoSources) ep.videoSources = {};
+          ep.videoSources['Default'] = { ...ep.qualityLinks };
+
+          const s2Links = {};
+          card.querySelectorAll('.ep-s2-q-input').forEach(qInp => {
+            const row = qInp.closest('.server-q-row');
+            if (row && row.style.display === 'none') return;
+            const q = qInp.getAttribute('data-quality');
+            const val = qInp.value.trim();
+            if (q && val) s2Links[q] = val;
+          });
+          const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || (secHlsInp ? secHlsInp.value.trim() : '');
+          if (secHlsInp) secHlsInp.value = primaryS2;
+
+          if (primaryS2) {
+            ep.secondaryVideoUrl = primaryS2;
+            ep.secondaryQualityLinks = Object.keys(s2Links).length > 0 ? s2Links : { '1080p': primaryS2 };
           } else {
             delete ep.secondaryVideoUrl;
+            delete ep.secondaryQualityLinks;
           }
-        }
-        if (window.isSmartHlsMode && hlsInp) {
-          const smartUrl = hlsInp.value.trim();
-          ep.videoUrl = smartUrl;
-          if (!ep.videoSources) ep.videoSources = {};
-          if (!ep.videoSources['Default']) ep.videoSources['Default'] = {};
-          ep.videoSources['Default']['1080p'] = smartUrl;
-          if (!ep.qualityLinks || Object.keys(ep.qualityLinks).length <= 1) {
-            ep.qualityLinks = { '1080p': smartUrl };
-          } else {
-            ep.qualityLinks['1080p'] = smartUrl;
-          }
+
           // Preserve & sync episode download sizes if edited
           const sizeInputs = card.querySelectorAll('.ep-dl-size-input');
           if (sizeInputs.length > 0 && ep.downloadQualities) {
@@ -7127,37 +7372,77 @@
               </div>
             </div>
 
-            ${window.isSmartHlsMode ? `
+            ${window.isSmartHlsMode ? (() => {
+              const s1Links = ep.qualityLinks || ep.videoSources?.Default || {};
+              const s1Fallback = ep.videoUrl || s1Links['1080p'] || '';
+              const s2Links = ep.secondaryQualityLinks || {};
+              const s2Fallback = ep.secondaryVideoUrl || ep.secondaryUrl || s2Links['1080p'] || '';
+              const qMeta = [
+                { q: '1080p', badge: '🟣 1080p', color: '#A78BFA', bg: 'rgba(168,85,247,0.15)', border: 'rgba(168,85,247,0.35)' },
+                { q: '720p',  badge: '🔵 720p',  color: '#60A5FA', bg: 'rgba(96,165,250,0.15)', border: 'rgba(96,165,250,0.35)' },
+                { q: '480p',  badge: '🟢 480p',  color: '#34D399', bg: 'rgba(52,211,153,0.15)', border: 'rgba(52,211,153,0.35)' },
+                { q: '360p',  badge: '🟡 360p',  color: '#FBBF24', bg: 'rgba(251,191,36,0.15)', border: 'rgba(251,191,36,0.35)' }
+              ];
+              const s1RowsHtml = qMeta.map(m => {
+                const val = s1Links[m.q] || (m.q === '1080p' ? s1Fallback : '') || '';
+                return `
+                  <div class="server-q-row ep-s1-q-row" data-quality="${m.q}" style="display:flex; align-items:center; gap:8px;">
+                    <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
+                    <input type="text" class="input-control ep-s1-q-input" data-quality="${m.q}" value="${val}" placeholder="Server 1 — ${m.q} Link ${m.q === '1080p' ? '(or Master Stream)' : '(Optional)'}..." onchange="syncEpisodesFromDOM()" style="flex:1; font-family:monospace; font-size:11px; height:32px;">
+                    <button type="button" onclick="hideServerQualityRow(this, 'ep-s1')" title="Remove ${m.q} input" style="width:28px; height:32px; border-radius:6px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                `;
+              }).join('');
+
+              const s2RowsHtml = qMeta.map(m => {
+                const val = s2Links[m.q] || (m.q === '1080p' ? s2Fallback : '') || '';
+                return `
+                  <div class="server-q-row ep-s2-q-row" data-quality="${m.q}" style="display:flex; align-items:center; gap:8px;">
+                    <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
+                    <input type="text" class="input-control ep-s2-q-input" data-quality="${m.q}" value="${val}" placeholder="Server 2 — ${m.q} Link ${m.q === '1080p' ? '(or Master Stream)' : '(Optional)'}..." onchange="syncEpisodesFromDOM()" style="flex:1; font-family:monospace; font-size:11px; height:32px;">
+                    <button type="button" onclick="hideServerQualityRow(this, 'ep-s2')" title="Remove ${m.q} input" style="width:28px; height:32px; border-radius:6px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                `;
+              }).join('');
+
+              return `
               <div style="background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.25); border-radius:10px; padding:14px; margin-top:6px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;">
                   <label class="form-label" style="font-size:12px; font-weight:800; color:var(--accent-purple); margin-bottom:0; display:flex; align-items:center; gap:6px;">
-                    <i class="fa-solid fa-server" style="color:var(--accent-cyan);"></i> Server 1 — Primary Stream URL (Voe.sx / HLS)
+                    <i class="fa-solid fa-server" style="color:var(--accent-cyan);"></i> Server 1 — Multi-Quality Links (1080p / 720p / 480p / 360p)
                   </label>
-                  <span style="font-size:10px; color:var(--text-tertiary);">Primary VOE.sx or direct .m3u8 link</span>
+                  <div style="display:flex; gap:6px;">
+                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:28px; font-size:10px; font-weight:700;" onclick="syncEpisodesFromDOM(); testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S1</button>
+                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 8px; height:28px; font-size:10px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer1(${epIdx}, this)" title="Clear Server 1"><i class="fa-solid fa-trash-can"></i></button>
+                  </div>
                 </div>
-                <div style="display:flex; gap:8px;">
-                  <input type="text" class="input-control ep-hls-stream-input" value="${ep.videoUrl || (ep.videoSources?.Default?.['1080p'] || '')}" placeholder="https://voe.sx/yz8csmojmi6a or https://...master.m3u8" style="font-family:monospace; font-size:12px; font-weight:600; border-color:rgba(168,85,247,0.4);" onchange="syncEpisodesFromDOM()">
-                  <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 12px; height:38px; font-size:11px; font-weight:700;" onclick="testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S1</button>
-                  <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:38px; font-size:11px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer1(${epIdx}, this)" title="Clear Server 1"><i class="fa-solid fa-trash-can"></i></button>
+                <input type="hidden" class="ep-hls-stream-input" value="${s1Fallback}">
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                  ${s1RowsHtml}
                 </div>
+                <div class="ep-s1-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;"></div>
                 <div class="ep-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
 
                 <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.08);">
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;">
                     <label class="form-label" style="font-size:12px; font-weight:800; color:#FBBF24; margin-bottom:0; display:flex; align-items:center; gap:6px;">
-                      <i class="fa-solid fa-moon" style="color:#FBBF24;"></i> Server 2 — Secondary Stream URL (Filemoon / Byse)
+                      <i class="fa-solid fa-moon" style="color:#FBBF24;"></i> Server 2 — Multi-Quality Links (1080p / 720p / 480p / 360p)
                     </label>
-                    <span style="font-size:10px; color:var(--text-tertiary);">Secondary Filemoon / Byse link</span>
+                    <div style="display:flex; gap:6px;">
+                      <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:28px; font-size:10px; font-weight:700; border-color:rgba(245,158,11,0.45); color:#FBBF24;" onclick="syncEpisodesFromDOM(); testAndExtractEpisodeSecondaryStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S2</button>
+                      <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 8px; height:28px; font-size:10px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer2(${epIdx}, this)" title="Clear Server 2"><i class="fa-solid fa-trash-can"></i></button>
+                    </div>
                   </div>
-                  <div style="display:flex; gap:8px;">
-                    <input type="text" class="input-control ep-secondary-hls-stream-input" value="${ep.secondaryVideoUrl || ep.secondaryUrl || ''}" placeholder="https://byseraguci.com/d/euhf0n80b2ue or https://filemoon.sx/e/..." style="font-family:monospace; font-size:12px; font-weight:600; border-color:rgba(245,158,11,0.4);" onchange="syncEpisodesFromDOM()">
-                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 12px; height:38px; font-size:11px; font-weight:700; border-color:rgba(245,158,11,0.45); color:#FBBF24;" onclick="testAndExtractEpisodeSecondaryStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S2</button>
-                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:38px; font-size:11px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer2(${epIdx}, this)" title="Clear Server 2"><i class="fa-solid fa-trash-can"></i></button>
+                  <input type="hidden" class="ep-secondary-hls-stream-input" value="${s2Fallback}">
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    ${s2RowsHtml}
                   </div>
+                  <div class="ep-s2-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;"></div>
                   <div class="ep-secondary-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
                 </div>
               </div>
-            ` : `
+              `;
+            })() : `
               <div style="margin-top:4px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div style="font-size:13px; font-weight:800; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
@@ -7514,25 +7799,34 @@
 
         if (window.currentUploadMode === 'movie') {
           if (window.isSmartHlsMode) {
-            const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || '';
-            const secUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || '';
+            if (typeof window.syncMovieSmartServerInputs === 'function') {
+              window.syncMovieSmartServerInputs();
+            }
+            const s1QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(1) : {};
+            const s2QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(2) : {};
+
+            const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || s1QualityMap['1080p'] || s1QualityMap['720p'] || s1QualityMap['480p'] || s1QualityMap['360p'] || '';
+            const secUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || s2QualityMap['1080p'] || s2QualityMap['720p'] || s2QualityMap['480p'] || s2QualityMap['360p'] || '';
             firstVideoUrl = hlsUrl || secUrl;
+
+            const finalS1Links = Object.keys(s1QualityMap).length > 0 ? s1QualityMap : (hlsUrl ? { '1080p': hlsUrl } : {});
+            const finalS2Links = Object.keys(s2QualityMap).length > 0 ? s2QualityMap : (secUrl ? { '1080p': secUrl } : {});
 
             if (hlsUrl && secUrl) {
               firstVideoUrl = hlsUrl;
-              mainQualityLinks = { '1080p': hlsUrl };
-              mainVideoSources = { 'Default': { '1080p': hlsUrl } };
-              movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } }, secondaryVideoUrl: secUrl }];
+              mainQualityLinks = finalS1Links;
+              mainVideoSources = { 'Default': finalS1Links };
+              movieParts = [{ videoSources: { 'Default': finalS1Links }, qualityLinks: finalS1Links, secondaryVideoUrl: secUrl, secondaryQualityLinks: finalS2Links }];
             } else if (hlsUrl) {
               firstVideoUrl = hlsUrl;
-              mainQualityLinks = { '1080p': hlsUrl };
-              mainVideoSources = { 'Default': { '1080p': hlsUrl } };
-              movieParts = [{ videoSources: { 'Default': { '1080p': hlsUrl } } }];
+              mainQualityLinks = finalS1Links;
+              mainVideoSources = { 'Default': finalS1Links };
+              movieParts = [{ videoSources: { 'Default': finalS1Links }, qualityLinks: finalS1Links }];
             } else if (secUrl) {
               firstVideoUrl = '';
               mainQualityLinks = {};
               mainVideoSources = {};
-              movieParts = [{ secondaryVideoUrl: secUrl }];
+              movieParts = [{ secondaryVideoUrl: secUrl, secondaryQualityLinks: finalS2Links }];
             } else {
               firstVideoUrl = '';
               movieParts = [];
@@ -7776,10 +8070,15 @@
 
         if (isMovieUpload) {
           const movieSecUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || '';
+          const s2QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(2) : {};
           if (movieSecUrl) {
             rawDoc.secondaryVideoUrl = movieSecUrl;
+            if (Object.keys(s2QualityMap).length > 0) {
+              rawDoc.secondaryQualityLinks = s2QualityMap;
+            }
           } else {
             delete rawDoc.secondaryVideoUrl;
+            delete rawDoc.secondaryQualityLinks;
           }
           if (window.extractedMovieSecondaryDownloadQualities && window.extractedMovieSecondaryDownloadQualities.length > 0) {
             rawDoc.secondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities;
@@ -7793,13 +8092,16 @@
             rawDoc.languages = window.extractedMovieAudioTracks;
           }
           if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
-            rawDoc.qualityLinks = window.extractedMovieQualityLinks;
+            rawDoc.qualityLinks = { ...window.extractedMovieQualityLinks, ...mainQualityLinks };
           }
           if (window.extractedMovieQualities && window.extractedMovieQualities.length > 0) {
             rawDoc.qualities = window.extractedMovieQualities;
           }
         } else if (activeEpisodesList.length > 0 && activeEpisodesList[0]?.secondaryVideoUrl) {
           rawDoc.secondaryVideoUrl = activeEpisodesList[0].secondaryVideoUrl;
+          if (activeEpisodesList[0]?.secondaryQualityLinks) {
+            rawDoc.secondaryQualityLinks = activeEpisodesList[0].secondaryQualityLinks;
+          }
         }
 
         // Deep-prune payload to remove empty and unused structures

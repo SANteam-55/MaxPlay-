@@ -656,6 +656,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isSeasonModalOpen, setIsSeasonModalOpen] = useState(false);
+  const [discoveredAudioTracks, setDiscoveredAudioTracks] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
@@ -1247,27 +1248,39 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }
 
   if (!offlineVideoUrl) {
-    const isSecExtractable = SmartStreamService.isExtractableSource(secondaryServerUrl);
     if (selectedServer === 'server2') {
       if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
-        if (isSecExtractable) {
-          playerQualityLinks = {};
-          playerVideoUrl = secondaryServerUrl;
-          playerVideoSources = {};
-        } else {
-          playerQualityLinks = secondaryServerQualityLinks;
-          playerVideoUrl = (activeQuality && activeQuality !== 'auto' && playerQualityLinks[activeQuality])
-            ? playerQualityLinks[activeQuality]
-            : (secondaryServerUrl || (playerQualityLinks['1080p'] || playerQualityLinks['720p'] || playerQualityLinks['480p'] || playerQualityLinks['360p'] || Object.values(playerQualityLinks)[0] || ''));
-          playerVideoSources = {};
-        }
+        playerQualityLinks = secondaryServerQualityLinks;
+        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+          secondaryServerUrl,
+          secondaryServerQualityLinks,
+          activeQuality
+        );
+        playerVideoUrl = smartS2.url || secondaryServerUrl;
+        playerVideoSources = {};
       }
-    } else if (selectedServer === 'server1' && !playerVideoUrl && secondaryServerUrl) {
-      // Automatic fallback if only Server 2 link was filled
-      playerQualityLinks = isSecExtractable ? {} : secondaryServerQualityLinks;
-      playerVideoUrl = secondaryServerUrl;
+    } else if (selectedServer === 'server1') {
+      if (playerQualityLinks && Object.keys(playerQualityLinks).length > 0) {
+        const smartS1 = SmartStreamService.selectSourceUrlForQuality(
+          playerVideoUrl,
+          playerQualityLinks,
+          activeQuality
+        );
+        if (smartS1.url) {
+          playerVideoUrl = smartS1.url;
+        }
+      } else if (!playerVideoUrl && secondaryServerUrl) {
+        // Automatic fallback if only Server 2 link was filled
+        playerQualityLinks = secondaryServerQualityLinks;
+        playerVideoUrl = secondaryServerUrl;
+      }
     }
   }
+
+  // Reset discoveredAudioTracks when switching episode or server
+  useEffect(() => {
+    setDiscoveredAudioTracks([]);
+  }, [content?.id, selectedSeasonIndex, selectedEpisodeIndex, selectedServer]);
 
   // Pre-warm both Server 1 and Server 2 streams in the background for instant 0ms playback & server switching
   useEffect(() => {
@@ -1279,26 +1292,53 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }, [primaryServerUrl, secondaryServerUrl]);
 
-  // Derive available languages dynamically for the current part
+  // Derive available languages dynamically for the current part (Merges live discovered HLS audio tracks + configured languages)
   const availableLanguages = useMemo(() => {
-    if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
-      return Object.keys(playerVideoSources);
+    const merged: string[] = [];
+    const addUnique = (lang?: string) => {
+      if (!lang || typeof lang !== 'string') return;
+      const clean = lang.trim();
+      if (!clean || clean.toLowerCase() === 'default' || clean.toLowerCase() === 'default audio') return;
+      if (!merged.some((m) => m.toLowerCase() === clean.toLowerCase())) {
+        merged.push(clean);
+      }
+    };
+
+    // 1. Live discovered HLS #EXT-X-MEDIA:TYPE=AUDIO tracks from active player
+    if (discoveredAudioTracks.length > 0) {
+      discoveredAudioTracks.forEach(addUnique);
     }
+
+    // 2. Also check cached stream metadata for the active server URL
+    const activeTargetUrl = selectedServer === 'server2' && secondaryServerUrl ? secondaryServerUrl : primaryServerUrl;
+    if (activeTargetUrl) {
+      const cachedMeta = SmartStreamService.getCachedStreamMeta(activeTargetUrl);
+      if (cachedMeta && Array.isArray(cachedMeta.audioTracks)) {
+        cachedMeta.audioTracks.forEach(addUnique);
+      }
+    }
+
+    // 3. Explicit multi-language videoSources
+    if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
+      Object.keys(playerVideoSources).forEach(addUnique);
+    }
+
+    // 4. Episode / Movie / Content configured languages
     const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks;
     if (Array.isArray(partLangs) && partLangs.length > 0) {
-      return partLangs.map((l: any) => typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)).filter(Boolean);
+      partLangs.forEach((l: any) => addUnique(typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)));
     }
     if (content.availableLanguages && content.availableLanguages.length > 0) {
-      return content.availableLanguages;
+      content.availableLanguages.forEach(addUnique);
     }
     if (content.languages && content.languages.length > 0) {
-      return content.languages;
+      content.languages.forEach(addUnique);
     }
     if ((content as any)?.audioLanguages && (content as any).audioLanguages.length > 0) {
-      return (content as any).audioLanguages;
+      (content as any).audioLanguages.forEach(addUnique);
     }
-    return [];
-  }, [playerVideoSources, activeMoviePart, currentEpisode, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
+    return merged;
+  }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -2042,6 +2082,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 setActiveQuality(qual);
                 saveProgressNow(playbackPosition, false, true);
               }}
+              onDiscoveredAudioTracks={setDiscoveredAudioTracks}
               onProgress={handleProgress}
               onDuration={handleDurationUpdate}
               onPause={(time, totalDuration) => {
@@ -2270,7 +2311,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             );
           })()}
 
-          {/* 4. Server Selection Button (Server 1 Primary Voe.sx / Server 2 Filemoon) */}
+          {/* 4. Server Selection Button (Server 1 / Server 2) */}
           <button 
             onClick={() => {
               adManager.handleActionDockClick(!!user?.isPremium);
@@ -2281,7 +2322,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/15 shadow-amber-950/20'
                 : 'border-white/10 hover:border-purple-500/40 hover:bg-[#181822] text-white/80 hover:text-purple-300 shadow-purple-950/20'
             }`}
-            title="Switch Streaming Server (Server 1 Voe.sx / Server 2 Filemoon)"
+            title="Switch Streaming Server (Server 1 / Server 2)"
           >
             <div className="relative flex items-center justify-center">
               <Server className={`w-4 h-4 stroke-[2.4] ${selectedServer === 'server2' ? 'text-amber-400' : 'text-[#a855f7]'}`} />
@@ -3082,7 +3123,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         </div>
       )}
 
-      {/* Server Selection Bottom Sheet Modal (Server 1 Primary Voe.sx / Server 2 Secondary Filemoon) */}
+      {/* Server Selection Bottom Sheet Modal (Server 1 / Server 2 — Provider Names Hidden) */}
       {isServerModalOpen && content && (
         <div
           className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex items-end justify-center p-0 animate-in fade-in duration-200"
@@ -3117,7 +3158,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             </div>
 
             <div className="space-y-2.5">
-              {/* Server 1: Primary (Voe.sx) */}
+              {/* Server 1 */}
               {(() => {
                 const isSelected = selectedServer === 'server1';
                 const hasPrimary = Boolean(primaryServerUrl);
@@ -3127,7 +3168,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     onClick={() => {
                       setSelectedServer('server1');
                       setIsServerModalOpen(false);
-                      setToastMessage('Switched to Server 1 (Primary • Voe.sx)');
+                      setToastMessage('Switched to Server 1');
                       setTimeout(() => setToastMessage(null), 2500);
                     }}
                     className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
@@ -3147,7 +3188,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs sm:text-sm font-extrabold text-white truncate">
-                            Server 1 — Primary (Voe.sx)
+                            Server 1
                           </span>
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
                             hasPrimary
@@ -3159,7 +3200,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         </div>
                         <p className="text-[11px] text-white/55 mt-0.5 truncate">
                           {hasPrimary
-                            ? 'Direct HLS Multi-Audio & Auto Quality Stream'
+                            ? 'High-Speed Primary Multi-Audio & Auto Quality Stream'
                             : 'Server 1 is not configured for this title'}
                         </p>
                       </div>
@@ -3179,11 +3220,11 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 );
               })()}
 
-              {/* Server 2: Secondary (Filemoon / Byse) */}
+              {/* Server 2 */}
               {(() => {
                 const isSelected = selectedServer === 'server2';
                 const hasSecondary = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
-                const isPrimaryAlreadyFilemoon = Boolean(
+                const isPrimaryAlreadyBackupCompatible = Boolean(
                   primaryServerUrl && (
                     primaryServerUrl.toLowerCase().includes('filemoon') ||
                     primaryServerUrl.toLowerCase().includes('byse') ||
@@ -3198,8 +3239,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       setSelectedServer('server2');
                       setIsServerModalOpen(false);
                       setToastMessage(
-                        hasSecondary || isPrimaryAlreadyFilemoon
-                          ? 'Switched to Server 2 (Secondary • Filemoon)'
+                        hasSecondary || isPrimaryAlreadyBackupCompatible
+                          ? 'Switched to Server 2'
                           : 'Switched to Server 2 (Using available stream)'
                       );
                       setTimeout(() => setToastMessage(null), 2500);
@@ -3221,21 +3262,19 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs sm:text-sm font-extrabold text-white truncate">
-                            Server 2 — Backup (Filemoon)
+                            Server 2
                           </span>
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                            hasSecondary || isPrimaryAlreadyFilemoon
+                            hasSecondary || isPrimaryAlreadyBackupCompatible
                               ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                               : 'bg-white/10 text-white/50 border-white/15'
                           }`}>
-                            {hasSecondary || isPrimaryAlreadyFilemoon ? 'Ready' : 'Not configured'}
+                            {hasSecondary || isPrimaryAlreadyBackupCompatible ? 'Ready' : 'Not configured'}
                           </span>
                         </div>
                         <p className="text-[11px] text-white/55 mt-0.5 truncate">
-                          {hasSecondary
-                            ? 'Dedicated Filemoon / Byse High-Speed HLS Stream'
-                            : isPrimaryAlreadyFilemoon
-                            ? 'Active Filemoon / Byse Direct HLS Stream'
+                          {hasSecondary || isPrimaryAlreadyBackupCompatible
+                            ? 'Turbo Backup High-Speed Multi-Audio HLS Stream'
                             : 'Server 2 is not configured for this title'}
                         </p>
                       </div>

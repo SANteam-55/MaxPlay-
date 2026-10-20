@@ -22,11 +22,6 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
 
   const handleBack = () => {
     pop();
-    try {
-      if (window.location.hash.includes('-detail')) {
-        window.history.back();
-      }
-    } catch (_) {}
   };
 
   const current = stack[stack.length - 1];
@@ -66,25 +61,31 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
         />
       </div>
 
-      {/* Stack Overlay Screens */}
-      {current.name !== 'search' && (
-        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
-          {current.name === 'detail' && (
-            <ContentDetailScreen
-              content={current.item}
-              onBack={handleBack}
-              onSelectContent={handleSelect}
-            />
-          )}
-          {current.name === 'filter' && (
-            <FilterScreen
-              onBack={handleBack}
-              onOpenSearch={() => { /* fallback */ }}
-              onSelectContent={handleSelect}
-            />
-          )}
-        </div>
-      )}
+      {/* Stack Overlay Screens — keep intermediate screens mounted so scroll position is preserved */}
+      {stack.slice(1).map((screen, idx) => {
+        const isTop = idx === stack.length - 2;
+        return (
+          <div
+            key={`${screen.name}-${idx}`}
+            className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${!isTop ? 'hidden pointer-events-none' : ''}`}
+          >
+            {screen.name === 'detail' && (
+              <ContentDetailScreen
+                content={screen.item}
+                onBack={handleBack}
+                onSelectContent={handleSelect}
+              />
+            )}
+            {screen.name === 'filter' && (
+              <FilterScreen
+                onBack={handleBack}
+                onOpenSearch={() => { /* fallback */ }}
+                onSelectContent={handleSelect}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

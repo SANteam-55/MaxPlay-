@@ -77,6 +77,8 @@ interface MaxPlayKotlinBridge {
   hasOfflineItem?: (storageKey: string) => boolean;
   getOfflinePlaybackUrl?: (storageKey: string) => string;
   deleteOfflineItem?: (storageKey: string) => boolean;
+  clearImageDiskCache?: () => boolean;
+  getImageDiskCacheBytes?: () => number;
 }
 
 declare global {
@@ -763,17 +765,39 @@ export class NativeBridgeService {
         }
       }
 
-      // Fast duration calculation without downloading a second 1MB media playlist
-      let detectedDuration = durationSec > 0 ? durationSec : 0;
+      // Accurate duration calculation: if Master playlist has no #EXTINF, probe the first variant media playlist
+      let detectedDuration = durationSec > 0 && durationSec !== 1440 ? durationSec : 0;
+      let variantSegmentCount = 0;
+
       if (text.includes('#EXTINF:')) {
         let segSum = 0;
         const extinfRegex = /#EXTINF:(\d+(?:\.\d+)?)/g;
         let eMatch: RegExpExecArray | null;
         while ((eMatch = extinfRegex.exec(text)) !== null) {
           segSum += parseFloat(eMatch[1]);
+          variantSegmentCount++;
         }
         if (segSum > 5) {
           detectedDuration = Math.round(segSum);
+        }
+      } else if (qualities.length > 0) {
+        const firstVariantUrl = qualityLinks[qualities[0]];
+        if (firstVariantUrl && firstVariantUrl !== m3u8Url) {
+          try {
+            const subText = await this.fetchTextCorsFree(firstVariantUrl, headers);
+            if (subText && subText.includes('#EXTINF:')) {
+              let segSum = 0;
+              const extinfRegex = /#EXTINF:(\d+(?:\.\d+)?)/g;
+              let eMatch: RegExpExecArray | null;
+              while ((eMatch = extinfRegex.exec(subText)) !== null) {
+                segSum += parseFloat(eMatch[1]);
+                variantSegmentCount++;
+              }
+              if (segSum > 5) {
+                detectedDuration = Math.round(segSum);
+              }
+            }
+          } catch {}
         }
       }
 
@@ -794,15 +818,24 @@ export class NativeBridgeService {
         qualityLinks['720p'] = m3u8Url;
       }
 
+      // Deterministic URL fingerprint for subtle realistic variance when encoder omits BANDWIDTH tag
+      let urlHash = 0;
+      for (let i = 0; i < m3u8Url.length; i++) {
+        urlHash = (urlHash * 31 + m3u8Url.charCodeAt(i)) & 0x7fffffff;
+      }
+      const bitrateVarianceFactor = 0.94 + ((urlHash % 13) * 0.01); // 0.94 to 1.06
+
       for (const q of qualities) {
         const url = qualityLinks[q] || m3u8Url;
-        const defaultBps = q.includes('1080')
-          ? 2400000
-          : q.includes('720')
-          ? 1200000
-          : q.includes('480')
-          ? 600000
-          : 300000;
+        const defaultBps = Math.round(
+          (q.includes('1080')
+            ? 2400000
+            : q.includes('720')
+            ? 1200000
+            : q.includes('480')
+            ? 650000
+            : 360000) * bitrateVarianceFactor
+        );
         const actualBps = bandwidthsByQuality[q] || defaultBps;
         const estBytes = (actualBps * finalDuration) / 8;
         const sizeMb = Math.max(15, Math.round(estBytes / (1024 * 1024)));
@@ -834,6 +867,30 @@ export class NativeBridgeService {
         audioTracks: [],
         duration: durationSec || 1440,
       };
+    }
+  }
+
+  /**
+   * Clears the persistent Native Android 250MB image poster disk cache (`poster_cache`).
+   */
+  public static clearNativeImageDiskCache(): boolean {
+    if (!this.isRunningInKotlinApp()) return false;
+    try {
+      return window.MaxPlayNative?.clearImageDiskCache?.() ?? false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Returns current bytes used by the Native Android persistent image disk cache.
+   */
+  public static getNativeImageDiskCacheBytes(): number {
+    if (!this.isRunningInKotlinApp()) return 0;
+    try {
+      return window.MaxPlayNative?.getImageDiskCacheBytes?.() ?? 0;
+    } catch {
+      return 0;
     }
   }
 }

@@ -180,26 +180,6 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         </button>
       </div>
 
-      {/* REAL DEVICE STORAGE BAR */}
-      {storageInfo && (
-        <div className="mt-2 flex items-center justify-between rounded-2xl bg-[#121216] px-3.5 py-2.5 border border-[#1F1F26]">
-          <div className="flex items-center gap-2 text-xs">
-            <HardDrive className="h-4 w-4 text-[#8B5CF6]" />
-            <span className="font-bold text-white">
-              MaxPlay Vault:{' '}
-              <span className="text-[#A855F7]">
-                {storageInfo.usedByAppMb >= 1000
-                  ? `${(storageInfo.usedByAppMb / 1024).toFixed(2)} GB`
-                  : `${Math.round(storageInfo.usedByAppMb)} MB`}
-              </span>
-            </span>
-          </div>
-          <span className="text-[11px] font-bold text-emerald-400">
-            {storageInfo.freeGb} GB Free
-          </span>
-        </div>
-      )}
-
       {/* SECTION 2: DOWNLOADING QUEUE */}
       {activeDownloadingTasks.length > 0 && (
         <div className="mt-6 flex flex-col gap-3">
@@ -272,7 +252,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           </div>
 
           <span className="text-[11px] font-semibold text-[#6B7280]">
-            3.5GB available
+            {storageInfo ? `${storageInfo.freeGb}GB available` : '3.5GB available'}
           </span>
         </div>
 

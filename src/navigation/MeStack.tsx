@@ -37,11 +37,6 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
 
   const handleBack = () => {
     pop();
-    try {
-      if (window.location.hash.includes('-detail')) {
-        window.history.back();
-      }
-    } catch (_) {}
   };
 
   const current = stack[stack.length - 1];
@@ -92,46 +87,52 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
         />
       </div>
 
-      {/* Stack Overlay Screens */}
-      {current.name !== 'me' && (
-        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
-          {current.name === 'detail' && (
-            <ContentDetailScreen
-              content={current.item}
-              onBack={handleBack}
-              onSelectContent={(item) => push({ name: 'detail', item })}
-            />
-          )}
-          {current.name === 'edit-profile' && <EditProfileScreen onBack={handleBack} />}
-          {current.name === 'settings' && (
-            <SettingsScreen
-              onBack={handleBack}
-              onLogout={onLogout}
-              onOpenFeedback={() => push({ name: 'feedback' })}
-            />
-          )}
-          {current.name === 'feedback' && <FeedbackScreen onBack={handleBack} />}
-          {current.name === 'history' && (
-            <WatchHistoryScreen
-              onBack={handleBack}
-              onPlayContent={handlePlayContent}
-            />
-          )}
-          {current.name === 'my-list' && (
-            <MyListScreen
-              onBack={handleBack}
-              onPlayContent={handlePlayContent}
-            />
-          )}
-          {current.name === 'messages' && <MessagesScreen onBack={handleBack} onPlayContent={handlePlayContent} />}
-          {current.name === 'my-comments' && (
-            <MyCommentsScreen 
-              onBack={handleBack}
-              onPlayContent={handlePlayContent}
-            />
-          )}
-        </div>
-      )}
+      {/* Stack Overlay Screens — keep intermediate screens mounted so scroll position is preserved */}
+      {stack.slice(1).map((screen, idx) => {
+        const isTop = idx === stack.length - 2;
+        return (
+          <div
+            key={`${screen.name}-${idx}`}
+            className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${!isTop ? 'hidden pointer-events-none' : ''}`}
+          >
+            {screen.name === 'detail' && (
+              <ContentDetailScreen
+                content={screen.item}
+                onBack={handleBack}
+                onSelectContent={(item) => push({ name: 'detail', item })}
+              />
+            )}
+            {screen.name === 'edit-profile' && <EditProfileScreen onBack={handleBack} />}
+            {screen.name === 'settings' && (
+              <SettingsScreen
+                onBack={handleBack}
+                onLogout={onLogout}
+                onOpenFeedback={() => push({ name: 'feedback' })}
+              />
+            )}
+            {screen.name === 'feedback' && <FeedbackScreen onBack={handleBack} />}
+            {screen.name === 'history' && (
+              <WatchHistoryScreen
+                onBack={handleBack}
+                onPlayContent={handlePlayContent}
+              />
+            )}
+            {screen.name === 'my-list' && (
+              <MyListScreen
+                onBack={handleBack}
+                onPlayContent={handlePlayContent}
+              />
+            )}
+            {screen.name === 'messages' && <MessagesScreen onBack={handleBack} onPlayContent={handlePlayContent} />}
+            {screen.name === 'my-comments' && (
+              <MyCommentsScreen 
+                onBack={handleBack}
+                onPlayContent={handlePlayContent}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

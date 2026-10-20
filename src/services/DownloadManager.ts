@@ -248,27 +248,39 @@ class DownloadManagerService {
   }
 
   /**
-   * Resolves a raw hoster URL (VOE.sx / Filemoon) just-in-time when the episode's turn arrives,
-   * with automatic failover to the backup server if the primary server fails.
+   * Resolves a raw hoster URL (Server 1 / Server 2) just-in-time when the episode's turn arrives,
+   * with automatic failover to the backup server and optional forceRefresh on retry.
    */
-  private async resolveStreamForTask(task: DownloadTask): Promise<string> {
+  private async resolveStreamForTask(
+    task: DownloadTask,
+    forceRefresh: boolean = false
+  ): Promise<string> {
     const tryResolveUrl = async (rawUrl?: string): Promise<string | null> => {
       if (!rawUrl || !rawUrl.trim()) return null;
       const trimmed = rawUrl.trim();
       if (!SmartStreamService.isExtractableSource(trimmed)) {
         return trimmed;
       }
-      // Check fast cache first
-      const cached = SmartStreamService.getCachedStreamUrl(trimmed);
-      if (cached) return cached;
+      // Check fast cache first unless forceRefresh is requested on retry
+      if (!forceRefresh) {
+        const cached = SmartStreamService.getCachedStreamUrl(trimmed);
+        if (cached) return cached;
+      }
 
-      try {
-        const res = await SmartStreamService.resolveStream(trimmed, { forceRefresh: false });
-        if (res && res.streamUrl && !res.isEmbed) {
-          return res.streamUrl;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await SmartStreamService.resolveStream(trimmed, {
+            forceRefresh: forceRefresh || attempt > 0,
+          });
+          if (res && res.streamUrl && !res.isEmbed) {
+            return res.streamUrl;
+          }
+        } catch (err) {
+          console.warn('[DownloadManager] Just-in-time extraction warning:', err);
         }
-      } catch (err) {
-        console.warn('[DownloadManager] Just-in-time extraction warning:', err);
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 700));
+        }
       }
       return null;
     };
@@ -322,27 +334,67 @@ class DownloadManagerService {
     if (this.activeTaskIds.has(task.taskId)) return;
     this.activeTaskIds.add(task.taskId);
 
+    // Lock the initial estimated bytes so the series total MB never fluctuates between 800MB and 900MB
+    const lockedTaskTotalBytes = task.totalBytes > 0 ? task.totalBytes : 250 * 1024 * 1024;
+
     try {
-      const resolvedStreamUrl = await this.resolveStreamForTask(task);
+      let resolvedStreamUrl = '';
+      let result: { totalBytes: number } | null = null;
+      let lastError: any = null;
 
-      const result = await ClientHlsDownloader.downloadStream(
-        task.storageKey!,
-        resolvedStreamUrl,
-        task.quality,
-        (info) => {
-          const current = this.tasks.find((t) => t.taskId === task.taskId);
-          if (!current || current.status !== 'downloading') return;
+      // 3-Attempt Automatic Silent Retry Loop (eliminates first-try multi-episode cold start failures)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const currentCheck = this.tasks.find((t) => t.taskId === task.taskId);
+        if (!currentCheck || currentCheck.status !== 'downloading') {
+          return;
+        }
 
-          current.bytesDownloaded = info.downloadedBytes;
-          if (info.totalEstimatedBytes > info.downloadedBytes) {
-            current.totalBytes = info.totalEstimatedBytes;
+        try {
+          resolvedStreamUrl = await this.resolveStreamForTask(task, attempt > 0);
+
+          result = await ClientHlsDownloader.downloadStream(
+            task.storageKey!,
+            resolvedStreamUrl,
+            task.quality,
+            (info) => {
+              const current = this.tasks.find((t) => t.taskId === task.taskId);
+              if (!current || current.status !== 'downloading') return;
+
+              current.bytesDownloaded = info.downloadedBytes;
+              // Keep totalBytes locked to avoid confusing total MB jumps in series summaries
+              if (info.downloadedBytes > current.totalBytes * 0.97) {
+                current.totalBytes = Math.max(current.totalBytes, info.totalEstimatedBytes);
+              }
+              current.downloadSpeedMb =
+                Math.round((info.speedBps / (1024 * 1024)) * 10) / 10;
+              this.notify();
+            },
+            task.language || 'Hindi',
+            lockedTaskTotalBytes
+          );
+
+          if (result && result.totalBytes > 0) {
+            break;
           }
-          current.downloadSpeedMb =
-            Math.round((info.speedBps / (1024 * 1024)) * 10) / 10;
-          this.notify();
-        },
-        task.language || 'Hindi'
-      );
+        } catch (attemptErr: any) {
+          lastError = attemptErr;
+          const afterCheck = this.tasks.find((t) => t.taskId === task.taskId);
+          if (!afterCheck || afterCheck.status !== 'downloading') {
+            return;
+          }
+          if (attempt < 2) {
+            console.warn(
+              `[DownloadManager] Auto-retrying episode "${task.title}" (attempt ${attempt + 2}/3)...`,
+              attemptErr
+            );
+            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          }
+        }
+      }
+
+      if (!result) {
+        throw lastError || new Error('Download failed after automatic retries');
+      }
 
       // Remove from active tasks list and move to completedFiles
       this.tasks = this.tasks.filter((t) => t.taskId !== task.taskId);

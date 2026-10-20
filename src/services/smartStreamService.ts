@@ -508,4 +508,169 @@ export class SmartStreamService {
       isEmbed: false
     };
   }
+
+  /**
+   * Smart Network & Device RAM Auto-Quality Selector:
+   * - Respects explicit user preference if set (`1080p`, `720p`, `480p`, `360p`).
+   * - When set to `auto` / `Auto`, checks `navigator.connection` and `navigator.deviceMemory`:
+   *   - Weak network (`2g`, `3g`, `< 2.5 Mbps`) or `<= 4GB RAM` -> prefers `480p` / `720p` for instant 0-buffer start.
+   *   - Normal 4G (`2.5 - 6 Mbps`) -> prefers `720p`.
+   *   - Fast Wi-Fi / 5G (`> 6 Mbps`) -> prefers `1080p` / `720p`.
+   */
+  public static getOptimalInitialQuality(availableQualities: string[]): string {
+    if (!availableQualities || availableQualities.length === 0) return "auto";
+    const normalizedMap = new Map<string, string>();
+    for (const q of availableQualities) {
+      normalizedMap.set(q.toLowerCase().trim(), q);
+    }
+
+    // 1. Check saved user preference
+    try {
+      const savedPref = (
+        localStorage.getItem("maxplay_preferred_quality") ||
+        localStorage.getItem("maxplay_default_quality") ||
+        ""
+      )
+        .toLowerCase()
+        .trim();
+      if (savedPref && savedPref !== "auto") {
+        const directMatch = normalizedMap.get(savedPref) || normalizedMap.get(`${savedPref}p`);
+        if (directMatch) return directMatch;
+      }
+    } catch {}
+
+    // 2. Smart Network & RAM Detection
+    let priorityOrder = ["720p", "1080p", "480p", "360p"];
+    try {
+      const nav = typeof navigator !== "undefined" ? (navigator as any) : null;
+      const conn = nav?.connection || nav?.mozConnection || nav?.webkitConnection;
+      const effType: string = (conn?.effectiveType || "").toLowerCase();
+      const downlink: number = typeof conn?.downlink === "number" ? conn.downlink : 0;
+      const saveData: boolean = Boolean(conn?.saveData);
+      const deviceRamGb: number = typeof nav?.deviceMemory === "number" ? nav.deviceMemory : 8;
+
+      if (
+        saveData ||
+        effType === "slow-2g" ||
+        effType === "2g" ||
+        effType === "3g" ||
+        (downlink > 0 && downlink < 2.5)
+      ) {
+        // Weak network: start with 480p or 360p for instant playback
+        priorityOrder = ["480p", "360p", "720p", "1080p"];
+      } else if (deviceRamGb <= 4 || (downlink >= 2.5 && downlink <= 6.5)) {
+        // 4GB RAM phone or normal 4G: start with 720p or 480p for smooth lag-free playback
+        priorityOrder = ["720p", "480p", "1080p", "360p"];
+      } else if (downlink > 6.5) {
+        // Fast Wi-Fi / 5G: start with 1080p or 720p
+        priorityOrder = ["1080p", "720p", "480p", "360p"];
+      }
+    } catch {}
+
+    for (const target of priorityOrder) {
+      const match = normalizedMap.get(target);
+      if (match) return match;
+    }
+
+    return availableQualities[0];
+  }
+
+  /**
+   * Resolves the best source URL for a server that may have separate per-quality links
+   * (`1080p`, `720p`, `480p`, `360p`) or a single default URL.
+   */
+  public static selectSourceUrlForQuality(
+    defaultUrl?: string,
+    qualityLinks?: Record<string, string>,
+    requestedQuality?: string
+  ): {
+    chosenUrl: string;
+    chosenQuality: string;
+    availableQualities: string[];
+    cleanQualityLinks: Record<string, string>;
+  } {
+    const cleanLinks: Record<string, string> = {};
+    if (qualityLinks && typeof qualityLinks === "object") {
+      const order = ["1080p", "720p", "480p", "360p"];
+      for (const k of Object.keys(qualityLinks)) {
+        const val = qualityLinks[k];
+        if (typeof val === "string" && val.trim().length > 0 && k.toLowerCase() !== "default") {
+          cleanLinks[k] = val.trim();
+        }
+      }
+      // Sort keys in standard resolution order
+      const sortedKeys = Object.keys(cleanLinks).sort((a, b) => {
+        const ia = order.indexOf(a.toLowerCase());
+        const ib = order.indexOf(b.toLowerCase());
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      });
+      const orderedLinks: Record<string, string> = {};
+      for (const k of sortedKeys) {
+        orderedLinks[k] = cleanLinks[k];
+      }
+      Object.assign(cleanLinks, orderedLinks);
+    }
+
+    const availableQualities = Object.keys(cleanLinks);
+    if (availableQualities.length === 0) {
+      return {
+        chosenUrl: (defaultUrl || "").trim(),
+        chosenQuality: requestedQuality || "auto",
+        availableQualities: [],
+        cleanQualityLinks: {},
+      };
+    }
+
+    // If user explicitly picked a quality (e.g. 480p or 720p) and it exists in cleanLinks
+    if (requestedQuality && requestedQuality.toLowerCase() !== "auto") {
+      const reqLower = requestedQuality.toLowerCase().trim();
+      const exactKey = availableQualities.find(
+        (q) => q.toLowerCase() === reqLower || q.toLowerCase() === `${reqLower}p`
+      );
+      if (exactKey && cleanLinks[exactKey]) {
+        return {
+          chosenUrl: cleanLinks[exactKey],
+          chosenQuality: exactKey,
+          availableQualities,
+          cleanQualityLinks: cleanLinks,
+        };
+      }
+    }
+
+    // Otherwise auto-select optimal quality for user's network & RAM
+    const optimalQ = this.getOptimalInitialQuality(availableQualities);
+    const chosenUrl = cleanLinks[optimalQ] || cleanLinks[availableQualities[0]] || (defaultUrl || "").trim();
+
+    return {
+      chosenUrl,
+      chosenQuality: optimalQ,
+      availableQualities,
+      cleanQualityLinks: cleanLinks,
+    };
+  }
+
+  /**
+   * Clears all cached stream extraction tokens from sessionStorage and localStorage.
+   */
+  public static clearAllStreamCache(): number {
+    let removed = 0;
+    try {
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const k = sessionStorage.key(i);
+        if (k && k.startsWith(CACHE_PREFIX)) {
+          sessionStorage.removeItem(k);
+          removed++;
+        }
+      }
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(CACHE_PREFIX)) {
+          localStorage.removeItem(k);
+          removed++;
+        }
+      }
+    } catch {}
+    return removed;
+  }
 }
+

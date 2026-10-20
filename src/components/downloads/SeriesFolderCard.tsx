@@ -51,12 +51,10 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
 
   const handleDeleteAll = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm(`Delete all ${episodes.length} episodes of "${seriesTitle}" from device storage?`)) {
-      if (onDeleteSeries) {
-        onDeleteSeries(episodes);
-      } else {
-        episodes.forEach((ep) => onDeleteEpisode(ep.id));
-      }
+    if (onDeleteSeries) {
+      onDeleteSeries(episodes);
+    } else {
+      episodes.forEach((ep) => onDeleteEpisode(ep.id));
     }
   };
 
@@ -67,16 +65,18 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
         onClick={() => setIsExpanded((prev) => !prev)}
         className="flex items-center gap-3 p-3.5 cursor-pointer hover:bg-white/[0.02] transition"
       >
-        {/* Poster with stacked folder appearance */}
+        {/* Poster with single clean episode badge */}
         <div className="relative h-[92px] w-[62px] flex-shrink-0 rounded-xl overflow-hidden bg-[#181820] border border-white/10 shadow-md group">
           <img
             src={posterUrl}
             alt={seriesTitle}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition group-hover:scale-105"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
           
-          {/* Episode count badge on thumbnail */}
+          {/* Single clean episode count badge on thumbnail */}
           <div className="absolute bottom-1 left-1 right-1 flex items-center justify-center bg-purple-600/90 backdrop-blur-xs rounded py-0.5 text-[9px] font-black text-white">
             {episodes.length} Eps
           </div>
@@ -84,13 +84,6 @@ export const SeriesFolderCard: React.FC<SeriesFolderCardProps> = ({
 
         {/* Series Info */}
         <div className="flex flex-1 flex-col justify-center min-w-0 pr-1 text-left">
-          <div className="flex items-center gap-1.5 mb-1">
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-[10px] font-extrabold text-purple-300 uppercase tracking-wider">
-              {isExpanded ? <FolderOpen className="h-3 w-3 text-purple-400" /> : <Folder className="h-3 w-3 text-purple-400" />}
-              <span>Series Folder</span>
-            </span>
-          </div>
-
           <h4 className="text-sm sm:text-base font-extrabold text-white truncate max-w-[220px] sm:max-w-xs">
             {seriesTitle}
           </h4>

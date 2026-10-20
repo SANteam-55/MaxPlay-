@@ -33,11 +33,7 @@ export const HomeStack: React.FC<HomeStackProps> = ({
 
   const handleBack = () => {
     pop();
-    try {
-      if (window.location.hash.includes('-detail')) {
-        window.history.back();
-      }
-    } catch (_) {}
+    window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_HOME'));
   };
 
   const current = stack[stack.length - 1];
@@ -50,12 +46,16 @@ export const HomeStack: React.FC<HomeStackProps> = ({
     if (prevIsOpenRef.current !== isDetailOpen) {
       prevIsOpenRef.current = isDetailOpen;
       onDetailOpenChangeRef.current?.(isDetailOpen);
+      if (!isDetailOpen) {
+        window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_HOME'));
+      }
     }
   }, [isDetailOpen]);
 
   React.useEffect(() => {
     const handlePopStack = () => {
       pop();
+      window.dispatchEvent(new CustomEvent('MAXPLAY_RESTORE_SCROLL_HOME'));
     };
     window.addEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
     const handleSelectExternal = (e: any) => {
@@ -70,6 +70,7 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   }, []);
 
   const handleSelect = (item: any) => {
+    window.dispatchEvent(new CustomEvent('MAXPLAY_SAVE_SCROLL_HOME'));
     if (item.isCollection) {
       push({ name: 'collection_detail', item });
     } else {
@@ -79,58 +80,66 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   };
 
   const handleSelectNetwork = (network: NetworkItem) => {
+    window.dispatchEvent(new CustomEvent('MAXPLAY_SAVE_SCROLL_HOME'));
     push({ name: 'network_detail', network });
   };
 
   return (
     <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
       {/* Base HomeScreen - Permanently Mounted to preserve exact scroll position */}
-      <div className={`h-full w-full ${current.name !== 'home' ? 'pointer-events-none' : ''}`}>
+      <div className={`h-full w-full ${current.name !== 'home' ? 'pointer-events-none invisible' : 'visible'}`}>
         <HomeScreen
           onSelectContent={handleSelect}
           onSelectNetwork={handleSelectNetwork}
           onOpenSearch={onOpenSearch}
           onOpenNotifications={onOpenNotifications}
           onSeeAllCategory={(category) => {
+            window.dispatchEvent(new CustomEvent('MAXPLAY_SAVE_SCROLL_HOME'));
             push({ name: 'filter', query: category });
           }}
         />
       </div>
 
-      {/* Stack Overlay Screens */}
-      {current.name !== 'home' && (
-        <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
-          {current.name === 'network_detail' && (
-            <NetworkDetailScreen
-              network={current.network}
-              onBack={handleBack}
-              onSelectContent={handleSelect}
-            />
-          )}
-          {current.name === 'collection_detail' && (
-            <CollectionDetailScreen
-              collection={current.item}
-              onBack={handleBack}
-              onSelectContent={handleSelect}
-            />
-          )}
-          {current.name === 'detail' && (
-            <ContentDetailScreen
-              content={current.item}
-              onBack={handleBack}
-              onSelectContent={handleSelect}
-            />
-          )}
-          {current.name === 'filter' && (
-            <FilterScreen
-              initialFilter={current.query}
-              onBack={handleBack}
-              onOpenSearch={onOpenSearch}
-              onSelectContent={handleSelect}
-            />
-          )}
-        </div>
-      )}
+      {/* Stack Overlay Screens - Keep intermediate screens mounted so back button preserves scroll position */}
+      {stack.slice(1).map((screen, idx) => {
+        const isTop = idx === stack.length - 2;
+        return (
+          <div
+            key={`${screen.name}-${idx}`}
+            className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${isTop ? 'block' : 'hidden'}`}
+          >
+            {screen.name === 'network_detail' && (
+              <NetworkDetailScreen
+                network={screen.network}
+                onBack={handleBack}
+                onSelectContent={handleSelect}
+              />
+            )}
+            {screen.name === 'collection_detail' && (
+              <CollectionDetailScreen
+                collection={screen.item}
+                onBack={handleBack}
+                onSelectContent={handleSelect}
+              />
+            )}
+            {screen.name === 'detail' && isTop && (
+              <ContentDetailScreen
+                content={screen.item}
+                onBack={handleBack}
+                onSelectContent={handleSelect}
+              />
+            )}
+            {screen.name === 'filter' && (
+              <FilterScreen
+                initialFilter={screen.query}
+                onBack={handleBack}
+                onOpenSearch={onOpenSearch}
+                onSelectContent={handleSelect}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

@@ -1,108 +1,115 @@
-# MaxPlay Ultra-Fast Filemoon & VOE Stream Extraction and Zero-Buffering Player Optimization Plan
+# MaxPlay — Complete Optimization, Multi-Quality Server Architecture & Native APK Enhancement Plan
 
-This plan eliminates the multi-switch delay and iframe fallback on Server 2 (Filemoon/Byse), aligns the Kotlin native scraper with the latest Byse cryptographic API so extraction succeeds on the very first attempt in ~0.8–1.5 seconds, optimizes VOE.sx extraction speed, and tunes the HLS player buffer for instant startup and smooth, uninterrupted playback—while strictly preserving 100% of existing MaxPlay features, database structures, and backend routes.
-
----
-
-### User Review & Critical Decisions
-
-> [!IMPORTANT]
-> **MaxPlay System Protection Guarantee**: All existing Firestore schemas, authentication flows, Admin Panel structures, and API contracts remain 100% untouched and backward-compatible. Changes are strictly targeted at fixing the root causes of Filemoon extraction retries, removing unnecessary proxy hops on the Android APK, pre-warming streams in the background, and tuning HLS.js playback buffering.
-
-- **Confirmed Default 1 — Hybrid Direct CDN + Web Proxy Delivery**: Inside the Android Kotlin APK, Filemoon streams play directly from SprintCDN using the user's own device IP (with native `Referer`/`Origin` injection via `CorsFreeWebViewClient`), eliminating double-hop proxy bandwidth load. On standard Web browsers, the `/proxy/m3u8` and `/proxy/ts` routes remain active so browser CORS restrictions never block playback.
-- **Confirmed Default 2 — First-Try 100% Byse API & Attestation Pre-Warming**: Synchronize the Kotlin native scraper's ECDSA P-256 challenge/attestation, 512-word PoW solver, `X-Embed-*` headers, and version-aware AES-256-GCM key-part selector with the latest Byse protocol, and extend attestation fingerprint caching to 30 minutes with background pre-warming so Server 2 resolves on the first switch without 16-second fallback timeouts.
-- **Confirmed Default 3 — Instant Metadata Parsing & HLS Buffer Tuning**: Skip redundant sub-playlist downloads during playback stream resolution (saving 1.5–3 seconds per extraction), pre-resolve both Server 1 and Server 2 in the background when the user opens a title's Detail Screen, and configure HLS.js with low-latency startup and adaptive buffer window settings.
+## 🛡️ 0. MaxPlay Existing System Protection Guarantee
+- **100% Backward Compatibility:** All existing movies, web series, anime, episodes, Firestore documents, authentication flows, and security rules remain untouched and fully functional.
+- **Additive Multi-Quality Schema:** Existing content that only has a single `videoUrl` (Server 1) or `secondaryVideoUrl` (Server 2) will continue to play and download exactly as before. New multi-quality links (`1080p`, `720p`, `480p`, `360p`) are stored in the existing optional fields `qualityLinks` (Server 1) and `secondaryQualityLinks` (Server 2), while automatically keeping `videoUrl` and `secondaryVideoUrl` populated with the primary stream URL so no existing screen or service breaks.
 
 ---
 
-### 1. Overview & Core Concept
+## 🎚️ 1. Multi-Quality Server Link System (`1080p`, `720p`, `480p`, `360p` per Server)
 
-- **What It Does**:
-  1. **Fixes the "3rd Switch Success" Bug on Server 2 (Filemoon/Byse)**: Previously, switching to Server 2 failed twice before working on the 3rd try because:
-     - In the Kotlin native scraper, the Byse API stage used an outdated ECDSA challenge format, lacked `X-Embed-Origin`/`X-Embed-Referer`/`X-Embed-Parent` headers, used a 16-word PoW hash instead of the 512-word ChaCha-like PoW hash, and ignored the dynamic `version` index when selecting AES-256-GCM `key_parts` (`[kParts[verNum - 1], kParts[31 - verNum - 1]]`). This caused Stage 1A to fail and waste ~16 seconds across HTML/WebView fallbacks.
-     - On the server, manifest metadata probing (`parseHlsManifestMetadata`) fetched the master `.m3u8` without passing the required Filemoon `Referer` header and downloaded a full media sub-playlist to sum `#EXTINF` segment durations, adding 2–4 seconds of extra delay on cold extractions.
-  2. **Restores Direct CDN Speed on Android APK**: Returns both the raw SprintCDN `.m3u8` URL (`rawM3u8Url`) and the web-proxied URL (`m3u8Url`) from extraction endpoints so the Kotlin APK always streams directly from the CDN on the same IP that extracted the token, while Web browsers seamlessly use the proxy.
-  3. **Accelerates VOE.sx Extraction**: Parallelizes and prioritizes direct OkHttp/in-memory HTML + packer + `wc0` JSON decoding with extended 30-minute attestation/session caching and zero-wait manifest resolution.
-  4. **Eliminates Player Buffering**: Pre-extracts both Server 1 (VOE.sx) and Server 2 (Filemoon) in the background as soon as the user views the Content Detail Screen, and configures the HLS player with fast initial fragment loading, worker offloading, and proactive stall recovery.
-- **Target Audience / Persona**: MaxPlay viewers watching movies, web series, and anime on the Android APK and Web app who expect instant playback start, zero iframe popups, and instant server switching between Server 1 and Server 2.
-- **Key Value**: Cuts cold Filemoon extraction time from ~16–20 seconds down to **~0.8–1.5 seconds** on the first click, drops cached/pre-warmed server switching to **0ms (instant)**, and prevents mid-stream buffering stalls.
+### A. Admin Panel (`AdminDashboardScreen.tsx`) — Movie & Series Episode Cards
+- **4 Quality Slots per Server with `[✕]` Remove & `+ Add` Controls:**
+  - Under **Server 1 (Primary Stream)** and **Server 2 (Secondary Stream)** in Smart HLS Mode (for both Movie upload/edit and Series Episode cards), display 4 labeled quality input rows: **`1080p`**, **`720p`**, **`480p`**, and **`360p`**.
+  - Each quality input row includes a **`[✕]`** button on the right to remove/hide any unneeded quality box, plus quick **`+ 1080p` / `+ 720p` / `+ 480p` / `+ 360p`** restore pills so the Admin can fill 1, 2, 3, or all 4 qualities as needed.
+  - **Smart Auto-Sync on Save:**
+    - Server 1 slots save into `qualityLinks: { '1080p'?: string, '720p'?: string, '480p'?: string, '360p'?: string }`, and automatically set `videoUrl` to the highest/first provided link for 100% backward compatibility.
+    - Server 2 slots save into `secondaryQualityLinks: { '1080p'?: string, '720p'?: string, '480p'?: string, '360p'?: string }`, and automatically set `secondaryVideoUrl` to the highest/first provided link.
+    - When editing an older Movie/Episode that only has `videoUrl` or `secondaryVideoUrl`, it automatically loads into the `1080p` (or default) box so nothing is ever lost.
 
----
+### B. How the App & APK Decide Which Quality Link to Scrape First (`SmartStreamService` & `ContentDetailScreen`)
+- **Step 1 — User Preference Check:** Checks `localStorage.getItem('maxplay_preferred_quality')` (`Auto`, `1080p`, `720p`, `480p`, `360p`). If the user explicitly chose e.g. `480p` or `720p` and that link exists on the active server, the app scrapes that exact link first.
+- **Step 2 — Smart Network & RAM Auto-Detection (When set to `Auto`):**
+  - Checks `navigator.connection` (`effectiveType` and `downlink` Mbps) + `navigator.deviceMemory`:
+    - **Weak / Slow Network (`2g`, `3g`, or `downlink < 2.5 Mbps`) or Low-RAM (`<= 4GB`):** Automatically selects **`480p`** (or `360p` / `720p` fallback) first so the video starts **instantly with zero buffering**.
+    - **Normal 4G (`downlink 2.5 – 6 Mbps`):** Selects **`720p`** first for fast startup and crisp HD quality.
+    - **Fast Wi-Fi / 5G (`downlink > 6 Mbps`):** Selects **`1080p`** (or `720p`) first.
+- **Step 3 — Background Next-Quality Pre-Warm:** Only the single chosen quality link is scraped initially for instant playback; if the user opens the Quality Drawer and picks another quality, that quality link is resolved on demand (and cached in `SmartStreamService`).
 
-### 2. User Experience & Visual Design
-
-- **Key User Flows**:
-  1. **Zero-Latency Pre-Warming on Detail Screen Arrival**: When a user opens any Movie or Series Detail Screen, the app silently pre-warms the stream extraction for both Server 1 (VOE.sx) and Server 2 (Filemoon/Byse) in the background.
-  2. **Instant First-Click Playback**: When the user taps Play or switches between Server 1 and Server 2 in the Server Selection Modal, the already-resolved `.m3u8` stream starts immediately in the native MaxPlay custom HLS player without falling back to an external iframe.
-  3. **Seamless Quality & Audio Track Switching**: Multi-audio tracks (e.g., Hindi, English, Japanese) and resolutions (1080p, 720p, 480p, Auto) load directly from the HLS master manifest with smooth timestamp preservation.
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Preserves MaxPlay's signature dark cinema aesthetic (`#0a0a0c` canvas, sleek glassmorphic player overlays, and responsive mobile-first touch controls with $\ge 44 \times 44\text{px}$ hitboxes).
-  - *Color Palette & Mood*: Deep obsidian backgrounds (`bg-zinc-950`), subtle translucent control surfaces (`bg-black/60 backdrop-blur-md`), emerald status accents for active servers, and high-contrast typography.
-  - *Typography & Hierarchy*: Clean sans-serif UI controls paired with `tabular-nums` for playback timestamps, duration counters, and download file size indicators.
-  - *Component Styling & Layout*: Existing `InlinePlayer` and `ContentDetailScreen` layouts are preserved 100% intact.
-- **Interactive Feedback & Motion**:
-  - Smooth spinner transition during stream resolution, instant quality/audio modal switching ($\le 150\text{ms}$), and automatic silent token refresh if a stream token expires after 3 hours.
-
----
-
-### 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Synchronizing Byse AES-256-GCM + ECDSA Attestation Across Kotlin & Node Backend**
-  - *Chosen Approach*: Upgrade the Kotlin native `extractByseApiStream` pipeline to match the exact JWK ECDSA P-256 challenge/attestation structure, 512-word PoW solver, `X-Embed-*` headers, and version-indexed `key_parts` decryption (`[kParts[verNum - 1], kParts[31 - verNum - 1]]`), and cache attestation fingerprints for 30 minutes per domain.
-  - *Why*: Byse (`byseraguci.com` / `f16px.com` / `filemoon`) rotates key parts using `pb.version`. Supporting version-indexed decryption and caching the attestation token makes Step 1 succeed 100% of the time in ~0.8–1.2 seconds without needing a 3rd retry.
-  - *Alternatives Considered*: Relying on the offscreen WebView sniffer (`sniffStreamAsync`), which was rejected as a primary path because booting an offscreen WebView takes 6–9 seconds and consumes mobile RAM.
-
-- **Decision 2: Fast-Path Manifest Parsing (Skipping Sub-Playlist Downloads During Playback)**
-  - *Chosen Approach*: Pass the extracted `Referer` header into `parseHlsManifestMetadata` so master playlist parsing never gets 403-blocked, and skip downloading the secondary media `.m3u8` sub-playlist when resolving a stream for playback (using the master playlist's `#EXT-X-STREAM-INF` bandwidth/resolution headers directly).
-  - *Why*: Downloading a full sub-playlist of hundreds of `.ts` segments just to sum `#EXTINF` durations added 1.5–3.5 seconds of unnecessary delay after the `.m3u8` URL was already extracted. The HTML5 video element and HLS.js automatically read the exact duration as soon as the master manifest loads.
-  - *Alternatives Considered*: Removing manifest metadata parsing entirely, which was rejected because the Admin Panel and Download Modal still benefit from quality and audio track lists parsed from the master playlist.
-
-- **Decision 3: Direct CDN URL in Kotlin APK vs. Proxy URL in Web Browser**
-  - *Chosen Approach*: Include `rawM3u8Url` alongside `m3u8Url` in the backend extraction payload, and have the Stream Resolver select the direct SprintCDN URL (`rawM3u8Url`) when running inside the Kotlin APK while using the proxied `/proxy/m3u8` URL on standard Web browsers.
-  - *Why*: Inside the Kotlin APK, `CorsFreeWebViewClient` already intercepts `.m3u8` and `.ts` requests natively via OkHttp on the user's own IP with `Referer: https://byseraguci.com/`. Streaming directly from SprintCDN avoids routing video bytes through the backend server and eliminates proxy buffering.
-
-- **Decision 4: Background Server Pre-Warming & HLS.js Buffer Optimization**
-  - *Chosen Approach*: Trigger non-blocking background stream resolution (`SmartStreamService.prefetchStream`) for both Primary (Server 1) and Secondary (Server 2) URLs when a title loads, and configure HLS.js with `enableWorker: true`, `lowLatencyMode: false`, `backBufferLength: 30`, `maxBufferLength: 45`, `maxMaxBufferLength: 90`, `startFragPrefetch: true`, and `fragLoadingMaxRetry: 6`.
-  - *Why*: Pre-warming in the background means the `.m3u8` link is already cached in memory before the user taps Play or switches to Server 2, and tuned HLS buffer parameters eliminate micro-stalls on mobile networks.
+### C. Hybrid Player Quality Drawer & Seamless Mid-Playback Switching (`InlinePlayer.tsx`)
+- **Unified Quality Drawer (`QualityDrawer.tsx`):**
+  - Displays internal HLS variant qualities (`hlsQualities`) when a single Master `.m3u8` contains multiple resolutions.
+  - Displays the Admin-configured per-server quality links (`1080p`, `720p`, `480p`, `360p` from `qualityLinks` for Server 1 or `secondaryQualityLinks` for Server 2) when separate quality links are provided!
+- **Seamless Timestamp & Audio Track Preservation:**
+  - When a user switches quality (e.g., `1080p` → `480p`) via separate server links:
+    1. Saves exact `currentTime` (e.g., `18:24`), play state, and active audio language (`currentLanguage`, e.g., `Hindi`).
+    2. Extracts/resolves the `480p` link for the active server via `SmartStreamService`.
+    3. Loads the new `.m3u8` stream at `18:24` and automatically locks onto the same `Hindi` audio track (since all quality copies share the same multi-audio tracks).
 
 ---
 
-### 4. Technical Architecture & Data Strategy *(Technical Reference)*
+## 📥 2. Download Engine Fixes: Zero First-Try Failures, Locked MB Size, Unique Series MB & Turbo Speed
 
-- **Architecture & Component Diagram**:
+### A. Fix First-Try Series Multi-Episode Download Failure (`downloadManager.ts` & `smartStreamService.ts`)
+- **Root Cause Fixed:** When opening the Download Modal and immediately queuing 2+ episodes, the modal probe and episode downloader triggered concurrent cold extractions that could time out on the first try.
+- **Solution:**
+  1. **In-Flight Extraction Deduplication:** Share a single `inFlightExtractions: Map<string, Promise<any>>` in `SmartStreamService` so the Download Modal probe and `DownloadManager` reuse the exact same ongoing extraction instead of colliding.
+  2. **3x Automatic Silent Retry with Backoff:** In `DownloadManager.processTask`, wrap stream extraction and manifest probing in a 3-attempt auto-retry loop (`0ms` → `1200ms` → `2500ms`, with `forceRefresh: true` on retry) before ever marking an episode as `failed`.
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Content Detail Screen                                │
-│  • Auto-detects available servers (Server 1: VOE.sx | Server 2: Filemoon)   │
-│  • Background Prefetcher warms both Server 1 & Server 2 on screen mount      │
-└───────────────────┬──────────────────────────────────────┬───────────────────┘
-                    │                                      │
-                    ▼                                      ▼
-┌───────────────────────────────────────┐  ┌───────────────────────────────────┐
-│          Inline HLS Player            │  │       Smart Stream Service        │
-│  • Tuned HLS.js Buffer & Prefetch     │◄─┤  • In-Memory + Storage Cache      │
-│  • Instant Quality & Audio Switching  │  │  • Deduplicated In-Flight Map     │
-│  • Auto Token Renewal on 403/Expiry   │  │  • Selects Direct vs Proxy URL    │
-└───────────────────┬───────────────────┘  └───────┬───────────────────┬───────┘
-                    │                              │                   │
-        ┌───────────┴───────────┐                  │ (Android APK)     │ (Web Browser)
-        ▼                       ▼                  ▼                   ▼
-┌───────────────────┐   ┌───────────────┐  ┌───────────────┐   ┌───────────────┐
-│ Kotlin APK Stream │   │  Web Browser  │  │ Kotlin Native │   │ Node Backend  │
-│  Interceptor      │   │  Proxy Stream │  │ Scraper Engine│   │ Scraper Engine│
-│  (Direct CDN +    │   │  (/proxy/m3u8 │  │ • Byse API v2 │   │ • Byse API v2 │
-│   OkHttp Referer) │   │   & /proxy/ts)│  │ • Fast VOE    │   │ • Fast Manifest│
-└───────────────────┘   └───────────────┘  └───────────────┘   └───────────────┘
-```
+### B. Fix Fluctuating Total MB (800 MB ↔ 900 MB) During Download (`clientHlsDownloader.ts`)
+- **Root Cause Fixed:** Variable Bitrate (VBR) `.ts` segments caused `estimatedTotalBytes = avgSegmentBytes * totalSegments` to jump up and down after every batch.
+- **Solution:** Lock `lockedTotalMb` at the start of the download using the playlist bandwidth × actual `#EXTINF` total duration (calibrated once after the first 5 segments), and **never recalculate total MB upward/downward mid-download**. At 100% completion, snap `downloadedMb = totalMb`.
 
-- **Data Model & State**:
-  - **Attestation Cache (`byseAttestCache`)**: Stores verified Byse ECDSA P-256 fingerprint objects per embed origin (`byseraguci.com`, `f16px.com`, etc.) with a 30-minute TTL and automatic startup/background pre-warming so individual video extractions skip the challenge/attestation round-trip.
-  - **Stream Extraction Cache (`streamExtractionCache` & Client Cache)**: Stores `{ m3u8Url, rawM3u8Url, rawQualityLinks, qualityLinks, qualities, audioTracks, duration, headers, expiresAt }` for 170 minutes (2h 50m).
-- **Interactive Component & State Mapping**:
-  - **Detail Screen Mount**: Calls `SmartStreamService.prefetchStream(primaryServerUrl)` and `SmartStreamService.prefetchStream(secondaryServerUrl)` asynchronously in the background without blocking UI rendering.
-  - **Server Switch Modal (`Server 1` ↔ `Server 2`)**: Reads pre-warmed stream directly from `SmartStreamService` cache (`0ms` lookup) and mounts `InlinePlayer` with the resolved master `.m3u8`.
-  - **Kotlin vs. Web Stream Selection**:
-    - If `NativeBridgeService.isRunningInKotlinApp()` is true: Uses `InbuiltStreamScraper` (Stage 1A Byse API v2 / VOE OkHttp) and registers the stream `Referer` in `CorsFreeWebViewClient`. If fallback to the backend occurs, it extracts `rawM3u8Url` and `rawQualityLinks` so playback remains 100% direct-to-CDN without `/proxy/m3u8`.
-    - If running in a standard Web browser: Uses `/proxy/m3u8` and `/proxy/ts` with upstream connection keep-alive and custom `Referer` injection.
-  - **HLS.js Playback & Recovery Engine**: Uses `startFragPrefetch: true` and `maxBufferLength: 45` with automatic fragment retry (`fragLoadingMaxRetry: 6`) and seamless media/audio codec recovery so transient network drops never trigger an iframe fallback.
+### C. Fix Duplicate MB Across Different Series in Download Modal (`DownloadSelectionModal.tsx` & `clientHlsDownloader.ts`)
+- **Root Cause Fixed:** Episodes defaulted to `1440s` (24m) duration and Master `.m3u8` playlists only list `BANDWIDTH` without `#EXTINF` durations, causing different series with similar bitrates to display identical MB estimates.
+- **Solution:**
+  1. In `ClientHlsDownloader.probeMasterPlaylist`, automatically fetch the first variant sub-playlist header to sum the **real `#EXTINF` segment durations** (`actualDurationSec`), giving every series and episode its true unique duration and MB size.
+  2. Scope the metadata cache key with `${content.id}_s${selectedSeasonIdx}_e${focusedEpisodeIdx}_${targetUrl}` so one series never inherits another series's cached MB.
+
+### D. Lock Top Filter Bar (Server + Language + Quality) Across "Select All" Episodes (`DownloadSelectionModal.tsx`)
+- When the user selects **Server (`Server 1` / `Server 2`)**, **Audio Language (e.g. `Hindi`)**, and **Video Quality (e.g. `480p` or `720p`)** in the top filter bar and clicks **Select All** (or selects multiple episodes):
+  - Every queued episode receives the exact selected `server`, `language`, and `quality`.
+  - For each episode, `resolveItemDownloadUrl` picks that episode's matching quality link (`qualityLinks[selectedQuality]` for Server 1, or `secondaryQualityLinks[selectedQuality]` for Server 2, or master URL with `selectedQuality` variant selection) + matching audio language track.
+
+### E. Maximum Network Speed Turbo Downloader (`clientHlsDownloader.ts` & `MainActivity.kt`)
+- **Continuous Sliding Window Worker Pool (8 Parallel Workers):** Replace the 5-segment blocking `Promise.all` batch loop (which waited for the slowest segment in every batch of 5) with an **8-worker continuous sliding pool** so all 8 workers stay 100% saturated without pauses between batches.
+- **Kotlin Native `OkHttpClient` High-Concurrency Tuning (`MainActivity.kt`):** Configure `Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 16 }` on the shared `OkHttpClient` to eliminate host connection throttling during HLS segment downloads.
+
+---
+
+## 🏷️ 3. Hide Provider Names (`voe.sx`, `filemoon`, `byse`) Everywhere in User UI
+- **`ContentDetailScreen.tsx` & `DownloadSelectionModal.tsx`:**
+  - Replace all user-facing strings (`Voe.sx`, `Filemoon / Byse`, `Primary Stream (Voe.sx)`, `Secondary Stream (Filemoon / Byse)`) with clean brand labels:
+    - **`Server 1`** — *High-Speed Primary Stream*
+    - **`Server 2`** — *Turbo Backup Stream*
+
+---
+
+## 🗣️ 4. Sync External Language Selector with Player's Discovered Audio Tracks (`ContentDetailScreen.tsx`)
+- **Root Cause Fixed:** The external language selector modal (`SoloLevelingSelectorModal`) only read static Firestore `content.languages`, while `InlinePlayer`'s internal Audio Drawer read live `#EXT-X-MEDIA:TYPE=AUDIO` tracks discovered from the `.m3u8` manifest (`discoveredHlsAudioTracks`).
+- **Solution:** Merge `discoveredHlsAudioTracks` into `availableLanguages` in `ContentDetailScreen.tsx` so the external Language button and `SoloLevelingSelectorModal` immediately show all real audio tracks discovered by the player, and selecting a language from either place stays 100% synced.
+
+---
+
+## 🔊 5. Online Player Real Hardware Volume & Brightness (`InlinePlayer.tsx`)
+- Connect `InlinePlayer.tsx`'s left-side vertical swipe (Brightness) and right-side vertical swipe (Volume) + volume controls directly to `NativeBridgeService.setNativeBrightness()` and `NativeBridgeService.setNativeVolume()` / `getNativeVolume()`, matching `OfflinePlayer.tsx` so gestures control the real Android phone hardware volume and screen brightness.
+
+---
+
+## 🔙 6. Fix Back-Navigation Scroll Jump to Top (`ThreeColumnRow.tsx`, `HomeScreen.tsx`, `AnimeScreen.tsx`, `SearchScreen.tsx`)
+- **Root Cause Fixed:**
+  1. `ThreeColumnRow.tsx` had `useEffect(() => setDisplayCount(9), [items])` which reset the grid back to 9 items every time `HomeScreen` re-rendered (every 4 seconds from the search placeholder timer!), collapsing the scroll height while `ContentDetailScreen` was open.
+  2. Scroll container `scrollTop` was not locked/restored across detail screen open/close transitions.
+- **Solution:**
+  1. In `ThreeColumnRow.tsx`, only reset `displayCount` if the category/tab actually changes, never when `items` array reference updates with the same content IDs.
+  2. Save `scrollRef.current.scrollTop` right before opening `ContentDetailScreen` and restore it via `requestAnimationFrame` when returning via the Android Triangle Back button or in-app Back button.
+
+---
+
+## 🖼️ 7. Persistent Native Disk Image Cache in Kotlin APK (`CorsFreeWebViewClient.kt` & `MainActivity.kt`)
+- **Root Cause Fixed:** External image hosts (`ibb.co`, `postimg.cc`, `tmdb.org`, `unsplash.com`) were re-downloaded on cold app restarts because WebView memory cache cleared on process exit.
+- **Solution:**
+  - Add a **Persistent Disk Image Cache (`MaxPlayImageCache` — 250 MB LRU in `context.cacheDir/poster_cache`)** inside `CorsFreeWebViewClient.shouldInterceptRequest`:
+    - Intercepts image requests (`.jpg`, `.jpeg`, `.png`, `.webp`, `.avif` or image host domains).
+    - If SHA-256 key exists on disk, serves the image **instantly in 0ms from local storage** with `Cache-Control: public, max-age=31536000, immutable` — zero internet used on app restarts!
+    - If not cached yet, fetches via `sharedHttpClient`, streams to WebView, and writes to disk cache in the background.
+
+---
+
+## ⚡ 8. 4GB RAM Phone Performance Optimization & APK Polish
+1. **Isolate Rotating Search Bar Placeholder (`HomeScreen.tsx`):** Move the 4-second `tagIndex` timer into an isolated memoized component so `HomeScreen` never re-renders its 100+ movie cards every 4 seconds.
+2. **Freeze Background Screens During Video Playback (`App.tsx` / `HomeScreen.tsx` / `HeroBannerCarousel.tsx`):** Pause `HeroBannerCarousel` auto-slide and background timers whenever `ContentDetailScreen` is open or another tab is active.
+3. **Throttle Player `onTimeUpdate` Re-renders (`InlinePlayer.tsx`):** When player controls are hidden during playback, update `currentTime` React state once per second (`1000ms` throttle) instead of 4–5 times per second, cutting CPU/React reconciliation overhead by **75%** on 4GB RAM phones.
+4. **Clean Up Downloads Storage Footer (`DownloadsScreen.tsx`) & Settings Cache Control (`SettingsScreen.tsx`):**
+   - Replace the hardcoded `3.5 GB Free` text and non-functional Transfer modal in `DownloadsScreen.tsx` with real calculated storage usage (`navigator.storage.estimate()` + actual downloaded MB).
+   - Add a **Clear Image & Stream Cache** action in `SettingsScreen.tsx` that clears cached stream tokens and temporary cache without touching downloaded offline videos.

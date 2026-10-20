@@ -278,6 +278,38 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
               When enabled, navigating away from the app during playback will automatically trigger Picture-in-Picture.
             </p>
           </div>
+
+          {/* Clear Stream & Image Cache (Keeps Offline Downloads Safe) */}
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                const keysToRemove: string[] = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                  const k = localStorage.key(i);
+                  if (k && (k.startsWith('maxplay_stream_cache') || k.startsWith('maxplay_probe_'))) {
+                    keysToRemove.push(k);
+                  }
+                }
+                keysToRemove.forEach((k) => localStorage.removeItem(k));
+                sessionStorage.clear();
+              } catch (_) {}
+              setModalInfo({
+                title: 'Cache Cleared',
+                body: 'Temporary stream tokens and session cache have been cleared to free up RAM. Your downloaded offline videos and account settings remain completely safe.',
+              });
+            }}
+            className="flex items-center justify-between p-4 hover:bg-[#1C1C1E]/50 transition cursor-pointer text-left outline-none w-full gap-4"
+          >
+            <div className="flex items-center gap-3 text-white min-w-0 shrink-0">
+              <RefreshCw className="h-5 w-5 text-[#EC4899] shrink-0" />
+              <span className="text-sm font-medium truncate">Clear Stream & Temp Cache</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-[#6B7280] min-w-0">
+              <span className="text-[11px] font-semibold text-[#A1A1AA]">Free RAM</span>
+              <ChevronRight className="h-4 w-4 shrink-0" />
+            </div>
+          </button>
         </div>
       </div>
 

@@ -22,7 +22,42 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
   const [activeSort, setActiveSort] = useState<'rating' | 'newest' | 'trending'>('rating');
 
+  const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = React.useRef<number>(0);
+
+  const handleScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    savedScrollTopRef.current = e.currentTarget.scrollTop;
+  }, []);
+
+  React.useEffect(() => {
+    const saveScroll = () => {
+      if (scrollContainerRef.current) {
+        savedScrollTopRef.current = scrollContainerRef.current.scrollTop;
+      }
+    };
+    const restoreScroll = () => {
+      const targetTop = savedScrollTopRef.current;
+      if (scrollContainerRef.current && targetTop > 0) {
+        scrollContainerRef.current.scrollTop = targetTop;
+        requestAnimationFrame(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = targetTop;
+          }
+        });
+      }
+    };
+    window.addEventListener('MAXPLAY_SAVE_SCROLL_ANIME', saveScroll);
+    window.addEventListener('MAXPLAY_RESTORE_SCROLL_ANIME', restoreScroll);
+    return () => {
+      window.removeEventListener('MAXPLAY_SAVE_SCROLL_ANIME', saveScroll);
+      window.removeEventListener('MAXPLAY_RESTORE_SCROLL_ANIME', restoreScroll);
+    };
+  }, []);
+
   const handleContentClick = (item: ContentItem) => {
+    if (scrollContainerRef.current) {
+      savedScrollTopRef.current = scrollContainerRef.current.scrollTop;
+    }
     onSelectContent?.(item);
     const isPrem = !!user?.isPremium;
     setTimeout(() => {
@@ -67,7 +102,11 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
   const ANIME_GENRES = ['All', 'Action', 'Fantasy', 'Dark Fantasy', 'Supernatural', 'Romance', 'Dubbed', 'Movies'];
 
   return (
-    <div className="flex h-full w-full flex-col overflow-x-hidden bg-[#0A0A0A] text-left select-none overflow-y-auto scrollbar-none pb-24 md:pb-8">
+    <div
+      ref={scrollContainerRef}
+      onScroll={handleScroll}
+      className="flex h-full w-full flex-col overflow-x-hidden bg-[#0A0A0A] text-left select-none overflow-y-auto scrollbar-none pb-24 md:pb-8"
+    >
       {/* Header Bar */}
       <div className="sticky top-0 z-30 bg-[#0A0A0A]/95 backdrop-blur-md border-b border-[#1C1C1E] px-4 pt-4 pb-3">
         <div className="flex items-center justify-between">

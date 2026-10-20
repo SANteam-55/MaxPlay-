@@ -113,10 +113,46 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     ? searchTags[tagIndex % searchTags.length]
     : 'Search movies, series & anime...';
 
-  // Handle scroll event to toggle sticky header background without redundant state updates
+  const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = React.useRef<number>(0);
+
+  // Handle scroll event to toggle sticky header background and record exact scroll position
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const nextScrolled = e.currentTarget.scrollTop > 80;
+    const top = e.currentTarget.scrollTop;
+    savedScrollTopRef.current = top;
+    try {
+      sessionStorage.setItem('MAXPLAY_HOME_SCROLL_TOP', String(top));
+    } catch (_) {}
+    const nextScrolled = top > 80;
     setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+  }, []);
+
+  // Restore exact scroll position when returning from ContentDetailScreen via Back button
+  useEffect(() => {
+    const handleSaveScroll = () => {
+      if (scrollContainerRef.current) {
+        savedScrollTopRef.current = scrollContainerRef.current.scrollTop;
+      }
+    };
+    const handleRestoreScroll = () => {
+      const targetTop =
+        savedScrollTopRef.current ||
+        Number(sessionStorage.getItem('MAXPLAY_HOME_SCROLL_TOP') || 0);
+      if (scrollContainerRef.current && targetTop > 0) {
+        scrollContainerRef.current.scrollTop = targetTop;
+        requestAnimationFrame(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = targetTop;
+          }
+        });
+      }
+    };
+    window.addEventListener('MAXPLAY_SAVE_SCROLL_HOME', handleSaveScroll);
+    window.addEventListener('MAXPLAY_RESTORE_SCROLL_HOME', handleRestoreScroll);
+    return () => {
+      window.removeEventListener('MAXPLAY_SAVE_SCROLL_HOME', handleSaveScroll);
+      window.removeEventListener('MAXPLAY_RESTORE_SCROLL_HOME', handleRestoreScroll);
+    };
   }, []);
 
   // Filter content based on active tab
@@ -183,6 +219,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   return (
     <div 
+      ref={scrollContainerRef}
       onScroll={handleScroll}
       className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] pb-24 md:pb-8 text-left select-none scrollbar-none relative"
     >
