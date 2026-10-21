@@ -297,11 +297,11 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
           />
         </div>
 
-        <div className="flex items-center justify-between text-[11px] text-white/90 mt-1">
-          <div className="flex items-center gap-2">
-            <span className="tabular-nums font-medium">{formatDuration(currentTime)}</span>
-            <span className="text-white/40">/</span>
-            <span className="tabular-nums text-white/70">{duration > 0 ? formatDuration(duration) : '--:--'}</span>
+        <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-white/90 mt-1 w-full min-w-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
+            <span className="tabular-nums font-medium shrink-0">{formatDuration(currentTime)}</span>
+            <span className="text-white/40 shrink-0">/</span>
+            <span className="tabular-nums text-white/70 shrink-0">{duration > 0 ? formatDuration(duration) : '--:--'}</span>
 
             {/* Playback Speed Badge Button right next to timestamp */}
             {onSpeedPress && (
@@ -311,24 +311,24 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
                   e.stopPropagation();
                   onSpeedPress();
                 }}
-                className="flex items-center justify-center h-[22px] px-2 ml-1 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[34px]"
+                className="flex items-center justify-center h-[20px] sm:h-[22px] px-1.5 sm:px-2 ml-0.5 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[28px] sm:min-w-[34px] shrink-0"
                 title="Change Playback Speed"
               >
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
                   {playbackRate === 1.0 ? '1X' : `${playbackRate}X`}
                 </span>
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* TV / Cast Icon */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {/* TV / Cast Icon (hidden on ultra-narrow portrait screens so Fullscreen never overflows) */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
               }}
-              className="p-1 text-white/80 hover:text-white transition cursor-pointer flex items-center justify-center"
+              className="hidden sm:flex p-1 text-white/80 hover:text-white transition cursor-pointer items-center justify-center shrink-0"
               title="Cast to TV"
               aria-label="Cast to TV"
             >
@@ -343,11 +343,11 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
                   e.stopPropagation();
                   onLanguagePress();
                 }}
-                className="flex items-center gap-1.5 h-[26px] px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none"
+                className="flex items-center gap-1 h-[22px] sm:h-[26px] px-1.5 sm:px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none max-w-[74px] sm:max-w-none shrink-0"
                 title="Audio Language"
               >
-                <Headphones className="h-3.5 w-3.5 text-[#38BDF8]" />
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                <Headphones className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-[#38BDF8] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none truncate">
                   {currentLanguage ? currentLanguage.toUpperCase() : 'AUDIO'}
                 </span>
               </button>
@@ -361,10 +361,10 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
                   e.stopPropagation();
                   onQualityPress();
                 }}
-                className="flex items-center justify-center h-[26px] px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[50px]"
+                className="flex items-center justify-center h-[22px] sm:h-[26px] px-1.5 sm:px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[38px] sm:min-w-[48px] shrink-0"
                 title="Switch Quality"
               >
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
                   {currentQuality ? currentQuality.toUpperCase() : 'AUTO'}
                 </span>
               </button>
@@ -378,7 +378,7 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
                   e.stopPropagation();
                   onPipToggle();
                 }}
-                className="p-1 text-white/80 hover:text-white transition cursor-pointer"
+                className="p-1 text-white/80 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0"
                 title="Picture in Picture"
               >
                 <PictureInPicture2 className="h-4 w-4" />
@@ -392,7 +392,7 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
                 e.stopPropagation();
                 onFullscreenToggle();
               }}
-              className="p-1 text-white/80 hover:text-white transition cursor-pointer"
+              className="p-1 text-white/90 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0"
               title="Fullscreen"
             >
               {isFullscreen ? (

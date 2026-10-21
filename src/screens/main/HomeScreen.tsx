@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Bell, Flame, Sparkles, Film, Filter, ArrowUp, Tv, Clapperboard, Swords, Smile, Heart, Zap, Star, Trophy, Crown, Clock, Compass, Rocket, PlaySquare, Gamepad2, Ghost, Map as MapIcon, PlayCircle } from 'lucide-react';
+import { Search, Bell, Flame, Sparkles, Film, Filter, ArrowUp, Tv, Clapperboard, Swords, Smile, Heart, Zap, Star, Trophy, Crown, Clock, Compass, Rocket, PlaySquare, Gamepad2, Ghost, Map as MapIcon, PlayCircle, Download, X, CheckCircle2 } from 'lucide-react';
 import { LogoPlaceholder } from '../../components/common/LogoPlaceholder';
 import { SectionHeader } from '../../components/common/SectionHeader';
 import { ContentCard } from '../../components/common/ContentCard';
@@ -11,6 +11,7 @@ import { useContent } from '../../hooks/useContent';
 import { ContentItem } from '../../types';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../hooks/useAuth';
+import { useGeneralSettings } from '../../hooks/useGeneralSettings';
 import { subscribeToSearchSettings } from '../../services/contentService';
 import { ThreeColumnRow } from '../../components/home/ThreeColumnRow';
 import { NetworkGridRow } from '../../components/home/NetworkGridRow';
@@ -35,8 +36,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSeeAllCategory,
 }) => {
   const { user } = useAuth();
+  const {
+    hasApkUpdate,
+    currentApkVersion,
+    latestApkVersion,
+    apkDownloadUrl,
+    updateReleaseNotes,
+  } = useGeneralSettings();
+  const [showApkUpdateModal, setShowApkUpdateModal] = useState(false);
   const { heroBanner, trending, cinema, forYou, categories, screensCategories, homeRowsByScreen, contentList, loading } = useContent();
   const [activeTab, setActiveTab] = useState('Trending');
+
+  // Automatically show APK Update popup when a newer version is available, plus periodic reminders until updated
+  useEffect(() => {
+    if (!hasApkUpdate) {
+      setShowApkUpdateModal(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setShowApkUpdateModal(true);
+    }, 1800);
+
+    const interval = setInterval(() => {
+      setShowApkUpdateModal(true);
+    }, 5 * 60 * 1000); // Remind every 5 minutes until user updates the APK
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
+  }, [hasApkUpdate, latestApkVersion]);
   
   const handleContentClick = useCallback((item: ContentItem) => {
     onSelectContent?.(item);
@@ -318,10 +347,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
 
             <button
-              onClick={onOpenNotifications}
-              className="flex shrink-0 items-center justify-center h-9 w-9 rounded-full bg-white/15 backdrop-blur-md text-white hover:bg-white/25 transition cursor-pointer"
+              type="button"
+              onClick={() => {
+                // Only open the APK Update modal when a newer APK version is available (if up to date, do nothing)
+                if (hasApkUpdate) {
+                  setShowApkUpdateModal(true);
+                }
+              }}
+              title={hasApkUpdate ? `Update Available (v${latestApkVersion})` : `App Up to Date (v${currentApkVersion})`}
+              className={`relative flex shrink-0 items-center justify-center h-9 w-9 rounded-full transition cursor-pointer ${
+                hasApkUpdate
+                  ? 'bg-red-600 text-white border border-red-300 shadow-[0_0_16px_rgba(239,68,68,0.9)] animate-pulse hover:bg-red-500'
+                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25'
+              }`}
             >
-              <ArrowUp className="h-4 w-4 text-white" />
+              {hasApkUpdate && (
+                <span className="absolute -inset-1 rounded-full bg-red-500/40 animate-ping pointer-events-none" />
+              )}
+              <ArrowUp className="relative z-10 h-4 w-4 text-white stroke-[2.5]" />
             </button>
           </div>
 
@@ -883,6 +926,82 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           );
         });
       })()}
+
+      {/* APK UPDATE CHECKER MODAL (Triggered by blinking red ArrowUp button & periodic reminder) */}
+      <AnimatePresence>
+        {showApkUpdateModal && hasApkUpdate && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.92, y: 16 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.92, y: 16 }}
+              className="relative flex w-full max-w-sm flex-col rounded-3xl bg-gradient-to-b from-[#1a1215] via-[#121216] to-[#0c0c10] p-6 border border-red-500/40 text-center shadow-[0_0_40px_rgba(239,68,68,0.25)]"
+            >
+              <button
+                type="button"
+                onClick={() => setShowApkUpdateModal(false)}
+                className="absolute right-4 top-4 rounded-full bg-white/5 p-1.5 text-white/60 hover:text-white cursor-pointer"
+                title="Remind me later"
+              >
+                <X className="h-4 w-4" />
+              </button>
+
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/40 border border-red-400/50 animate-pulse">
+                <ArrowUp className="h-8 w-8 stroke-[2.6]" />
+              </div>
+
+              <div className="mt-3 inline-flex items-center justify-center gap-2 self-center rounded-full bg-red-500/15 border border-red-500/30 px-3 py-0.5 text-[11px] font-black text-red-300 uppercase tracking-wider">
+                <span>New Update Available • v{latestApkVersion}</span>
+              </div>
+
+              <h3 className="mt-2.5 text-xl font-black text-white tracking-tight">
+                Upgrade Your MaxPlay APK
+              </h3>
+
+              <p className="mt-1.5 text-xs text-[#A1A1AA] leading-relaxed">
+                {updateReleaseNotes ||
+                  'Update to the latest version of MaxPlay to enjoy ultra-fast HD streaming, smoother Server 2 offline downloads, voice search, and exclusive new features!'}
+              </p>
+
+              <div className="mt-4 rounded-2xl bg-white/5 p-3 border border-white/10 text-left space-y-1.5">
+                <div className="flex items-center gap-2 text-xs text-white/90 font-semibold">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span>Faster 1080p & 4K HLS Playback + Quality Switch</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-white/90 font-semibold">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span>Improved Offline Downloads & Device Transfer</span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-white/10 text-[11px] text-white/50">
+                  <span>Installed: v{currentApkVersion}</span>
+                  <span className="text-emerald-400 font-bold">Latest: v{latestApkVersion}</span>
+                </div>
+              </div>
+
+              <a
+                href={apkDownloadUrl || '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                download
+                onClick={(e) => {
+                  if (!apkDownloadUrl) {
+                    e.preventDefault();
+                  }
+                }}
+                className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer"
+              >
+                <Download className="h-4 w-4 stroke-[2.5]" />
+                <span>Download Latest APK (v{latestApkVersion})</span>
+              </a>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

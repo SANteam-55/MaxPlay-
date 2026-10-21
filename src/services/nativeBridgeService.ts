@@ -79,6 +79,8 @@ interface MaxPlayKotlinBridge {
   deleteOfflineItem?: (storageKey: string) => boolean;
   clearImageDiskCache?: () => boolean;
   getImageDiskCacheBytes?: () => number;
+  showNativeNotification?: (title: string, body: string) => boolean;
+  startVoiceRecognition?: () => boolean;
 }
 
 declare global {
@@ -88,6 +90,9 @@ declare global {
     onMaxPlaySnifferResult?: (callbackId: string, resultJson: string) => void;
     __maxplaySegmentCallbacks?: Record<string, (res: any) => void>;
     __onMaxPlaySegmentComplete?: (callbackId: string, res: any) => void;
+    __onMaxPlayPipModeChanged?: (isInPip: boolean) => void;
+    __onMaxPlayVoiceResult?: (spokenText: string) => void;
+    __handleMaxPlayHardwareBack?: () => string;
   }
 }
 
@@ -892,5 +897,44 @@ export class NativeBridgeService {
     } catch {
       return 0;
     }
+  }
+
+  /**
+   * Triggers a real phone status-bar notification on Android APK (with Web Notification fallback).
+   */
+  public static showNativeNotification(title: string, body: string): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.showNativeNotification === 'function') {
+        return Boolean(window.MaxPlayNative.showNativeNotification(title, body));
+      }
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'granted') {
+          new Notification(title, { body, icon: '/favicon.png' });
+          return true;
+        } else if (Notification.permission !== 'denied') {
+          Notification.requestPermission().then((perm) => {
+            if (perm === 'granted') {
+              new Notification(title, { body, icon: '/favicon.png' });
+            }
+          });
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Starts Native Android Speech Recognizer dialog and invokes `onResult` with the recognized text.
+   */
+  public static startNativeVoiceRecognition(onResult: (text: string) => void): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.startVoiceRecognition === 'function') {
+        window.__onMaxPlayVoiceResult = (spokenText: string) => {
+          onResult(spokenText || '');
+        };
+        return Boolean(window.MaxPlayNative.startVoiceRecognition());
+      }
+    } catch {}
+    return false;
   }
 }

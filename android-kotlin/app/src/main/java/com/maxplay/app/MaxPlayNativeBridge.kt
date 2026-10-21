@@ -195,6 +195,26 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
+    fun showNativeNotification(title: String, body: String): Boolean {
+        return try {
+            activity.showNativeStatusNotification(title, body)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun startVoiceRecognition(): Boolean {
+        return try {
+            activity.startNativeVoiceInput()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
     fun getDeviceStorageStats(): String {
         return MaxPlayOfflineVault.getDeviceStorageStats(activity.applicationContext).toString()
     }

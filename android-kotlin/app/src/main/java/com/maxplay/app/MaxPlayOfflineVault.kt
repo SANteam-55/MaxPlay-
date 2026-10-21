@@ -95,18 +95,25 @@ object MaxPlayOfflineVault {
                 .url(segmentUrl)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                    InbuiltStreamScraper.DEFAULT_USER_AGENT
                 )
                 .header("Accept", "*/*")
 
-            if (refererUrl.isNotBlank()) {
-                reqBuilder.header("Referer", refererUrl)
+            val resolvedRef = if (refererUrl.isNotBlank()) {
+                refererUrl
             } else {
+                val segHost = try { android.net.Uri.parse(segmentUrl).host ?: "" } catch (_: Exception) { "" }
+                CorsFreeWebViewClient.resolveRefererForHost(segHost)
+            }
+
+            if (resolvedRef.isNotBlank()) {
+                reqBuilder.header("Referer", resolvedRef)
                 try {
-                    val uri = android.net.Uri.parse(segmentUrl)
-                    val origin = "${uri.scheme}://${uri.host}"
-                    reqBuilder.header("Referer", "$origin/")
-                    reqBuilder.header("Origin", origin)
+                    val refUri = android.net.Uri.parse(resolvedRef)
+                    val refOrigin = "${refUri.scheme}://${refUri.host}"
+                    if (!refUri.host.isNullOrBlank()) {
+                        reqBuilder.header("Origin", refOrigin)
+                    }
                 } catch (_: Exception) {}
             }
 

@@ -38,19 +38,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
       {value ? (
         <button
+          type="button"
           onClick={() => {
             onChangeText('');
             onClear?.();
           }}
-          className="p-1 text-[#6B7280] hover:text-white"
+          className="p-1 text-[#6B7280] hover:text-white cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
-      ) : (
-        <button className="p-1 text-[#6B7280] hover:text-[#8B5CF6]">
-          <Mic className="h-5 w-5" />
-        </button>
-      )}
+      ) : null}
     </div>
   );
 };

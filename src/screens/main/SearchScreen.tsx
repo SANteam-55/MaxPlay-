@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Mic, Flame, Trash2, X, Play, Star } from 'lucide-react';
 import { SearchBar } from '../../components/common/SearchBar';
 import { SectionHeader } from '../../components/common/SectionHeader';
@@ -11,6 +11,7 @@ import { STORAGE_KEYS } from '../../utils/constants';
 import { subscribeToSearchSettings } from '../../services/contentService';
 import { adManager } from '../../services/adService';
 import { useAuth } from '../../hooks/useAuth';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface SearchScreenProps {
   onBack?: () => void;
@@ -32,6 +33,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     }, 50);
   };
   const [query, setQuery] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [voiceStatusText, setVoiceStatusText] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [activeHotTab, setActiveHotTab] = useState<'movies' | 'series' | 'short_tv' | 'music'>('movies');
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'movie_series' | 'anime'>('all');
@@ -77,6 +81,111 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     const updated = [term, ...filtered].slice(0, 10);
     setRecentSearches(updated);
     localStorage.setItem(STORAGE_KEYS.RECENT_SEARCHES, JSON.stringify(updated));
+  };
+
+  // Register Android Native Voice Recognition callback
+  useEffect(() => {
+    window.__onMaxPlayVoiceResult = (spokenText: string) => {
+      setIsListening(false);
+      const cleaned = (spokenText || '').trim();
+      if (cleaned) {
+        setQuery(cleaned);
+        saveRecentSearch(cleaned);
+        setVoiceStatusText(null);
+      } else {
+        setVoiceStatusText('Could not hear clearly. Tap mic to try again.');
+        setTimeout(() => setVoiceStatusText(null), 2500);
+      }
+    };
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, [recentSearches]);
+
+  const handleVoiceSearchToggle = () => {
+    if (isListening) {
+      setIsListening(false);
+      setVoiceStatusText(null);
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      return;
+    }
+
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    // 1. Prefer Web Speech API when available in browser/WebView for instant live transcription
+    if (SpeechRecognitionAPI) {
+      try {
+        const recognition = new SpeechRecognitionAPI();
+        recognitionRef.current = recognition;
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.lang = 'en-IN';
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          setVoiceStatusText('Listening... Speak now');
+        };
+
+        recognition.onresult = (event: any) => {
+          let transcript = '';
+          for (let i = 0; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          const cleaned = transcript.trim();
+          if (cleaned) {
+            setQuery(cleaned);
+            if (event.results[event.results.length - 1]?.isFinal) {
+              saveRecentSearch(cleaned);
+            }
+          }
+        };
+
+        recognition.onerror = () => {
+          setIsListening(false);
+          // Fallback to Native Android RecognizerIntent if WebView speech recognition errors
+          if (NativeBridgeService.isAndroidWebView()) {
+            const started = NativeBridgeService.startNativeVoiceRecognition();
+            if (started) {
+              setIsListening(true);
+              setVoiceStatusText('Listening... Speak now');
+              return;
+            }
+          }
+          setVoiceStatusText('Microphone permission required for voice search');
+          setTimeout(() => setVoiceStatusText(null), 2500);
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+          setVoiceStatusText(null);
+        };
+
+        recognition.start();
+        return;
+      } catch {}
+    }
+
+    // 2. Fallback to Android Native Speech RecognizerIntent
+    if (NativeBridgeService.isAndroidWebView()) {
+      const started = NativeBridgeService.startNativeVoiceRecognition();
+      if (started) {
+        setIsListening(true);
+        setVoiceStatusText('Listening... Speak now');
+        return;
+      }
+    }
+
+    setVoiceStatusText('Voice search is not supported on this browser');
+    setTimeout(() => setVoiceStatusText(null), 2500);
   };
 
   const removeRecentItem = (term: string) => {
@@ -132,7 +241,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] p-4 pb-24 md:pb-8 text-left select-none scrollbar-none">
       {/* Search Header Bar */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2.5 mb-3">
         {onBack && (
           <button
             onClick={onBack}
@@ -149,15 +258,33 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
               setQuery(text);
             }}
             onSubmit={handleSearchSubmit}
-            placeholder={dynamicPlaceholder}
+            placeholder={isListening ? 'Listening... Speak now' : dynamicPlaceholder}
             autoFocus
           />
         </div>
 
-        <button className="p-2 text-[#6B7280] hover:text-[#8B5CF6] transition">
-          <Mic className="h-5 w-5" />
+        {/* Single Real Voice Search Button: Purple Gradient Circle with White Mic Icon */}
+        <button
+          type="button"
+          onClick={handleVoiceSearchToggle}
+          title="Voice Search"
+          className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white shadow-lg shadow-purple-600/35 border border-purple-400/40 transition-all active:scale-95 cursor-pointer ${
+            isListening ? 'ring-4 ring-purple-500/40 animate-pulse scale-105' : 'hover:brightness-110'
+          }`}
+        >
+          <Mic className="h-5 w-5 text-white stroke-[2.2]" />
         </button>
       </div>
+
+      {/* Live Voice Status Indicator */}
+      {voiceStatusText && (
+        <div className="mb-3 flex items-center justify-center">
+          <div className="inline-flex items-center gap-2 rounded-full bg-purple-500/15 border border-purple-500/40 px-3.5 py-1 text-xs font-bold text-purple-200 shadow-sm">
+            {isListening && <span className="h-2 w-2 rounded-full bg-purple-400 animate-ping" />}
+            <span>{voiceStatusText}</span>
+          </div>
+        </div>
+      )}
 
       {query ? (
         /* Results View */

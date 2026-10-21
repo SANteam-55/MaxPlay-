@@ -18,8 +18,10 @@ export interface CachedStreamMetadata {
     url?: string;
     bandwidth?: number;
   }[];
-  audioTracks?: string[];
+   audioTracks?: string[];
   duration?: number;
+  headers?: Record<string, string>;
+  referer?: string;
 }
 
 interface ClientCachedStream {
@@ -294,6 +296,71 @@ export class SmartStreamService {
   }
 
   /**
+   * Resolves the required embed Referer header for Server 1 / Server 2 (Filemoon / Byse / Voe) segment & playlist fetches.
+   */
+  public static resolveEmbedReferer(sourceOrStreamUrl?: string): string {
+    if (!sourceOrStreamUrl || typeof sourceOrStreamUrl !== "string") return "";
+    const trimmed = sourceOrStreamUrl.trim();
+    try {
+      if (trimmed.includes("referer=")) {
+        const u = new URL(trimmed, typeof window !== "undefined" ? window.location.origin : "https://maxplay.app");
+        const refParam = u.searchParams.get("referer");
+        if (refParam) return decodeURIComponent(refParam);
+      }
+    } catch {}
+
+    const cachedMeta = this.getCachedStreamMeta(trimmed);
+    if (cachedMeta?.referer) return cachedMeta.referer;
+    if (cachedMeta?.headers?.Referer || cachedMeta?.headers?.referer) {
+      return cachedMeta.headers.Referer || cachedMeta.headers.referer || "";
+    }
+
+    const lower = trimmed.toLowerCase();
+    if (
+      lower.includes("f16px.") ||
+      lower.includes("filemoon") ||
+      lower.includes("moonmov") ||
+      lower.includes("kerapoxy") ||
+      lower.includes("1azayf9w") ||
+      lower.includes("8mhlloqo") ||
+      lower.includes("96ar.com") ||
+      lower.includes("xcoic.com") ||
+      lower.includes("l1afav.net") ||
+      lower.includes("sprintcdn") ||
+      lower.includes("owphbf")
+    ) {
+      return "https://f16px.com/";
+    }
+    if (
+      lower.includes("bysedikamoum") ||
+      lower.includes("byseraguci") ||
+      lower.includes("byse") ||
+      lower.includes("n1mwq")
+    ) {
+      return "https://bysedikamoum.com/";
+    }
+    if (
+      lower.includes("voe.") ||
+      lower.includes("voe-network") ||
+      lower.includes("reputationsickler") ||
+      lower.includes("turtledoveconsequent") ||
+      lower.includes("launchreliantcleaverriver") ||
+      lower.includes("fraudclatterflyingcar") ||
+      lower.includes("321naturelikefur") ||
+      lower.includes("ralphysuccessfull")
+    ) {
+      return "https://voe.sx/";
+    }
+    try {
+      if (/^https?:\/\//i.test(trimmed) && !lower.includes(".m3u8") && !lower.includes(".ts")) {
+        const parsed = new URL(trimmed);
+        return `${parsed.protocol}//${parsed.host}/`;
+      }
+    } catch {}
+    return "";
+  }
+
+  /**
    * Updates cached stream metadata for a source URL (or direct m3u8 URL).
    */
   public static setCachedStreamMeta(sourceUrl: string, meta: CachedStreamMetadata): void {
@@ -419,13 +486,18 @@ export class SmartStreamService {
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = Date.now() + ttlMs;
-          this.setClientCache(trimmed, nativeRes.m3u8Url, expiresAt, {
+          const refHeader = nativeRes.headers?.Referer || nativeRes.headers?.referer || this.resolveEmbedReferer(trimmed);
+          const metaPayload: CachedStreamMetadata = {
             qualities: nativeRes.qualities,
             qualityLinks: nativeRes.qualityLinks,
             downloadQualities: nativeRes.downloadQualities,
             audioTracks: nativeRes.audioTracks,
             duration: nativeRes.duration,
-          });
+            headers: nativeRes.headers,
+            referer: refHeader,
+          };
+          this.setClientCache(trimmed, nativeRes.m3u8Url, expiresAt, metaPayload);
+          this.setClientCache(nativeRes.m3u8Url, nativeRes.m3u8Url, expiresAt, metaPayload);
           return {
             streamUrl: nativeRes.m3u8Url,
             isExtracted: true,
@@ -469,17 +541,18 @@ export class SmartStreamService {
             NativeBridgeService.fetchTextCorsFree(chosenM3u8, result.headers).catch(() => {});
           }
           if (result.expiresAt) {
-            const meta: CachedStreamMetadata | undefined =
-              result.downloadQualities || result.audioTracks || result.qualities
-                ? {
-                    qualities: result.qualities,
-                    qualityLinks: result.qualityLinks,
-                    downloadQualities: result.downloadQualities,
-                    audioTracks: result.audioTracks,
-                    duration: result.duration,
-                  }
-                : undefined;
+            const refHeader = result.headers?.Referer || result.headers?.referer || this.resolveEmbedReferer(trimmed);
+            const meta: CachedStreamMetadata = {
+              qualities: result.qualities,
+              qualityLinks: result.qualityLinks,
+              downloadQualities: result.downloadQualities,
+              audioTracks: result.audioTracks,
+              duration: result.duration,
+              headers: result.headers,
+              referer: refHeader,
+            };
             this.setClientCache(trimmed, chosenM3u8, result.expiresAt, meta);
+            this.setClientCache(chosenM3u8, chosenM3u8, result.expiresAt, meta);
           }
           return {
             streamUrl: chosenM3u8,

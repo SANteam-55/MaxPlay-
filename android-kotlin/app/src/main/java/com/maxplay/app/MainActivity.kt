@@ -85,16 +85,31 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl(LIVE_APP_URL)
         }
 
-        // Handle Android hardware Back button smoothly inside SPA navigation & fullscreen
+        // Create notification channel for real phone status-bar inbox alerts
+        createNotificationChannel()
+
+        // Handle Android hardware Back button (Triangle button) smoothly via React SPA handler first
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (customFullscreenView != null) {
                     webView.webChromeClient?.onHideCustomView()
-                } else if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                    return
+                }
+                webView.evaluateJavascript(
+                    "(function() { return typeof window.__handleMaxPlayHardwareBack === 'function' ? String(window.__handleMaxPlayHardwareBack()) : 'UNHANDLED'; })()"
+                ) { result ->
+                    val clean = result?.trim()?.removeSurrounding("\"") ?: "UNHANDLED"
+                    if (clean == "HANDLED") {
+                        // Handled inside React SPA (popped screen, closed modal, or showed exit confirmation)
+                        return@evaluateJavascript
+                    } else if (clean == "EXIT_CONFIRMED") {
+                        finish()
+                    } else if (webView.canGoBack()) {
+                        webView.goBack()
+                    } else {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
                 }
             }
         })
@@ -131,8 +146,16 @@ class MainActivity : AppCompatActivity() {
         // Attach CORS-Free OkHttp Interceptor & HTTPS Local Asset Client
         webView.webViewClient = CorsFreeWebViewClient(this)
 
-        // Fullscreen HTML5 Video & Orientation Handler
+        // Fullscreen HTML5 Video, Microphone Permission & Orientation Handler
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                runOnUiThread {
+                    try {
+                        request?.grant(request.resources)
+                    } catch (_: Exception) {}
+                }
+            }
+
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (customFullscreenView != null) {
                     callback?.onCustomViewHidden()
@@ -240,12 +263,17 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Enters native Android Picture-in-Picture (PiP) floating window mode (Android 8.0+).
+     * Immediately notifies the React player so ONLY the video player fills the PiP window.
      */
     fun enterNativePipMode(): Boolean {
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 runOnUiThread {
                     try {
+                        webView.evaluateJavascript(
+                            "window.__onMaxPlayPipModeChanged && window.__onMaxPlayPipModeChanged(true);",
+                            null
+                        )
                         val params = android.app.PictureInPictureParams.Builder()
                             .setAspectRatio(android.util.Rational(16, 9))
                             .build()
@@ -258,6 +286,117 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {
             false
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        runOnUiThread {
+            try {
+                webView.evaluateJavascript(
+                    "window.__onMaxPlayPipModeChanged && window.__onMaxPlayPipModeChanged($isInPictureInPictureMode);",
+                    null
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun createNotificationChannel() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    "maxplay_inbox_alerts",
+                    "MaxPlay Messages & Updates",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Real-time notifications for MaxPlay inbox messages and updates"
+                    enableVibration(true)
+                }
+                val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                nm?.createNotificationChannel(channel)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Triggers a real native Android status-bar notification with sound & tap-to-open intent.
+     */
+    fun showNativeStatusNotification(title: String, body: String) {
+        runOnUiThread {
+            try {
+                val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return@runOnUiThread
+                val intent = android.content.Intent(this, MainActivity::class.java).apply {
+                    flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("open_messages", true)
+                }
+                val pendingFlags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                } else {
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val pendingIntent = android.app.PendingIntent.getActivity(this, 2001, intent, pendingFlags)
+
+                val builder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    android.app.Notification.Builder(this, "maxplay_inbox_alerts")
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.app.Notification.Builder(this)
+                }
+
+                builder.setSmallIcon(R.drawable.ic_launcher)
+                    .setContentTitle(title.ifBlank { "MaxPlay" })
+                    .setContentText(body)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingIntent)
+
+                nm.notify((System.currentTimeMillis() % 100000).toInt(), builder.build())
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Launches Android's built-in Speech Recognizer intent and delivers spoken text to `window.__onMaxPlayVoiceResult(text)`.
+     */
+    fun startNativeVoiceInput() {
+        runOnUiThread {
+            try {
+                val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Speak movie, series, or anime name...")
+                }
+                @Suppress("DEPRECATION")
+                startActivityForResult(intent, 3001)
+            } catch (_: Exception) {
+                webView.evaluateJavascript(
+                    "window.__onMaxPlayVoiceResult && window.__onMaxPlayVoiceResult('');",
+                    null
+                )
+            }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 3001) {
+            val matches = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull()?.trim() ?: ""
+            val escaped = org.json.JSONObject.quote(spoken)
+            webView.evaluateJavascript(
+                "window.__onMaxPlayVoiceResult && window.__onMaxPlayVoiceResult($escaped);",
+                null
+            )
         }
     }
 }

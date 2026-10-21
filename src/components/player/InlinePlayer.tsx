@@ -617,24 +617,91 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
   }, [activeLanguage, availableLanguages, hlsAudioTracks]);
 
+  const [switchingQualityLabel, setSwitchingQualityLabel] = useState<string | null>(null);
+  const [qualitySwitchDoneBadge, setQualitySwitchDoneBadge] = useState<string | null>(null);
+  const [isInNativePip, setIsInNativePip] = useState<boolean>(false);
+  const prevActiveQualityPropRef = useRef<string | undefined>(activeQuality);
+  const switchFeedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const doneBadgeTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerQualitySwitchBanner = useCallback((targetQual: string) => {
+    const cleanQ = (targetQual || 'Auto').toUpperCase();
+    setSwitchingQualityLabel(cleanQ);
+    if (switchFeedbackTimerRef.current) clearTimeout(switchFeedbackTimerRef.current);
+    switchFeedbackTimerRef.current = setTimeout(() => {
+      setSwitchingQualityLabel(null);
+      setQualitySwitchDoneBadge(`Quality switched to ${cleanQ}`);
+      if (doneBadgeTimerRef.current) clearTimeout(doneBadgeTimerRef.current);
+      doneBadgeTimerRef.current = setTimeout(() => {
+        setQualitySwitchDoneBadge(null);
+      }, 2200);
+    }, 950);
+  }, []);
+
+  // Listen for Native Android PiP mode changes so ONLY the video player fills 100% of the PiP window!
+  useEffect(() => {
+    const handleNativePipChange = (inPip: boolean) => {
+      setIsInNativePip(Boolean(inPip));
+      if (inPip) {
+        setShowControls(false);
+        setActiveMenu(null);
+      }
+    };
+    window.__onMaxPlayPipModeChanged = handleNativePipChange;
+
+    const handleResizeCheck = () => {
+      // Android PiP floating window is typically <= 300px wide and <= 220px tall
+      if (window.innerWidth <= 300 && window.innerHeight <= 220) {
+        setIsInNativePip(true);
+        setShowControls(false);
+      } else if (window.innerWidth > 320 && window.innerHeight > 400) {
+        setIsInNativePip(false);
+      }
+    };
+    window.addEventListener('resize', handleResizeCheck);
+    return () => {
+      window.removeEventListener('resize', handleResizeCheck);
+      if (window.__onMaxPlayPipModeChanged === handleNativePipChange) {
+        delete window.__onMaxPlayPipModeChanged;
+      }
+    };
+  }, []);
+
   // Keep currentQuality in sync with activeQuality prop AND immediately switch live HLS level when changed from Details Screen!
   useEffect(() => {
     if (!activeQuality) return;
+    const isExternalQualitySwitch =
+      prevActiveQualityPropRef.current !== undefined &&
+      prevActiveQualityPropRef.current.toLowerCase() !== activeQuality.toLowerCase();
+    prevActiveQualityPropRef.current = activeQuality;
+
+    if (isExternalQualitySwitch && hasStarted) {
+      if (videoRef.current && videoRef.current.currentTime > 0.5) {
+        savedSwitchTimeRef.current = videoRef.current.currentTime;
+      }
+      if ((videoRef.current && !videoRef.current.paused) || isPlaying) {
+        wasPlayingBeforeSwitchRef.current = true;
+      }
+      triggerQualitySwitchBanner(activeQuality);
+    }
+
     setCurrentQuality(activeQuality);
 
     const hls = hlsRef.current;
     if (hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 0) {
       if (activeQuality.toLowerCase() === 'auto') {
         hls.currentLevel = -1;
+        hls.nextLevel = -1;
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hls.levels, activeQuality);
         if (levelIdx !== -1 && hls.currentLevel !== levelIdx) {
+          hls.nextLevel = levelIdx;
           hls.currentLevel = levelIdx;
           hls.loadLevel = levelIdx;
         }
       }
     }
-  }, [activeQuality]);
+  }, [activeQuality, hasStarted, isPlaying, triggerQualitySwitchBanner]);
 
   // Derive available qualities based on Admin multi-quality server links AND dynamic HLS levels
   // Strictly filters out any language names so languages NEVER leak into the Quality Box!
@@ -1116,6 +1183,15 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lvl.bitrate || 0
           );
           setActualQuality(label);
+          setSwitchingQualityLabel((prev) => {
+            if (prev) {
+              if (switchFeedbackTimerRef.current) clearTimeout(switchFeedbackTimerRef.current);
+              setQualitySwitchDoneBadge(`Quality switched to ${label.toUpperCase()}`);
+              if (doneBadgeTimerRef.current) clearTimeout(doneBadgeTimerRef.current);
+              doneBadgeTimerRef.current = setTimeout(() => setQualitySwitchDoneBadge(null), 2200);
+            }
+            return null;
+          });
         }
       });
 
@@ -1435,8 +1511,31 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
   };
   
+  // Expose fullscreen exit helper for Android hardware back button
+  useEffect(() => {
+    (window as any).__isMaxPlayPlayerFullscreen = isFullscreen;
+    (window as any).__exitMaxPlayPlayerFullscreen = () => {
+      if (isFullscreen) {
+        handleFullscreen();
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      (window as any).__isMaxPlayPlayerFullscreen = false;
+    };
+  }, [isFullscreen]);
+
   const handlePipToggle = async () => {
-    if (NativeBridgeService.enterNativePipMode()) {
+    // Expand ONLY the video player to 100% of the screen BEFORE entering native Android PiP
+    // so the floating PiP window shows ONLY the video player and never the entire Details Screen!
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      setIsInNativePip(true);
+      setShowControls(false);
+      setActiveMenu(null);
+      requestAnimationFrame(() => {
+        NativeBridgeService.enterNativePipMode();
+      });
       return;
     }
     try {
@@ -1518,7 +1617,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       wasPlayingBeforeSwitchRef.current = true;
     }
 
+    triggerQualitySwitchBanner(qual);
     setCurrentQuality(qual);
+    prevActiveQualityPropRef.current = qual;
     try {
       localStorage.setItem('maxplay_preferred_quality', qual);
     } catch {}
@@ -1528,9 +1629,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (hlsRef.current && isHlsStreamRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
       if (qual.toLowerCase() === 'auto') {
         hlsRef.current.currentLevel = -1;
+        hlsRef.current.nextLevel = -1;
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hlsRef.current.levels, qual);
         if (levelIdx !== -1) {
+          hlsRef.current.nextLevel = levelIdx;
           hlsRef.current.currentLevel = levelIdx;
           hlsRef.current.loadLevel = levelIdx;
         }
@@ -1563,7 +1666,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   return (
     <div 
       ref={playerContainerRef}
-      className="relative w-full h-full bg-black group overflow-hidden flex items-center justify-center select-none no-callout"
+      className={
+        isInNativePip
+          ? "fixed inset-0 z-[99999] w-screen h-screen bg-black overflow-hidden flex items-center justify-center select-none no-callout"
+          : "relative w-full h-full bg-black group overflow-hidden flex items-center justify-center select-none no-callout"
+      }
       style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -1713,14 +1820,26 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           </div>
         )}
 
-        {!isIframe && (isLoading || isResolvingStream) && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50 pointer-events-none gap-2">
+        {!isIframe && (isLoading || isResolvingStream || Boolean(switchingQualityLabel)) && !isInNativePip && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50 pointer-events-none gap-2.5">
             <Loader2 className="w-12 h-12 text-[#8B5CF6] animate-spin" />
-            {isResolvingStream && (
+            {switchingQualityLabel ? (
+              <span className="text-xs sm:text-sm font-bold text-white tracking-wide bg-black/80 px-4 py-1.5 rounded-full border border-[#8B5CF6]/50 backdrop-blur-md shadow-xl animate-pulse">
+                Your quality is switching to {switchingQualityLabel}...
+              </span>
+            ) : isResolvingStream ? (
               <span className="text-xs font-medium text-white/80 tracking-wide bg-black/60 px-3 py-1 rounded-full border border-white/10 backdrop-blur-md">
                 Securing stream link...
               </span>
-            )}
+            ) : null}
+          </div>
+        )}
+
+        {qualitySwitchDoneBadge && !switchingQualityLabel && !isInNativePip && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-emerald-600/90 text-white text-[11px] font-bold px-3.5 py-1 rounded-full border border-emerald-300/40 shadow-lg backdrop-blur-md">
+              ✓ {qualitySwitchDoneBadge}
+            </div>
           </div>
         )}
 
@@ -1887,7 +2006,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           </div>
         </div>
 
-        {!isIframe && hasStarted && (
+        {!isIframe && hasStarted && !isInNativePip && (
           <PlayerControls
             isVisible={showControls && !activeMenu}
             isPlaying={isPlaying}

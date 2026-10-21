@@ -1,115 +1,128 @@
-# MaxPlay — Complete Optimization, Multi-Quality Server Architecture & Native APK Enhancement Plan
+# MaxPlay Production APK — Surgical Implementation Plan
 
-## 🛡️ 0. MaxPlay Existing System Protection Guarantee
-- **100% Backward Compatibility:** All existing movies, web series, anime, episodes, Firestore documents, authentication flows, and security rules remain untouched and fully functional.
-- **Additive Multi-Quality Schema:** Existing content that only has a single `videoUrl` (Server 1) or `secondaryVideoUrl` (Server 2) will continue to play and download exactly as before. New multi-quality links (`1080p`, `720p`, `480p`, `360p`) are stored in the existing optional fields `qualityLinks` (Server 1) and `secondaryQualityLinks` (Server 2), while automatically keeping `videoUrl` and `secondaryVideoUrl` populated with the primary stream URL so no existing screen or service breaks.
+> **Existing System Protection Compliance:** All existing Firebase collections, authentication flows, backend proxy routes, and player progress-sync mechanisms will remain untouched and 100% backward-compatible. All enhancements are additive or targeted bug fixes.
 
 ---
 
-## 🎚️ 1. Multi-Quality Server Link System (`1080p`, `720p`, `480p`, `360p` per Server)
-
-### A. Admin Panel (`AdminDashboardScreen.tsx`) — Movie & Series Episode Cards
-- **4 Quality Slots per Server with `[✕]` Remove & `+ Add` Controls:**
-  - Under **Server 1 (Primary Stream)** and **Server 2 (Secondary Stream)** in Smart HLS Mode (for both Movie upload/edit and Series Episode cards), display 4 labeled quality input rows: **`1080p`**, **`720p`**, **`480p`**, and **`360p`**.
-  - Each quality input row includes a **`[✕]`** button on the right to remove/hide any unneeded quality box, plus quick **`+ 1080p` / `+ 720p` / `+ 480p` / `+ 360p`** restore pills so the Admin can fill 1, 2, 3, or all 4 qualities as needed.
-  - **Smart Auto-Sync on Save:**
-    - Server 1 slots save into `qualityLinks: { '1080p'?: string, '720p'?: string, '480p'?: string, '360p'?: string }`, and automatically set `videoUrl` to the highest/first provided link for 100% backward compatibility.
-    - Server 2 slots save into `secondaryQualityLinks: { '1080p'?: string, '720p'?: string, '480p'?: string, '360p'?: string }`, and automatically set `secondaryVideoUrl` to the highest/first provided link.
-    - When editing an older Movie/Episode that only has `videoUrl` or `secondaryVideoUrl`, it automatically loads into the `1080p` (or default) box so nothing is ever lost.
-
-### B. How the App & APK Decide Which Quality Link to Scrape First (`SmartStreamService` & `ContentDetailScreen`)
-- **Step 1 — User Preference Check:** Checks `localStorage.getItem('maxplay_preferred_quality')` (`Auto`, `1080p`, `720p`, `480p`, `360p`). If the user explicitly chose e.g. `480p` or `720p` and that link exists on the active server, the app scrapes that exact link first.
-- **Step 2 — Smart Network & RAM Auto-Detection (When set to `Auto`):**
-  - Checks `navigator.connection` (`effectiveType` and `downlink` Mbps) + `navigator.deviceMemory`:
-    - **Weak / Slow Network (`2g`, `3g`, or `downlink < 2.5 Mbps`) or Low-RAM (`<= 4GB`):** Automatically selects **`480p`** (or `360p` / `720p` fallback) first so the video starts **instantly with zero buffering**.
-    - **Normal 4G (`downlink 2.5 – 6 Mbps`):** Selects **`720p`** first for fast startup and crisp HD quality.
-    - **Fast Wi-Fi / 5G (`downlink > 6 Mbps`):** Selects **`1080p`** (or `720p`) first.
-- **Step 3 — Background Next-Quality Pre-Warm:** Only the single chosen quality link is scraped initially for instant playback; if the user opens the Quality Drawer and picks another quality, that quality link is resolved on demand (and cached in `SmartStreamService`).
-
-### C. Hybrid Player Quality Drawer & Seamless Mid-Playback Switching (`InlinePlayer.tsx`)
-- **Unified Quality Drawer (`QualityDrawer.tsx`):**
-  - Displays internal HLS variant qualities (`hlsQualities`) when a single Master `.m3u8` contains multiple resolutions.
-  - Displays the Admin-configured per-server quality links (`1080p`, `720p`, `480p`, `360p` from `qualityLinks` for Server 1 or `secondaryQualityLinks` for Server 2) when separate quality links are provided!
-- **Seamless Timestamp & Audio Track Preservation:**
-  - When a user switches quality (e.g., `1080p` → `480p`) via separate server links:
-    1. Saves exact `currentTime` (e.g., `18:24`), play state, and active audio language (`currentLanguage`, e.g., `Hindi`).
-    2. Extracts/resolves the `480p` link for the active server via `SmartStreamService`.
-    3. Loads the new `.m3u8` stream at `18:24` and automatically locks onto the same `Hindi` audio track (since all quality copies share the same multi-audio tracks).
+## 1. Custom APK & WebApp Icon (Exact Uploaded Image)
+- **Goal:** Use the exact image provided (`/public/assets/aistudio/1792597087926_74b81757.png`) as the official MaxPlay APK launcher icon and PWA icon without cropping, recoloring, or editing it.
+- **Changes:**
+  - Copy `/public/assets/aistudio/1792597087926_74b81757.png` directly to all Android launcher mipmap directories (`mipmap-mdpi`, `mipmap-hdpi`, `mipmap-xhdpi`, `mipmap-xxhdpi`, `mipmap-xxxhdpi`, and drawable icon assets) inside `/android-kotlin/app/src/main/res/` and configure `AndroidManifest.xml` (`android:icon` and `android:roundIcon`) to point to it.
+  - Update `public/manifest.json` and `index.html` (`apple-touch-icon` & `icon`) to reference `/assets/aistudio/1792597087926_74b81757.png`.
 
 ---
 
-## 📥 2. Download Engine Fixes: Zero First-Try Failures, Locked MB Size, Unique Series MB & Turbo Speed
-
-### A. Fix First-Try Series Multi-Episode Download Failure (`downloadManager.ts` & `smartStreamService.ts`)
-- **Root Cause Fixed:** When opening the Download Modal and immediately queuing 2+ episodes, the modal probe and episode downloader triggered concurrent cold extractions that could time out on the first try.
-- **Solution:**
-  1. **In-Flight Extraction Deduplication:** Share a single `inFlightExtractions: Map<string, Promise<any>>` in `SmartStreamService` so the Download Modal probe and `DownloadManager` reuse the exact same ongoing extraction instead of colliding.
-  2. **3x Automatic Silent Retry with Backoff:** In `DownloadManager.processTask`, wrap stream extraction and manifest probing in a 3-attempt auto-retry loop (`0ms` → `1200ms` → `2500ms`, with `forceRefresh: true` on retry) before ever marking an episode as `failed`.
-
-### B. Fix Fluctuating Total MB (800 MB ↔ 900 MB) During Download (`clientHlsDownloader.ts`)
-- **Root Cause Fixed:** Variable Bitrate (VBR) `.ts` segments caused `estimatedTotalBytes = avgSegmentBytes * totalSegments` to jump up and down after every batch.
-- **Solution:** Lock `lockedTotalMb` at the start of the download using the playlist bandwidth × actual `#EXTINF` total duration (calibrated once after the first 5 segments), and **never recalculate total MB upward/downward mid-download**. At 100% completion, snap `downloadedMb = totalMb`.
-
-### C. Fix Duplicate MB Across Different Series in Download Modal (`DownloadSelectionModal.tsx` & `clientHlsDownloader.ts`)
-- **Root Cause Fixed:** Episodes defaulted to `1440s` (24m) duration and Master `.m3u8` playlists only list `BANDWIDTH` without `#EXTINF` durations, causing different series with similar bitrates to display identical MB estimates.
-- **Solution:**
-  1. In `ClientHlsDownloader.probeMasterPlaylist`, automatically fetch the first variant sub-playlist header to sum the **real `#EXTINF` segment durations** (`actualDurationSec`), giving every series and episode its true unique duration and MB size.
-  2. Scope the metadata cache key with `${content.id}_s${selectedSeasonIdx}_e${focusedEpisodeIdx}_${targetUrl}` so one series never inherits another series's cached MB.
-
-### D. Lock Top Filter Bar (Server + Language + Quality) Across "Select All" Episodes (`DownloadSelectionModal.tsx`)
-- When the user selects **Server (`Server 1` / `Server 2`)**, **Audio Language (e.g. `Hindi`)**, and **Video Quality (e.g. `480p` or `720p`)** in the top filter bar and clicks **Select All** (or selects multiple episodes):
-  - Every queued episode receives the exact selected `server`, `language`, and `quality`.
-  - For each episode, `resolveItemDownloadUrl` picks that episode's matching quality link (`qualityLinks[selectedQuality]` for Server 1, or `secondaryQualityLinks[selectedQuality]` for Server 2, or master URL with `selectedQuality` variant selection) + matching audio language track.
-
-### E. Maximum Network Speed Turbo Downloader (`clientHlsDownloader.ts` & `MainActivity.kt`)
-- **Continuous Sliding Window Worker Pool (8 Parallel Workers):** Replace the 5-segment blocking `Promise.all` batch loop (which waited for the slowest segment in every batch of 5) with an **8-worker continuous sliding pool** so all 8 workers stay 100% saturated without pauses between batches.
-- **Kotlin Native `OkHttpClient` High-Concurrency Tuning (`MainActivity.kt`):** Configure `Dispatcher().apply { maxRequests = 64; maxRequestsPerHost = 16 }` on the shared `OkHttpClient` to eliminate host connection throttling during HLS segment downloads.
+## 2. Server 2 Download Failure — Root-Cause Fix
+- **Root Cause Identified:**
+  1. When Server 2 (Filemoon / Byse / Kerapoxy / secondary HLS) extracts an `.m3u8` stream, its `.ts`/`.m4s` segments are hosted on external CDN domains (`sprintcdn`, `owphbf`, etc.) that require the original embed host (`Referer` & `Origin`) to authorize segment downloads.
+  2. In `MaxPlayOfflineVault.kt` (`downloadSegmentToDisk`) and `ClientHlsDownloader.ts`, segment downloads were sending an empty `refererUrl` (falling back to the CDN's own hostname instead of `CorsFreeWebViewClient.resolveRefererForHost(host)`), causing Server 2 CDNs to reject segment downloads with HTTP 403.
+  3. In `DownloadManager.ts` (`resolveStreamForTask`), `SmartStreamService.isExtractableSource(trimmed, true)` needed the `isSmartHls = true` flag so all Server 2 hoster URLs are extracted just-in-time.
+- **Fix:**
+  - Update `MaxPlayOfflineVault.kt` to resolve the registered stream `Referer` and `Origin` via `CorsFreeWebViewClient.resolveRefererForHost(host)` whenever `refererUrl` is not explicitly provided.
+  - Pass the active source/embed Referer through `ClientHlsDownloader.downloadStream` and `wrapProxyUrl`.
+  - Ensure `DownloadSelectionModal.tsx` and `DownloadManager.ts` pass `isSmartHls = true` and prioritize `secondaryServerUrl` / `secondaryQualityLinks` when `selectedServer === 'server2'`.
 
 ---
 
-## 🏷️ 3. Hide Provider Names (`voe.sx`, `filemoon`, `byse`) Everywhere in User UI
-- **`ContentDetailScreen.tsx` & `DownloadSelectionModal.tsx`:**
-  - Replace all user-facing strings (`Voe.sx`, `Filemoon / Byse`, `Primary Stream (Voe.sx)`, `Secondary Stream (Filemoon / Byse)`) with clean brand labels:
-    - **`Server 1`** — *High-Speed Primary Stream*
-    - **`Server 2`** — *Turbo Backup Stream*
+## 3. Real Voice Search Mic on Search Screen (Purple Gradient + White Icon)
+- **Goal:** Replace the two non-functional decorative mics on the Search Screen with a single, real Speech-to-Text voice search button styled with a purple gradient (`from-purple-600 to-indigo-600`) and a white `Mic` icon.
+- **Changes:**
+  - In `src/components/common/SearchBar.tsx` and `src/screens/main/SearchScreen.tsx`, remove the duplicate outer decorative mic and style the SearchBar mic button with a purple gradient circle, white mic icon, and pulsing recording ring when active.
+  - Wire up real voice recognition using the Web Speech API (`webkitSpeechRecognition` / `SpeechRecognition`) plus a Native Android SpeechRecognizer bridge fallback (`window.MaxPlayNative.startVoiceRecognition`) so speaking immediately types the recognized text into the search bar and triggers live search results.
 
 ---
 
-## 🗣️ 4. Sync External Language Selector with Player's Discovered Audio Tracks (`ContentDetailScreen.tsx`)
-- **Root Cause Fixed:** The external language selector modal (`SoloLevelingSelectorModal`) only read static Firestore `content.languages`, while `InlinePlayer`'s internal Audio Drawer read live `#EXT-X-MEDIA:TYPE=AUDIO` tracks discovered from the `.m3u8` manifest (`discoveredHlsAudioTracks`).
-- **Solution:** Merge `discoveredHlsAudioTracks` into `availableLanguages` in `ContentDetailScreen.tsx` so the external Language button and `SoloLevelingSelectorModal` immediately show all real audio tracks discovered by the player, and selecting a language from either place stays 100% synced.
+## 4. Details Screen Selector Row, Server 2 Languages & Quality Switch Indicator
+- **Static Single-Line Selector Boxes:**
+  - In `src/screens/content/ContentDetailScreen.tsx`, update the selector row containing **Audio Language**, **Video Quality**, and **Season Selector** to use a non-wrapping horizontal flex layout (`flex-nowrap items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar`) with compact responsive padding so all three boxes stay aligned in a single static horizontal line on Series/Anime screens across all phone widths.
+- **Server 2 Multi-Language Selector Box:**
+  - In `ContentDetailScreen.tsx`, ensure that when `selectedServer === 'server2'` is active, `availableLanguages` immediately merges:
+    1. Live discovered `#EXT-X-MEDIA:TYPE=AUDIO` tracks from the player,
+    2. Probed/cached `audioTracks` from `SmartStreamService.getCachedStreamMeta(secondaryServerUrl)`, and
+    3. Configured episode/content `audioTracks` / `languages` / `availableLanguages` so the Language Selector box never disappears or collapses to a single language on multi-audio Server 2 streams.
+- **Fast Quality Switching + `"Your quality is switching..."` Status Text:**
+  - In `src/components/player/InlinePlayer.tsx`, track when a quality switch is in progress (`isSwitchingQuality` state with target quality label).
+  - Display a crisp status pill directly below the loading spinner: `"Your quality is switching to 480p..."` during the transition, followed by a brief `"Quality switched to 480p"` confirmation badge once the new level/stream starts playing.
+  - Optimize HLS level switching (`hls.nextLevel = levelIdx; hls.loadLevel = levelIdx`) so switching within a master playlist happens with minimal buffer flush while keeping the video playing continuously.
 
 ---
 
-## 🔊 5. Online Player Real Hardware Volume & Brightness (`InlinePlayer.tsx`)
-- Connect `InlinePlayer.tsx`'s left-side vertical swipe (Brightness) and right-side vertical swipe (Volume) + volume controls directly to `NativeBridgeService.setNativeBrightness()` and `NativeBridgeService.setNativeVolume()` / `getNativeVolume()`, matching `OfflinePlayer.tsx` so gestures control the real Android phone hardware volume and screen brightness.
+## 5. Picture-in-Picture (PiP) Mode — Video Player Only
+- **Root Cause Identified:** In the Android APK, `MainActivity.enterNativePipMode()` puts the entire Android `Activity` into PiP mode. Because `ContentDetailScreen` renders the 16:9 player at the top of a full-screen portrait page, the entire Details Screen (synopsis, buttons, episodes) was visible inside the tiny PiP floating window.
+- **Fix:**
+  - In `MainActivity.kt`, override `onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)` and notify the WebView via `window.__onMaxPlayPipModeChanged(isInPictureInPictureMode)`, while also setting `PictureInPictureParams.Builder().setSourceRectHint(...)` to the top 16:9 video bounds.
+  - In `InlinePlayer.tsx` and `ContentDetailScreen.tsx`, listen for `enterpictureinpicture` / `leavepictureinpicture` and the native `__onMaxPlayPipModeChanged` event. When PiP is active, promote the video player container to `fixed inset-0 z-[99999] w-screen h-screen bg-black` and hide player control overlays so **100% of the PiP floating window shows only the playing video**. Exiting PiP automatically restores the normal Details Screen layout.
 
 ---
 
-## 🔙 6. Fix Back-Navigation Scroll Jump to Top (`ThreeColumnRow.tsx`, `HomeScreen.tsx`, `AnimeScreen.tsx`, `SearchScreen.tsx`)
-- **Root Cause Fixed:**
-  1. `ThreeColumnRow.tsx` had `useEffect(() => setDisplayCount(9), [items])` which reset the grid back to 9 items every time `HomeScreen` re-rendered (every 4 seconds from the search placeholder timer!), collapsing the scroll height while `ContentDetailScreen` was open.
-  2. Scroll container `scrollTop` was not locked/restored across detail screen open/close transitions.
-- **Solution:**
-  1. In `ThreeColumnRow.tsx`, only reset `displayCount` if the category/tab actually changes, never when `items` array reference updates with the same content IDs.
-  2. Save `scrollRef.current.scrollTop` right before opening `ContentDetailScreen` and restore it via `requestAnimationFrame` when returning via the Android Triangle Back button or in-app Back button.
+## 6. Popunder Ads Rule (Max 2 After 10 Minutes) & Back-Button Trap Shield
+- **Changes in `src/services/adService.ts`, `InlinePlayer.tsx`, and `MainActivity.kt`:**
+  - Enforce the strict new rule in `adService.ts`:
+    - Reset `popundersShownInCurrentDetail = 0` and `detailsScreenEnteredAt = Date.now()` each time a user opens a Details Screen.
+    - **10-Minute Grace Period:** Block all popunders during the first `10 * 60 * 1000` ms (10 minutes) on a Details Screen.
+    - **Max 2 Limit:** Allow at most **2 popunder triggers total** per Details Screen session (`MAX_POPUNDERS_PER_DETAIL = 2`).
+  - **Back-Button Return Shield:**
+    - Before opening an ad URL, push a protective in-app history state (`{ maxplayAdReturnGuard: true, returnContext: isFullscreen ? 'player' : 'details' }`).
+    - In `CorsFreeWebViewClient.kt` / `MainActivity.kt`, intercept external ad popup/navigation attempts (`setSupportMultipleWindows` / `shouldOverrideUrlLoading`) in a dismissible overlay WebView or Custom Tab so pressing the phone's Back button closes the ad overlay and immediately returns the user to the **exact Video Player or Details Screen timestamp** without ever exiting the app or leaving the Details Screen.
 
 ---
 
-## 🖼️ 7. Persistent Native Disk Image Cache in Kotlin APK (`CorsFreeWebViewClient.kt` & `MainActivity.kt`)
-- **Root Cause Fixed:** External image hosts (`ibb.co`, `postimg.cc`, `tmdb.org`, `unsplash.com`) were re-downloaded on cold app restarts because WebView memory cache cleared on process exit.
-- **Solution:**
-  - Add a **Persistent Disk Image Cache (`MaxPlayImageCache` — 250 MB LRU in `context.cacheDir/poster_cache`)** inside `CorsFreeWebViewClient.shouldInterceptRequest`:
-    - Intercepts image requests (`.jpg`, `.jpeg`, `.png`, `.webp`, `.avif` or image host domains).
-    - If SHA-256 key exists on disk, serves the image **instantly in 0ms from local storage** with `Cache-Control: public, max-age=31536000, immutable` — zero internet used on app restarts!
-    - If not cached yet, fetches via `sharedHttpClient`, streams to WebView, and writes to disk cache in the background.
+## 7. `Me > Messages` Real Phone Status-Bar Push Notifications
+- **Goal:** Give users a true native phone messaging feel when new messages or admin replies arrive in `Me > Messages`.
+- **Changes:**
+  - Add a Native Android Notification channel (`MAXPLAY_INBOX_CHANNEL`, High Importance with sound, vibration, and the new MaxPlay app icon) in `MainActivity.kt` / `MaxPlayNativeBridge.kt` (`showNativeNotification(title, message, messageId)`), plus Web Notification API / Service Worker fallback for PWA.
+  - Subscribe to the user's Inbox/Messages collection in `RootNavigator.tsx` so whenever a new unread message arrives from Admin/System, the phone immediately rings/vibrates with a real Android system status-bar notification. Tapping the notification opens `Me > Messages` directly.
 
 ---
 
-## ⚡ 8. 4GB RAM Phone Performance Optimization & APK Polish
-1. **Isolate Rotating Search Bar Placeholder (`HomeScreen.tsx`):** Move the 4-second `tagIndex` timer into an isolated memoized component so `HomeScreen` never re-renders its 100+ movie cards every 4 seconds.
-2. **Freeze Background Screens During Video Playback (`App.tsx` / `HomeScreen.tsx` / `HeroBannerCarousel.tsx`):** Pause `HeroBannerCarousel` auto-slide and background timers whenever `ContentDetailScreen` is open or another tab is active.
-3. **Throttle Player `onTimeUpdate` Re-renders (`InlinePlayer.tsx`):** When player controls are hidden during playback, update `currentTime` React state once per second (`1000ms` throttle) instead of 4–5 times per second, cutting CPU/React reconciliation overhead by **75%** on 4GB RAM phones.
-4. **Clean Up Downloads Storage Footer (`DownloadsScreen.tsx`) & Settings Cache Control (`SettingsScreen.tsx`):**
-   - Replace the hardcoded `3.5 GB Free` text and non-functional Transfer modal in `DownloadsScreen.tsx` with real calculated storage usage (`navigator.storage.estimate()` + actual downloaded MB).
-   - Add a **Clear Image & Stream Cache** action in `SettingsScreen.tsx` that clears cached stream tokens and temporary cache without touching downloaded offline videos.
+## 8. Hardware Back Button (Triangle Button) Navigation Fix Across All Screens
+- **Root Cause Identified:**
+  - `MainActivity.kt` relied on `webView.canGoBack()`, which does not reliably track React state transitions (`Me -> Settings`, `Downloads -> OfflineDetailScreen`, open modals, or fullscreen player).
+  - `RootNavigator.tsx` only pushed a single history state when `isDetailOpen` changed from `false` to `true`, ignoring deeper stack pushes or `DownloadsScreen` sub-views.
+- **Fix:**
+  - Register a unified global back handler `window.__handleMaxPlayHardwareBack()` in `RootNavigator.tsx` that checks and pops in strict priority order:
+    1. Open Fullscreen Video Player -> exits fullscreen back to portrait player.
+    2. Open Modals / Drawers (`DownloadSelectionModal`, `TransferModal`, `UpdateModal`, `Settings` sub-modals) -> closes the active modal.
+    3. `DownloadsScreen` open sub-views (`OfflineDetailScreen` / Series Folder view) -> pops back to the main `Downloads` tab.
+    4. Active stack sub-screens (`Me > Settings`, `Me > Watch History`, `Me > Messages`, `Home > ContentDetail`, `Anime > ContentDetail`, `Search > ContentDetail`) -> pops one level back to the parent screen (`Me`, `Home`, `Anime`, `Search`).
+    5. Non-Home root tab (`Anime`, `Search`, `Downloads`, `Me`) or root screen -> shows the `"Press back again to exit"` confirmation modal.
+  - Update `MainActivity.kt`'s `OnBackPressedCallback` to invoke `window.__handleMaxPlayHardwareBack()` first and only exit the app when explicitly confirmed.
+
+---
+
+## 9. Downloads Screen — Transfer (`.maxplay`), Local Files, Received Tab, Storage UI & Recommendations
+- **MaxPlay Transfer System (`Send` & `Receive` with Live Indicators):**
+  - Build a dedicated **MaxPlay Transfer Modal** on `DownloadsScreen.tsx` when tapping `Transfer`:
+    - **Send Mode:** Lets the user pick any downloaded movie/episode, packages it into an encrypted/signed **`.maxplay` container file** (embedding title, poster, quality, language, and video stream bytes) with live step-by-step progress indicators (`Preparing .maxplay package...` -> `Transferring (MB/s & %)...` -> `Sent Successfully!`). Uses Native Android Share / P2P Wi-Fi Direct / Web Share API so it only opens inside MaxPlay.
+    - **Receive Mode:** Provides a `"Receive .maxplay File"` picker/listener with live unpacking progress (`Verifying .maxplay signature...` -> `Importing to MaxPlay Vault (0% - 100%)...` -> `Ready to Watch Offline!`). Imported items are saved with `category: 'received'` so they appear exclusively in MaxPlay's **Downloads > Received** tab.
+- **Activate `MovieBox`, `Local files`, and `Received` Tabs:**
+  - **MovieBox Tab:** Displays all in-app downloaded movies and series folders.
+  - **Local files Tab:** Displays device video files imported into MaxPlay, with a prominent `"Import Local Video from Phone"` button (`<input type="file" accept="video/*,.mkv,.mp4,.webm" multiple />`) that indexes local phone videos (`category: 'local'`) for instant ad-free playback inside MaxPlay's custom player (with 200% volume boost, speed control, and brightness gestures).
+  - **Received Tab:** Displays all `.maxplay` videos received via the Transfer system (`category: 'received'`) plus a quick `"Receive via Transfer"` button.
+- **Storage Available Indicator Alignment:**
+  - Redesign the `"Storage Available"` badge next to the filter tabs in `DownloadsScreen.tsx` into a clean, non-overflowing pill (`shrink-0 whitespace-nowrap`) with a mini visual usage bar (`Free GB / Total GB`).
+- **Real "For You" Recommendations & Working Refresh Button:**
+  - Replace the static 6 mock recommendation cards in `DownloadsScreen.tsx` with real items from the live Firestore content catalog (`subscribeToContent` + `CURATED_RECOMMENDATIONS` fallback).
+  - Make the `"Refresh new content"` button shuffle and cycle through a fresh set of 6 real catalog recommendations with a smooth spin animation, and allow tapping any card or its Download icon to open/download that title.
+
+---
+
+## 10. Multi-Device UI Overflow Fix (Video Player Fullscreen Button & Safe Areas)
+- **Root Cause Identified:** In `src/components/player/PlayerControls.tsx`, the bottom control bar right-hand group (`Cast`, `Audio Language`, `Quality`, `PiP`, `Fullscreen`) had fixed minimum widths and untruncated language names, pushing the `Fullscreen` button off the right edge on 320px–375px wide phones.
+- **Fix:**
+  - Make the `PlayerControls.tsx` bottom bar responsive (`flex-wrap: nowrap`, `min-w-0`, compact gaps `gap-1 sm:gap-2.5` on mobile, `max-w-[72px] sm:max-w-[110px] truncate` on the language badge, and `shrink-0` on the Fullscreen & PiP buttons) so every button—especially Fullscreen—is 100% visible and tappable on all phone screen sizes.
+
+---
+
+## 11. Home Screen Top-Right Arrow — APK Update Checker & Admin Force-Update Lock
+- **Admin Version & Force-Update Configuration:**
+  - Read `appVersion` (or `latestApkVersion`), `apkDownloadUrl` (or `downloadUrl`), `minRequiredVersion`, and `forceApkUpdate` from Firestore `settings/general` (with live real-time `onSnapshot` listener so changes in the Admin Panel reflect immediately on user devices).
+- **Home Screen Top-Right Update Button (`src/screens/main/HomeScreen.tsx`):**
+  - Compare the user's current installed version (`1.1`, or stored/bridge version) against the Admin's latest version using semantic version comparison (`compareSemver(latestVersion, currentVersion) > 0`).
+  - **When Up-to-Date:** The circular arrow button on the right of the search bar stays in its sleek glassmorphic state (tapping it shows a clean toast: `"You are using the latest version of MaxPlay (v1.1)"`).
+  - **When Update Available (e.g. Current `1.1` < Admin `1.2`):**
+    - The circular button switches from glassmorphism to a **vibrant blinking red alert badge** (`bg-red-600 animate-pulse ring-2 ring-red-400 shadow-[0_0_15px_rgba(239,68,68,0.8)]`).
+    - Tapping the blinking red button opens a dedicated **APK Update Modal** displaying the new version number (`v1.2`), convincing release highlights (*"Update to the latest version of MaxPlay to enjoy faster downloads, smoother streaming, and new features!"*), and a direct **Download Latest APK** button.
+    - While un-updated, the red button continues blinking and automatically shows a reminder popup periodically.
+- **Admin "Stop Service on Old Version" (Force Update Lock):**
+  - If the Admin sets `forceUpdate: true` or sets `minRequiredVersion` higher than the user's installed version in `settings/general`, render a **Full-Screen Non-Dismissible Force Update Lock Screen** (cannot be closed with Back button or X button) requiring the user to tap **Update Now** to download the new APK.

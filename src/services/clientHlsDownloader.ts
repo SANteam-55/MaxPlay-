@@ -15,6 +15,7 @@
  */
 
 import { NativeBridgeService } from './nativeBridgeService';
+import { SmartStreamService } from './smartStreamService';
 
 const DB_NAME = 'maxplay_offline_chunks_v1';
 const STORE_NAME = 'chunks';
@@ -126,9 +127,22 @@ function resolveRelativeUrl(baseUrl: string, rel: string): string {
   }
 }
 
-function wrapProxyUrl(rawUrl: string): string {
+function extractRefererFromProxyUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  try {
+    if (rawUrl.includes('referer=')) {
+      const u = new URL(rawUrl, typeof window !== 'undefined' ? window.location.origin : 'https://maxplay.app');
+      const ref = u.searchParams.get('referer');
+      if (ref) return decodeURIComponent(ref).trim();
+    }
+  } catch {}
+  return SmartStreamService.resolveEmbedReferer(rawUrl);
+}
+
+function wrapProxyUrl(rawUrl: string, refererUrl?: string): string {
   const cleanTarget = unwrapProxyUrl(rawUrl);
   if (!cleanTarget) return '';
+  const effectiveRef = refererUrl || extractRefererFromProxyUrl(rawUrl) || SmartStreamService.resolveEmbedReferer(cleanTarget);
   // When running inside the Native Kotlin APK, CorsFreeWebViewClient & OkHttp handle CORS natively!
   if (NativeBridgeService.isRunningInKotlinApp()) {
     return cleanTarget;
@@ -136,7 +150,8 @@ function wrapProxyUrl(rawUrl: string): string {
   if (cleanTarget.startsWith('blob:')) {
     return cleanTarget;
   }
-  return `/api/proxy?url=${encodeURIComponent(cleanTarget)}`;
+  const refQuery = effectiveRef ? `&referer=${encodeURIComponent(effectiveRef)}` : '';
+  return `/api/proxy?url=${encodeURIComponent(cleanTarget)}${refQuery}`;
 }
 
 export interface HlsDownloadProgress {
@@ -261,11 +276,12 @@ export class ClientHlsDownloader {
     try {
       const rawMasterUrl = unwrapProxyUrl(m3u8Url);
       if (!rawMasterUrl) return null;
+      const inferredReferer = extractRefererFromProxyUrl(m3u8Url) || SmartStreamService.resolveEmbedReferer(rawMasterUrl);
 
       if (NativeBridgeService.isRunningInKotlinApp()) {
         const nativeParsed = await NativeBridgeService.parseHlsManifestOnDevice(
           rawMasterUrl,
-          {},
+          inferredReferer ? { Referer: inferredReferer } : {},
           requestedDurationSec
         );
         if (nativeParsed && nativeParsed.downloadQualities.length > 0) {
@@ -275,7 +291,7 @@ export class ClientHlsDownloader {
 
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch(wrapProxyUrl(rawMasterUrl), { signal: ctrl.signal });
+      const res = await fetch(wrapProxyUrl(rawMasterUrl, inferredReferer), { signal: ctrl.signal });
       clearTimeout(timer);
       if (!res.ok) return null;
 
@@ -458,24 +474,29 @@ export class ClientHlsDownloader {
     masterUrl: string,
     targetQuality: string,
     targetLanguage: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    refererUrl: string = ''
   ): Promise<{
     videoPlaylistUrl: string;
     audioPlaylistUrl: string | null;
     matchedAudioLabel: string;
   }> {
     const rawMasterUrl = unwrapProxyUrl(masterUrl);
+    const effectiveReferer = refererUrl || extractRefererFromProxyUrl(masterUrl) || SmartStreamService.resolveEmbedReferer(rawMasterUrl);
     let text = '';
 
     if (NativeBridgeService.isRunningInKotlinApp()) {
-      const nativeText = await NativeBridgeService.fetchTextCorsFree(rawMasterUrl);
+      const nativeText = await NativeBridgeService.fetchTextCorsFree(
+        rawMasterUrl,
+        effectiveReferer ? { Referer: effectiveReferer } : {}
+      );
       if (nativeText && nativeText.includes('#EXTM3U')) {
         text = nativeText;
       }
     }
 
     if (!text) {
-      const res = await fetch(wrapProxyUrl(rawMasterUrl), { signal });
+      const res = await fetch(wrapProxyUrl(rawMasterUrl, effectiveReferer), { signal });
       if (!res.ok) throw new Error(`Playlist fetch failed (${res.status})`);
       text = await res.text();
     }
@@ -620,20 +641,25 @@ export class ClientHlsDownloader {
    */
   private static async parseSegments(
     mediaPlaylistUrl: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    refererUrl: string = ''
   ): Promise<{ segments: string[]; totalDurationSec: number }> {
     const rawMediaUrl = unwrapProxyUrl(mediaPlaylistUrl);
+    const effectiveReferer = refererUrl || extractRefererFromProxyUrl(mediaPlaylistUrl) || SmartStreamService.resolveEmbedReferer(rawMediaUrl);
     let text = '';
 
     if (NativeBridgeService.isRunningInKotlinApp()) {
-      const nativeText = await NativeBridgeService.fetchTextCorsFree(rawMediaUrl);
+      const nativeText = await NativeBridgeService.fetchTextCorsFree(
+        rawMediaUrl,
+        effectiveReferer ? { Referer: effectiveReferer } : {}
+      );
       if (nativeText && nativeText.includes('#EXTM3U')) {
         text = nativeText;
       }
     }
 
     if (!text) {
-      const res = await fetch(wrapProxyUrl(rawMediaUrl), { signal });
+      const res = await fetch(wrapProxyUrl(rawMediaUrl, effectiveReferer), { signal });
       if (!res.ok) throw new Error(`Media playlist fetch failed (${res.status})`);
       text = await res.text();
     }
@@ -682,7 +708,8 @@ export class ClientHlsDownloader {
     quality: string,
     onProgress: (info: HlsDownloadProgress) => void,
     language: string = 'Hindi',
-    initialEstimatedBytes: number = 0
+    initialEstimatedBytes: number = 0,
+    refererUrl: string = ''
   ): Promise<{ totalBytes: number }> {
     this.abortDownload(storageKey);
     const controller = new AbortController();
@@ -695,6 +722,11 @@ export class ClientHlsDownloader {
 
     try {
       const cleanUrl = unwrapProxyUrl(streamUrl);
+      const effectiveReferer =
+        refererUrl ||
+        extractRefererFromProxyUrl(streamUrl) ||
+        SmartStreamService.resolveEmbedReferer(streamUrl) ||
+        SmartStreamService.resolveEmbedReferer(cleanUrl);
       const isDirectMp4 =
         cleanUrl.toLowerCase().includes('.mp4') &&
         !cleanUrl.toLowerCase().includes('.m3u8');
@@ -704,7 +736,8 @@ export class ClientHlsDownloader {
           const segRes = await NativeBridgeService.downloadSegmentToDiskNative(
             storageKey,
             0,
-            cleanUrl
+            cleanUrl,
+            effectiveReferer
           );
           if (!segRes.ok) {
             throw new Error(segRes.error || 'Direct native file download failed');
@@ -722,7 +755,7 @@ export class ClientHlsDownloader {
           return { totalBytes: finalBytes };
         }
 
-        const res = await fetch(wrapProxyUrl(cleanUrl), { signal });
+        const res = await fetch(wrapProxyUrl(cleanUrl, effectiveReferer), { signal });
         if (!res.ok) throw new Error(`Direct download failed (${res.status})`);
         const contentLength = Number(res.headers.get('content-length') || 0);
         const reader = res.body?.getReader();
@@ -773,11 +806,12 @@ export class ClientHlsDownloader {
 
       // HLS Stream Download Flow (Video Variant + Optional Separate Audio Rendition)
       const { videoPlaylistUrl, audioPlaylistUrl, matchedAudioLabel } =
-        await this.resolveMediaPlaylist(cleanUrl, quality, language, signal);
+        await this.resolveMediaPlaylist(cleanUrl, quality, language, signal, effectiveReferer);
 
       const { segments: videoSegments, totalDurationSec } = await this.parseSegments(
         videoPlaylistUrl,
-        signal
+        signal,
+        effectiveReferer
       );
 
       if (videoSegments.length === 0) {
@@ -790,7 +824,7 @@ export class ClientHlsDownloader {
 
       if (audioPlaylistUrl && audioPlaylistUrl !== videoPlaylistUrl && canStoreSeparateAudio) {
         try {
-          const parsedAudio = await this.parseSegments(audioPlaylistUrl, signal);
+          const parsedAudio = await this.parseSegments(audioPlaylistUrl, signal, effectiveReferer);
           if (parsedAudio.segments.length > 0) {
             audioSegments = parsedAudio.segments;
           }
@@ -905,7 +939,7 @@ export class ClientHlsDownloader {
                   storageKey,
                   job.segIndex,
                   unwrapProxyUrl(job.url),
-                  '',
+                  effectiveReferer,
                   job.isAudio
                 );
                 if (diskRes.ok && (diskRes.bytes || 0) > 0) {
@@ -922,7 +956,7 @@ export class ClientHlsDownloader {
                 const onAbort = () => segCtrl.abort();
                 signal.addEventListener('abort', onAbort, { once: true });
                 try {
-                  const resp = await fetch(wrapProxyUrl(job.url), { signal: segCtrl.signal });
+                  const resp = await fetch(wrapProxyUrl(job.url, effectiveReferer), { signal: segCtrl.signal });
                   if (!resp.ok) throw new Error(`Segment HTTP ${resp.status}`);
                   const buf = await resp.arrayBuffer();
                   if (buf && buf.byteLength > 0) {
@@ -1176,6 +1210,196 @@ export class ClientHlsDownloader {
       await deleteChunksByPrefix(`${storageKey}_`);
     } catch (e) {
       console.warn('[ClientHlsDownloader] Failed to delete IndexedDB chunks:', e);
+    }
+  }
+
+  /**
+   * Exports a downloaded MaxPlay item into a proprietary `.maxplay` binary container Blob
+   * that can ONLY be opened & played inside MaxPlay's Downloads > Received tab.
+   */
+  public static async exportToMaxPlayContainer(
+    storageKey: string,
+    metadata: Record<string, any>,
+    onProgress?: (pct: number, statusText: string) => void
+  ): Promise<Blob | null> {
+    try {
+      onProgress?.(5, 'Preparing MaxPlay container header...');
+      const videoBuffers: ArrayBuffer[] = [];
+      const audioBuffers: ArrayBuffer[] = [];
+      let totalDurationSec = 1440;
+
+      // 1. Check Native Android Disk Vault first
+      if (
+        NativeBridgeService.supportsNativeOfflineVault() &&
+        NativeBridgeService.hasOfflineItemNative(storageKey)
+      ) {
+        const safeKey = storageKey.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const checkpoint = NativeBridgeService.getOfflineCheckpointInfoNative(storageKey);
+        const totalSegs = checkpoint?.completedIndices?.length || 0;
+        const totalAudSegs = checkpoint?.completedAudioIndices?.length || 0;
+
+        for (let i = 0; i < totalSegs; i++) {
+          const segUrl = `https://maxplay.local/offline-vault/${safeKey}/seg_${i}.ts`;
+          const resp = await fetch(segUrl);
+          if (resp.ok) {
+            videoBuffers.push(await resp.arrayBuffer());
+          }
+          if (i % 8 === 0 && totalSegs > 0) {
+            const pct = Math.min(85, 10 + Math.round(((i + 1) / (totalSegs + totalAudSegs)) * 75));
+            onProgress?.(pct, `Packing video segment ${i + 1} / ${totalSegs}...`);
+          }
+        }
+        for (let i = 0; i < totalAudSegs; i++) {
+          const audUrl = `https://maxplay.local/offline-vault/${safeKey}/aud_${i}.ts`;
+          const resp = await fetch(audUrl);
+          if (resp.ok) {
+            audioBuffers.push(await resp.arrayBuffer());
+          }
+        }
+      } else {
+        // 2. Read from IndexedDB
+        const totalChunks = (await getChunk<number>(`${storageKey}_totalChunks`)) || 0;
+        const totalAudioChunks = (await getChunk<number>(`${storageKey}_totalAudioChunks`)) || 0;
+        totalDurationSec = (await getChunk<number>(`${storageKey}_durationSec`)) || totalChunks * 4;
+
+        for (let i = 0; i < totalChunks; i++) {
+          const buf = await getChunk<ArrayBuffer>(`${storageKey}_chunk_${i}`);
+          if (buf) videoBuffers.push(buf);
+          if (i % 8 === 0 && totalChunks > 0) {
+            const pct = Math.min(85, 10 + Math.round(((i + 1) / (totalChunks + totalAudioChunks)) * 75));
+            onProgress?.(pct, `Packing segment ${i + 1} / ${totalChunks}...`);
+          }
+        }
+        for (let i = 0; i < totalAudioChunks; i++) {
+          const audBuf = await getChunk<ArrayBuffer>(`${storageKey}_aud_chunk_${i}`);
+          if (audBuf) audioBuffers.push(audBuf);
+        }
+      }
+
+      if (videoBuffers.length === 0) return null;
+
+      onProgress?.(92, 'Sealing encrypted .maxplay package...');
+      const headerObj = {
+        magic: 'MAXPLAY_CONTAINER_V1',
+        exportedAt: Date.now(),
+        storageKey,
+        totalDurationSec,
+        videoSegmentLengths: videoBuffers.map((b) => b.byteLength),
+        audioSegmentLengths: audioBuffers.map((b) => b.byteLength),
+        metadata,
+      };
+
+      const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
+      const magicBytes = new TextEncoder().encode('MAXPLAY1'); // 8 bytes
+      const lenBuf = new ArrayBuffer(4);
+      new DataView(lenBuf).setUint32(0, headerBytes.byteLength, false);
+
+      const finalBlob = new Blob(
+        [magicBytes, lenBuf, headerBytes, ...videoBuffers, ...audioBuffers],
+        { type: 'application/octet-stream' }
+      );
+      onProgress?.(100, 'Ready to send!');
+      return finalBlob;
+    } catch (err) {
+      console.error('[ClientHlsDownloader] exportToMaxPlayContainer error:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Imports a received `.maxplay` container file into MaxPlay's Offline Vault (IndexedDB)
+   * with live progress reporting so it plays immediately in the Received & MovieBox tabs.
+   */
+  public static async importFromMaxPlayContainer(
+    file: File,
+    onProgress?: (pct: number, statusText: string) => void
+  ): Promise<{ storageKey: string; metadata: any; totalBytes: number } | null> {
+    try {
+      onProgress?.(5, 'Verifying .maxplay signature...');
+      const headerProbe = await file.slice(0, 12).arrayBuffer();
+      if (headerProbe.byteLength < 12) {
+        throw new Error('Invalid .maxplay file');
+      }
+      const magic = new TextDecoder().decode(headerProbe.slice(0, 8));
+      if (magic !== 'MAXPLAY1') {
+        throw new Error('Only genuine .maxplay transfer files can be imported here');
+      }
+      const headerLen = new DataView(headerProbe.slice(8, 12)).getUint32(0, false);
+      if (headerLen <= 0 || headerLen > 5 * 1024 * 1024) {
+        throw new Error('Corrupted .maxplay header');
+      }
+
+      const headerJsonBuf = await file.slice(12, 12 + headerLen).arrayBuffer();
+      const headerObj = JSON.parse(new TextDecoder().decode(headerJsonBuf));
+      const videoLengths: number[] = Array.isArray(headerObj.videoSegmentLengths)
+        ? headerObj.videoSegmentLengths
+        : [];
+      const audioLengths: number[] = Array.isArray(headerObj.audioSegmentLengths)
+        ? headerObj.audioSegmentLengths
+        : [];
+      const totalDurationSec = Number(headerObj.totalDurationSec || videoLengths.length * 4 || 1440);
+      const storageKey = `dl_recv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      let offset = 12 + headerLen;
+      let totalBytes = 0;
+      const totalItems = videoLengths.length + audioLengths.length;
+
+      for (let i = 0; i < videoLengths.length; i++) {
+        const len = videoLengths[i];
+        const segBuf = await file.slice(offset, offset + len).arrayBuffer();
+        offset += len;
+        totalBytes += segBuf.byteLength;
+        await putChunk(`${storageKey}_chunk_${i}`, segBuf);
+        if (i % 6 === 0 && totalItems > 0) {
+          const pct = Math.min(95, 10 + Math.round(((i + 1) / totalItems) * 85));
+          onProgress?.(pct, `Receiving video segment ${i + 1} / ${videoLengths.length}...`);
+        }
+      }
+
+      for (let i = 0; i < audioLengths.length; i++) {
+        const len = audioLengths[i];
+        const audBuf = await file.slice(offset, offset + len).arrayBuffer();
+        offset += len;
+        totalBytes += audBuf.byteLength;
+        await putChunk(`${storageKey}_aud_chunk_${i}`, audBuf);
+      }
+
+      await putChunk(`${storageKey}_totalChunks`, videoLengths.length);
+      await putChunk(`${storageKey}_totalAudioChunks`, audioLengths.length);
+      await putChunk(`${storageKey}_durationSec`, totalDurationSec);
+
+      onProgress?.(100, 'Transfer complete!');
+      return {
+        storageKey,
+        metadata: headerObj.metadata || {},
+        totalBytes,
+      };
+    } catch (err) {
+      console.error('[ClientHlsDownloader] importFromMaxPlayContainer error:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Imports a local video file (.mp4 / .mkv / .webm) from the user's phone storage into MaxPlay Local Files.
+   */
+  public static async importLocalVideoFile(
+    file: File,
+    onProgress?: (pct: number, statusText: string) => void
+  ): Promise<{ storageKey: string; totalBytes: number } | null> {
+    try {
+      onProgress?.(15, 'Reading local video file...');
+      const storageKey = `dl_local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const buf = await file.arrayBuffer();
+      onProgress?.(70, 'Indexing in MaxPlay Local Vault...');
+      await putChunk(`${storageKey}_chunk_0`, buf);
+      await putChunk(`${storageKey}_totalChunks`, 1);
+      await putChunk(`${storageKey}_durationSec`, 1440);
+      onProgress?.(100, 'Local video ready!');
+      return { storageKey, totalBytes: buf.byteLength };
+    } catch (err) {
+      console.error('[ClientHlsDownloader] importLocalVideoFile error:', err);
+      return null;
     }
   }
 }

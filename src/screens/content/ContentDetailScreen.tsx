@@ -766,10 +766,13 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const qualityTriggerRef = useRef<HTMLButtonElement>(null);
   const seasonTriggerRef = useRef<HTMLButtonElement>(null);
 
-  // Initialize details screen ad grace period
+  // Initialize details screen ad grace period (10 min delay, max 2 popunders per Details screen)
   useEffect(() => {
-    adManager.enterDetailsScreen();
-  }, []);
+    adManager.enterDetailsScreen(content?.id || 'detail');
+    return () => {
+      adManager.exitDetailsScreen();
+    };
+  }, [content?.id]);
 
   // Unique identifier for the active part to guarantee zero timestamp bleed
   const currentPartKey = useMemo(() => {
@@ -1546,8 +1549,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
 
-    // 3. Only include Server 1 videoSources when on Server 1 (or if Server 2 hasn't reported live HLS audio tracks yet)
-    if (selectedServer === 'server1' || merged.length === 0) {
+    // 3. Include videoSources & configured multi-audio tracks when on Server 1 OR when Server 2 stream hasn't exposed multiple tracks yet
+    if (selectedServer === 'server1' || merged.length <= 1) {
       if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
         Object.keys(playerVideoSources).forEach(addUnique);
       }
@@ -1562,8 +1565,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
 
-    // 4. Episode / Movie / Content configured languages
-    if (merged.length === 0 || selectedServer === 'server1') {
+    // 4. Episode / Movie / Content configured languages (Always merge if <= 1 track discovered so multi-language content on Server 2 always shows all languages)
+    if (merged.length <= 1 || selectedServer === 'server1') {
       const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks || (currentEpisode as any)?.audioLanguages;
       if (Array.isArray(partLangs) && partLangs.length > 0) {
         partLangs.forEach((l: any) => addUnique(typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)));
@@ -1580,6 +1583,67 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
     return merged;
   }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.videoSources, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
+
+  // Proactively probe Server 2 / active stream master playlist so multi-language audio tracks and qualities appear immediately on Server 2
+  useEffect(() => {
+    const activeTargetUrl = selectedServer === 'server2' && secondaryServerUrl ? secondaryServerUrl : primaryServerUrl;
+    if (!activeTargetUrl) return;
+    let cancelled = false;
+
+    const probeServerTracks = async () => {
+      try {
+        let m3u8Url = activeTargetUrl;
+        let refererUrl = SmartStreamService.resolveEmbedReferer(activeTargetUrl);
+        if (SmartStreamService.isExtractableSource(activeTargetUrl, true)) {
+          const res = await SmartStreamService.resolvePlaybackUrl(activeTargetUrl, true);
+          if (cancelled) return;
+          if (res?.ok && res.streamUrl) {
+            m3u8Url = res.streamUrl;
+            refererUrl = res.headers?.Referer || res.headers?.referer || res.referer || refererUrl;
+            if (Array.isArray(res.audioTracks) && res.audioTracks.length > 0) {
+              setDiscoveredAudioTracks((prev) => {
+                const next = Array.from(new Set([...prev, ...res.audioTracks!]));
+                return next.length !== prev.length ? next : prev;
+              });
+            }
+            if (Array.isArray(res.qualities) && res.qualities.length > 0) {
+              setDiscoveredQualities((prev) => {
+                const next = Array.from(new Set([...prev, ...res.qualities!]));
+                return next.length !== prev.length ? next : prev;
+              });
+            }
+          }
+        }
+        if (m3u8Url && (m3u8Url.includes('.m3u8') || m3u8Url.includes('m3u8') || m3u8Url.includes('master.txt'))) {
+          const parsed = await ClientHlsDownloader.probeMasterPlaylist(m3u8Url, refererUrl);
+          if (cancelled || !parsed) return;
+          if (parsed.audioTracks && parsed.audioTracks.length > 0) {
+            const labels = parsed.audioTracks.map((a) => a.label).filter(Boolean);
+            if (labels.length > 0) {
+              setDiscoveredAudioTracks((prev) => {
+                const next = Array.from(new Set([...prev, ...labels]));
+                return next.length !== prev.length ? next : prev;
+              });
+            }
+          }
+          if (parsed.qualities && parsed.qualities.length > 0) {
+            const qLabels = parsed.qualities.map((q) => q.label).filter(Boolean);
+            if (qLabels.length > 0) {
+              setDiscoveredQualities((prev) => {
+                const next = Array.from(new Set([...prev, ...qLabels]));
+                return next.length !== prev.length ? next : prev;
+              });
+            }
+          }
+        }
+      } catch {}
+    };
+
+    probeServerTracks();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedServer, primaryServerUrl, secondaryServerUrl]);
 
   // Derive available qualities strictly for the active server (Server 1 vs Server 2), never mixing language names into qualities!
   const availableDetailQualities = useMemo(() => {
@@ -2675,227 +2739,261 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 </div>
             </div>
 
-            {/* Language, Season, and View Mode Switcher Row */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5 mb-4">
-                {/* RELATIVE WRAPPER FOR DROPDOWN ALIGNMENT */}
-                <div className="relative flex flex-wrap items-center gap-2">
-                  {/* Dub / Language Trigger Button (Solo Leveling HUD) */}
-                  <button
-                    ref={languageTriggerRef}
-                    data-selector-trigger="language"
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsSeasonModalOpen(false);
-                      setIsQualityModalOpen(false);
-                      setIsLanguageModalOpen(prev => {
-                        const next = !prev;
-                        if (next) {
-                          adManager.handleSelectorClick(!!user?.isPremium);
-                        }
-                        return next;
-                      });
-                    }}
-                    className="relative inline-flex items-center gap-2 bg-[#121626] hover:bg-[#182038] active:scale-95 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(6,182,212,0.12)] transition-all cursor-pointer group"
-                    title="Change Audio Track"
-                  >
-                    <div className="w-4 h-4 rounded-md bg-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/30 transition-colors">
-                      <Volume2 className="w-3 h-3 text-[#06b6d4]" />
-                    </div>
-                    <span className="font-mono text-cyan-300 font-extrabold tracking-wide">
-                      {activeLanguage || availableLanguages[0] || 'Audio'}
-                    </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-cyan-400/60 group-hover:text-cyan-300 transition-transform group-hover:translate-y-0.5" />
-                  </button>
+            {/* Single-Line Static Selector Row: Audio Language + Quality + Season */}
+            <div className="flex flex-col gap-2.5 mb-4">
+                <div className="flex items-center justify-between gap-2 w-full">
+                  {/* SINGLE-LINE HORIZONTAL SELECTOR BOXES (Never wraps onto a second line) */}
+                  <div className="relative flex flex-nowrap items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar scrollbar-none py-0.5 flex-1 min-w-0">
+                    {/* 1. Dub / Language Trigger Button */}
+                    <button
+                      ref={languageTriggerRef}
+                      data-selector-trigger="language"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsSeasonModalOpen(false);
+                        setIsQualityModalOpen(false);
+                        setIsLanguageModalOpen(prev => {
+                          const next = !prev;
+                          if (next) {
+                            adManager.handleSelectorClick(!!user?.isPremium);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="relative shrink-0 inline-flex items-center gap-1.5 bg-[#121626] hover:bg-[#182038] active:scale-95 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-white shadow-[0_0_12px_rgba(6,182,212,0.12)] transition-all cursor-pointer group"
+                      title="Change Audio Track"
+                    >
+                      <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-md bg-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/30 transition-colors shrink-0">
+                        <Volume2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-[#06b6d4]" />
+                      </div>
+                      <span className="font-mono text-cyan-300 font-extrabold tracking-wide truncate max-w-[78px] sm:max-w-[120px]">
+                        {activeLanguage || availableLanguages[0] || 'Audio'}
+                      </span>
+                      <ChevronDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-cyan-400/60 group-hover:text-cyan-300 transition-transform group-hover:translate-y-0.5 shrink-0" />
+                    </button>
 
-                  {/* Language Dropdown */}
-                  <SoloLevelingSelectorModal
-                    isOpen={isLanguageModalOpen}
-                    onClose={() => setIsLanguageModalOpen(false)}
-                    triggerRef={languageTriggerRef}
-                    type="language"
-                    contentTitle={content.title}
-                    languages={availableLanguages}
-                    activeLanguage={activeLanguage || availableLanguages[0] || ''}
-                    onSelectLanguage={(newLang) => {
-                      saveProgressNow(playbackPosition, false, true);
-                      setActiveLanguage(newLang);
-                      try {
-                        localStorage.setItem('maxplay_preferred_lang', newLang);
-                      } catch {}
-                    }}
-                  />
+                    {/* Language Dropdown */}
+                    <SoloLevelingSelectorModal
+                      isOpen={isLanguageModalOpen}
+                      onClose={() => setIsLanguageModalOpen(false)}
+                      triggerRef={languageTriggerRef}
+                      type="language"
+                      contentTitle={content.title}
+                      languages={availableLanguages}
+                      activeLanguage={activeLanguage || availableLanguages[0] || ''}
+                      onSelectLanguage={(newLang) => {
+                        saveProgressNow(playbackPosition, false, true);
+                        setActiveLanguage(newLang);
+                        try {
+                          localStorage.setItem('maxplay_preferred_lang', newLang);
+                        } catch {}
+                      }}
+                    />
 
-                  {/* Quality Selector Trigger Button (Solo Leveling HUD) */}
-                  <button
-                    ref={qualityTriggerRef}
-                    data-selector-trigger="quality"
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsLanguageModalOpen(false);
-                      setIsSeasonModalOpen(false);
-                      setIsQualityModalOpen(prev => {
-                        const next = !prev;
-                        if (next) {
-                          adManager.handleSelectorClick(!!user?.isPremium);
-                        }
-                        return next;
-                      });
-                    }}
-                    className="relative inline-flex items-center gap-2 bg-[#0d1f1c] hover:bg-[#132d28] active:scale-95 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(16,185,129,0.12)] transition-all cursor-pointer group"
-                    title="Change Video Quality"
-                  >
-                    <div className="w-4 h-4 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:bg-emerald-500/30 transition-colors">
-                      <Sparkles className="w-3 h-3 text-[#10b981]" />
-                    </div>
-                    <span className="font-mono text-emerald-300 font-extrabold tracking-wide uppercase">
-                      {activeQuality === 'auto' ? 'Auto' : activeQuality}
-                    </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-emerald-400/60 group-hover:text-emerald-300 transition-transform group-hover:translate-y-0.5" />
-                  </button>
+                    {/* 2. Quality Selector Trigger Button */}
+                    <button
+                      ref={qualityTriggerRef}
+                      data-selector-trigger="quality"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsLanguageModalOpen(false);
+                        setIsSeasonModalOpen(false);
+                        setIsQualityModalOpen(prev => {
+                          const next = !prev;
+                          if (next) {
+                            adManager.handleSelectorClick(!!user?.isPremium);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="relative shrink-0 inline-flex items-center gap-1.5 bg-[#0d1f1c] hover:bg-[#132d28] active:scale-95 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-white shadow-[0_0_12px_rgba(16,185,129,0.12)] transition-all cursor-pointer group"
+                      title="Change Video Quality"
+                    >
+                      <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:bg-emerald-500/30 transition-colors shrink-0">
+                        <Sparkles className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-[#10b981]" />
+                      </div>
+                      <span className="font-mono text-emerald-300 font-extrabold tracking-wide uppercase truncate max-w-[64px] sm:max-w-[90px]">
+                        {activeQuality === 'auto' ? 'Auto' : activeQuality}
+                      </span>
+                      <ChevronDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-400/60 group-hover:text-emerald-300 transition-transform group-hover:translate-y-0.5 shrink-0" />
+                    </button>
 
-                  {/* Quality Dropdown */}
-                  <SoloLevelingSelectorModal
-                    isOpen={isQualityModalOpen}
-                    onClose={() => setIsQualityModalOpen(false)}
-                    triggerRef={qualityTriggerRef}
-                    type="quality"
-                    contentTitle={content.title}
-                    qualities={availableDetailQualities}
-                    activeQuality={activeQuality}
-                    onSelectQuality={(newQual) => {
-                      saveProgressNow(playbackPosition, false, true);
-                      setActiveQuality(newQual);
-                      try {
-                        localStorage.setItem('maxplay_preferred_quality', newQual);
-                        localStorage.setItem('maxplay_video_quality', newQual);
-                      } catch {}
-                    }}
-                  />
+                    {/* Quality Dropdown */}
+                    <SoloLevelingSelectorModal
+                      isOpen={isQualityModalOpen}
+                      onClose={() => setIsQualityModalOpen(false)}
+                      triggerRef={qualityTriggerRef}
+                      type="quality"
+                      contentTitle={content.title}
+                      qualities={availableDetailQualities}
+                      activeQuality={activeQuality}
+                      onSelectQuality={(newQual) => {
+                        saveProgressNow(playbackPosition, false, true);
+                        setActiveQuality(newQual);
+                        try {
+                          localStorage.setItem('maxplay_preferred_quality', newQual);
+                          localStorage.setItem('maxplay_video_quality', newQual);
+                        } catch {}
+                      }}
+                    />
 
-                  {/* Season Selector Trigger Button (Series/Anime only) */}
-                  {!isMovie && (
-                    <>
-                      <button
-                        ref={seasonTriggerRef}
-                        data-selector-trigger="season"
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsLanguageModalOpen(false);
-                          setIsQualityModalOpen(false);
-                          setIsSeasonModalOpen(prev => {
-                            const next = !prev;
-                            if (next) {
-                              adManager.handleSelectorClick(!!user?.isPremium);
-                            }
-                            return next;
-                          });
-                        }}
-                        className="relative inline-flex items-center gap-2 bg-[#181329] hover:bg-[#231a3d] active:scale-95 border border-purple-500/30 hover:border-purple-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(168,85,247,0.12)] transition-all cursor-pointer group"
-                        title="Change Season"
-                      >
-                        <div className="w-4 h-4 rounded-md bg-purple-500/20 flex items-center justify-center text-purple-400 group-hover:bg-purple-500/30 transition-colors">
-                          <Layers className="w-3.5 h-3.5 text-[#a855f7]" />
-                        </div>
-                        <span className="font-mono text-purple-300 font-extrabold tracking-wide truncate max-w-[120px] sm:max-w-[200px]">
-                          {content.seasonsData?.[selectedSeasonIndex]?.seasonTitle || content.seasonsData?.[selectedSeasonIndex]?.title || `Season ${selectedSeasonIndex + 1}`}
-                        </span>
-                        <ChevronDown className="w-3.5 h-3.5 text-purple-400/60 group-hover:text-purple-300 transition-transform group-hover:translate-y-0.5" />
-                      </button>
+                    {/* 3. Season Selector Trigger Button (Series/Anime only - stays on the exact same line) */}
+                    {!isMovie && (
+                      <>
+                        <button
+                          ref={seasonTriggerRef}
+                          data-selector-trigger="season"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsLanguageModalOpen(false);
+                            setIsQualityModalOpen(false);
+                            setIsSeasonModalOpen(prev => {
+                              const next = !prev;
+                              if (next) {
+                                adManager.handleSelectorClick(!!user?.isPremium);
+                              }
+                              return next;
+                            });
+                          }}
+                          className="relative shrink-0 inline-flex items-center gap-1.5 bg-[#181329] hover:bg-[#231a3d] active:scale-95 border border-purple-500/30 hover:border-purple-400/60 rounded-xl px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-white shadow-[0_0_12px_rgba(168,85,247,0.12)] transition-all cursor-pointer group"
+                          title="Change Season"
+                        >
+                          <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-md bg-purple-500/20 flex items-center justify-center text-purple-400 group-hover:bg-purple-500/30 transition-colors shrink-0">
+                            <Layers className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-[#a855f7]" />
+                          </div>
+                          <span className="font-mono text-purple-300 font-extrabold tracking-wide truncate max-w-[82px] sm:max-w-[160px]">
+                            {content.seasonsData?.[selectedSeasonIndex]?.seasonTitle || content.seasonsData?.[selectedSeasonIndex]?.title || `Season ${selectedSeasonIndex + 1}`}
+                          </span>
+                          <ChevronDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-purple-400/60 group-hover:text-purple-300 transition-transform group-hover:translate-y-0.5 shrink-0" />
+                        </button>
 
-                      {/* Season Dropdown */}
-                      <SoloLevelingSelectorModal
-                        isOpen={isSeasonModalOpen}
-                        onClose={() => setIsSeasonModalOpen(false)}
-                        triggerRef={seasonTriggerRef}
-                        type="season"
-                        contentTitle={content.title}
-                        seasons={seasonOptions}
-                        selectedSeasonIndex={selectedSeasonIndex}
-                        onSelectSeason={(sIdx) => {
-                          userExplicitlyChoseEpisodeRef.current = true;
-                          saveProgressNow(playbackPosition, false, true);
-                          setSelectedSeasonIndex(sIdx);
-                          
-                          // Determine the target episode for this selected season
-                          let targetEpIdx = 0;
-                          const targetSeasonEpisodes = content.seasonsData?.[sIdx]?.episodes || [];
-                          const maxValidEp = Math.max(0, targetSeasonEpisodes.length - 1);
-                          
-                          if (seasonEpisodeMap[sIdx] !== undefined) {
-                            targetEpIdx = Math.min(seasonEpisodeMap[sIdx], maxValidEp);
-                          } else {
-                            // Find highest watched episode in this season from partProgressMap
-                            let latestEpWatched = 0;
-                            let latestEpTime = 0;
-                            for (let epI = 0; epI < targetSeasonEpisodes.length; epI++) {
-                              for (let pI = 0; pI < 10; pI++) {
-                                const pData = partProgressMap[`s${sIdx}_e${epI}_p${pI}`];
-                                if (pData && (pData.time > 0 || (pData.updatedAt || 0) > latestEpTime)) {
-                                  latestEpWatched = epI;
-                                  latestEpTime = pData.updatedAt || pData.time;
+                        {/* Season Dropdown */}
+                        <SoloLevelingSelectorModal
+                          isOpen={isSeasonModalOpen}
+                          onClose={() => setIsSeasonModalOpen(false)}
+                          triggerRef={seasonTriggerRef}
+                          type="season"
+                          contentTitle={content.title}
+                          seasons={seasonOptions}
+                          selectedSeasonIndex={selectedSeasonIndex}
+                          onSelectSeason={(sIdx) => {
+                            userExplicitlyChoseEpisodeRef.current = true;
+                            saveProgressNow(playbackPosition, false, true);
+                            setSelectedSeasonIndex(sIdx);
+                            
+                            // Determine the target episode for this selected season
+                            let targetEpIdx = 0;
+                            const targetSeasonEpisodes = content.seasonsData?.[sIdx]?.episodes || [];
+                            const maxValidEp = Math.max(0, targetSeasonEpisodes.length - 1);
+                            
+                            if (seasonEpisodeMap[sIdx] !== undefined) {
+                              targetEpIdx = Math.min(seasonEpisodeMap[sIdx], maxValidEp);
+                            } else {
+                              // Find highest watched episode in this season from partProgressMap
+                              let latestEpWatched = 0;
+                              let latestEpTime = 0;
+                              for (let epI = 0; epI < targetSeasonEpisodes.length; epI++) {
+                                for (let pI = 0; pI < 10; pI++) {
+                                  const pData = partProgressMap[`s${sIdx}_e${epI}_p${pI}`];
+                                  if (pData && (pData.time > 0 || (pData.updatedAt || 0) > latestEpTime)) {
+                                    latestEpWatched = epI;
+                                    latestEpTime = pData.updatedAt || pData.time;
+                                  }
                                 }
                               }
+                              targetEpIdx = latestEpWatched;
                             }
-                            targetEpIdx = latestEpWatched;
-                          }
-                          
-                          setSelectedEpisodeIndex(targetEpIdx);
-                          setSeasonEpisodeMap(prev => ({ ...prev, [sIdx]: targetEpIdx }));
+                            
+                            setSelectedEpisodeIndex(targetEpIdx);
+                            setSeasonEpisodeMap(prev => ({ ...prev, [sIdx]: targetEpIdx }));
 
-                          // Target part resolution for this episode
-                          let targetPart = 0;
-                          let targetKey = `s${sIdx}_e${targetEpIdx}_p0`;
-                          let targetSaved = partProgressMap[targetKey];
-                          for (let p = 1; p < 10; p++) {
-                            const pKey = `s${sIdx}_e${targetEpIdx}_p${p}`;
-                            const pSaved = partProgressMap[pKey];
-                            if (pSaved && (pSaved.time > 0 || (pSaved.updatedAt || 0) > (targetSaved?.updatedAt || 0))) {
-                              targetPart = p;
-                              targetKey = pKey;
-                              targetSaved = pSaved;
+                            // Target part resolution for this episode
+                            let targetPart = 0;
+                            let targetKey = `s${sIdx}_e${targetEpIdx}_p0`;
+                            let targetSaved = partProgressMap[targetKey];
+                            for (let p = 1; p < 10; p++) {
+                              const pKey = `s${sIdx}_e${targetEpIdx}_p${p}`;
+                              const pSaved = partProgressMap[pKey];
+                              if (pSaved && (pSaved.time > 0 || (pSaved.updatedAt || 0) > (targetSaved?.updatedAt || 0))) {
+                                targetPart = p;
+                                targetKey = pKey;
+                                targetSaved = pSaved;
+                              }
                             }
-                          }
 
-                          setSelectedPartIndex(targetPart);
-                          setPlaybackPosition(targetSaved?.time || 0);
-                          if (targetSaved?.language) setActiveLanguage(targetSaved.language);
-                          if (targetSaved?.quality) setActiveQuality(targetSaved.quality);
-                        }}
-                      />
-                    </>
+                            setSelectedPartIndex(targetPart);
+                            setPlaybackPosition(targetSaved?.time || 0);
+                            if (targetSaved?.language) setActiveLanguage(targetSaved.language);
+                            if (targetSaved?.quality) setActiveQuality(targetSaved.quality);
+                          }}
+                        />
+                      </>
+                    )}
+                  </div>
+
+                  {/* View Switcher: List vs Grid Mode (For Series/Anime) */}
+                  {!isMovie && (
+                    <div className="hidden sm:flex items-center p-0.5 bg-[#1a1a22] border border-white/10 rounded-xl shrink-0">
+                      <button
+                        onClick={() => handleSetEpisodeViewMode('list')}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          episodeViewMode === 'list' 
+                            ? 'bg-[#8B5CF6] text-white shadow-sm' 
+                            : 'text-white/50 hover:text-white/80'
+                        }`}
+                        title="List View"
+                      >
+                        <List className="w-3.5 h-3.5" />
+                        <span>List</span>
+                      </button>
+                      <button
+                        onClick={() => handleSetEpisodeViewMode('grid')}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          episodeViewMode === 'grid' 
+                            ? 'bg-[#8B5CF6] text-white shadow-sm' 
+                            : 'text-white/50 hover:text-white/80'
+                        }`}
+                        title="Grid View"
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Grid</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 
-                {/* View Switcher: List vs Grid Mode (For Series/Anime) */}
+                {/* Compact List/Grid row on mobile screens so the 3 selector boxes above always have full horizontal width */}
                 {!isMovie && (
-                  <div className="flex items-center p-0.5 bg-[#1a1a22] border border-white/10 rounded-xl">
-                    <button
-                      onClick={() => handleSetEpisodeViewMode('list')}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                        episodeViewMode === 'list' 
-                          ? 'bg-[#8B5CF6] text-white shadow-sm' 
-                          : 'text-white/50 hover:text-white/80'
-                      }`}
-                      title="List View"
-                    >
-                      <List className="w-3.5 h-3.5" />
-                      <span>List</span>
-                    </button>
-                    <button
-                      onClick={() => handleSetEpisodeViewMode('grid')}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                        episodeViewMode === 'grid' 
-                          ? 'bg-[#8B5CF6] text-white shadow-sm' 
-                          : 'text-white/50 hover:text-white/80'
-                      }`}
-                      title="Grid View"
-                    >
-                      <LayoutGrid className="w-3.5 h-3.5" />
-                      <span>Grid</span>
-                    </button>
+                  <div className="flex sm:hidden items-center justify-end">
+                    <div className="flex items-center p-0.5 bg-[#1a1a22] border border-white/10 rounded-xl shrink-0">
+                      <button
+                        onClick={() => handleSetEpisodeViewMode('list')}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                          episodeViewMode === 'list' 
+                            ? 'bg-[#8B5CF6] text-white shadow-sm' 
+                            : 'text-white/50 hover:text-white/80'
+                        }`}
+                        title="List View"
+                      >
+                        <List className="w-3 h-3" />
+                        <span>List</span>
+                      </button>
+                      <button
+                        onClick={() => handleSetEpisodeViewMode('grid')}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                          episodeViewMode === 'grid' 
+                            ? 'bg-[#8B5CF6] text-white shadow-sm' 
+                            : 'text-white/50 hover:text-white/80'
+                        }`}
+                        title="Grid View"
+                      >
+                        <LayoutGrid className="w-3 h-3" />
+                        <span>Grid</span>
+                      </button>
+                    </div>
                   </div>
                 )}
             </div>

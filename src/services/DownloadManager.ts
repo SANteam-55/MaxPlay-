@@ -253,18 +253,34 @@ class DownloadManagerService {
    */
   private async resolveStreamForTask(
     task: DownloadTask,
-    forceRefresh: boolean = false
-  ): Promise<string> {
-    const tryResolveUrl = async (rawUrl?: string): Promise<string | null> => {
+    forceRefresh: boolean = false,
+    preferSecondary: boolean = false
+  ): Promise<{ streamUrl: string; refererUrl: string }> {
+    const tryResolveUrl = async (rawUrl?: string): Promise<{ streamUrl: string; refererUrl: string } | null> => {
       if (!rawUrl || !rawUrl.trim()) return null;
       const trimmed = rawUrl.trim();
-      if (!SmartStreamService.isExtractableSource(trimmed)) {
-        return trimmed;
+      const baseReferer = SmartStreamService.resolveEmbedReferer(trimmed);
+
+      if (!SmartStreamService.isExtractableSource(trimmed, true)) {
+        return {
+          streamUrl: trimmed,
+          refererUrl: baseReferer || SmartStreamService.resolveEmbedReferer(trimmed),
+        };
       }
       // Check fast cache first unless forceRefresh is requested on retry
       if (!forceRefresh) {
         const cached = SmartStreamService.getCachedStreamUrl(trimmed);
-        if (cached) return cached;
+        if (cached) {
+          const cachedMeta = SmartStreamService.getCachedStreamMeta(trimmed);
+          return {
+            streamUrl: cached,
+            refererUrl:
+              cachedMeta?.referer ||
+              cachedMeta?.headers?.Referer ||
+              baseReferer ||
+              SmartStreamService.resolveEmbedReferer(cached),
+          };
+        }
       }
 
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -273,7 +289,15 @@ class DownloadManagerService {
             forceRefresh: forceRefresh || attempt > 0,
           });
           if (res && res.streamUrl && !res.isEmbed) {
-            return res.streamUrl;
+            const cachedMeta = SmartStreamService.getCachedStreamMeta(trimmed);
+            return {
+              streamUrl: res.streamUrl,
+              refererUrl:
+                cachedMeta?.referer ||
+                cachedMeta?.headers?.Referer ||
+                baseReferer ||
+                SmartStreamService.resolveEmbedReferer(res.streamUrl),
+            };
           }
         } catch (err) {
           console.warn('[DownloadManager] Just-in-time extraction warning:', err);
@@ -285,14 +309,15 @@ class DownloadManagerService {
       return null;
     };
 
-    const primaryResolved = await tryResolveUrl(task.videoUrl);
-    if (primaryResolved && task.secondaryVideoUrl && task.language && task.language !== 'Default') {
-      // If user requested a specific language (e.g. Hindi), check if primary stream has separate audio tracks
-      // that lack the target language while backup server has it.
+    const firstUrl = preferSecondary && task.secondaryVideoUrl ? task.secondaryVideoUrl : task.videoUrl;
+    const secondUrl = preferSecondary && task.secondaryVideoUrl ? task.videoUrl : task.secondaryVideoUrl;
+
+    const primaryResolved = await tryResolveUrl(firstUrl);
+    if (primaryResolved && secondUrl && task.language && task.language !== 'Default') {
       try {
         const primaryMeta =
-          SmartStreamService.getCachedStreamMeta(task.videoUrl || '') ||
-          (await ClientHlsDownloader.probeMasterPlaylist(primaryResolved, 0));
+          SmartStreamService.getCachedStreamMeta(firstUrl || '') ||
+          (await ClientHlsDownloader.probeMasterPlaylist(primaryResolved.streamUrl, 0));
         if (
           primaryMeta &&
           Array.isArray(primaryMeta.audioTracks) &&
@@ -301,11 +326,11 @@ class DownloadManagerService {
             (l) => l.toLowerCase() === task.language!.toLowerCase()
           )
         ) {
-          const secondaryResolved = await tryResolveUrl(task.secondaryVideoUrl);
+          const secondaryResolved = await tryResolveUrl(secondUrl);
           if (secondaryResolved) {
             const secMeta =
-              SmartStreamService.getCachedStreamMeta(task.secondaryVideoUrl) ||
-              (await ClientHlsDownloader.probeMasterPlaylist(secondaryResolved, 0));
+              SmartStreamService.getCachedStreamMeta(secondUrl) ||
+              (await ClientHlsDownloader.probeMasterPlaylist(secondaryResolved.streamUrl, 0));
             if (
               secMeta &&
               Array.isArray(secMeta.audioTracks) &&
@@ -322,8 +347,8 @@ class DownloadManagerService {
 
     if (primaryResolved) return primaryResolved;
 
-    if (task.secondaryVideoUrl) {
-      const secondaryResolved = await tryResolveUrl(task.secondaryVideoUrl);
+    if (secondUrl) {
+      const secondaryResolved = await tryResolveUrl(secondUrl);
       if (secondaryResolved) return secondaryResolved;
     }
 
@@ -339,10 +364,11 @@ class DownloadManagerService {
 
     try {
       let resolvedStreamUrl = '';
+      let resolvedRefererUrl = '';
       let result: { totalBytes: number } | null = null;
       let lastError: any = null;
 
-      // 3-Attempt Automatic Silent Retry Loop (eliminates first-try multi-episode cold start failures)
+      // 3-Attempt Automatic Silent Retry Loop (with automatic failover to backup server on final attempt)
       for (let attempt = 0; attempt < 3; attempt++) {
         const currentCheck = this.tasks.find((t) => t.taskId === task.taskId);
         if (!currentCheck || currentCheck.status !== 'downloading') {
@@ -350,7 +376,13 @@ class DownloadManagerService {
         }
 
         try {
-          resolvedStreamUrl = await this.resolveStreamForTask(task, attempt > 0);
+          const resolvedObj = await this.resolveStreamForTask(
+            task,
+            attempt > 0,
+            attempt === 2 && Boolean(task.secondaryVideoUrl)
+          );
+          resolvedStreamUrl = resolvedObj.streamUrl;
+          resolvedRefererUrl = resolvedObj.refererUrl;
 
           result = await ClientHlsDownloader.downloadStream(
             task.storageKey!,
@@ -370,7 +402,8 @@ class DownloadManagerService {
               this.notify();
             },
             task.language || 'Hindi',
-            lockedTaskTotalBytes
+            lockedTaskTotalBytes,
+            resolvedRefererUrl
           );
 
           if (result && result.totalBytes > 0) {
@@ -384,7 +417,7 @@ class DownloadManagerService {
           }
           if (attempt < 2) {
             console.warn(
-              `[DownloadManager] Auto-retrying episode "${task.title}" (attempt ${attempt + 2}/3)...`,
+              `[DownloadManager] Auto-retrying "${task.title}" (attempt ${attempt + 2}/3)...`,
               attemptErr
             );
             await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
@@ -550,6 +583,55 @@ class DownloadManagerService {
     }
 
     return match.videoUrl || null;
+  }
+
+  /**
+   * Registers an imported `.maxplay` transfer package (`category: 'received'`) or local video (`category: 'local'`)
+   * directly into `completedFiles` so it appears in the Downloads screen tabs immediately.
+   */
+  public addImportedCompletedFile(params: {
+    contentId?: string;
+    episodeId?: string;
+    seasonIndex?: number;
+    episodeIndex?: number;
+    title: string;
+    subtitle?: string;
+    posterUrl?: string;
+    quality?: string;
+    language?: string;
+    fileSizeMb: number;
+    category: 'received' | 'local' | 'moviebox';
+    storageKey: string;
+  }): DownloadedFile {
+    const newItem: DownloadedFile = {
+      id: `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      contentId: params.contentId || `imp_${Date.now()}`,
+      episodeId: params.episodeId,
+      seasonIndex: params.seasonIndex,
+      episodeIndex: params.episodeIndex,
+      title: params.title,
+      subtitle:
+        params.subtitle ||
+        `${params.fileSizeMb} MB • ${params.language || 'Default'} • ${(params.quality || 'HD').toUpperCase()}`,
+      posterUrl:
+        params.posterUrl ||
+        'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&auto=format&fit=crop&q=80',
+      quality: params.quality || '720p',
+      language: params.language || 'Default',
+      fileSizeMb: params.fileSizeMb,
+      status: `${params.fileSizeMb} MB • ${params.category === 'received' ? 'Received via MaxPlay' : 'Local Video'}`,
+      category: params.category,
+      storageKey: params.storageKey,
+      hasError: false,
+      completedAt: Date.now(),
+    };
+
+    this.completedFiles = [
+      newItem,
+      ...this.completedFiles.filter((f) => f.storageKey !== params.storageKey),
+    ];
+    this.saveState();
+    return newItem;
   }
 }
 

@@ -17,12 +17,23 @@ import { STORAGE_KEYS } from '../utils/constants';
 import { useGeneralSettings } from '../hooks/useGeneralSettings';
 import { MaintenanceScreen } from '../screens/common/MaintenanceScreen';
 import { SuspendedAccountModal } from '../components/common/SuspendedAccountModal';
+import { subscribeToAnnouncements } from '../services/contentService';
+import { NativeBridgeService } from '../services/nativeBridgeService';
+import { adManager } from '../services/adService';
 import { motion, AnimatePresence } from 'motion/react';
-import { WifiOff, X } from 'lucide-react';
+import { WifiOff, X, Download, ShieldAlert, ArrowUp } from 'lucide-react';
 
 export const RootNavigator: React.FC = () => {
-  const { isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
-  const { maintenanceMode, appName } = useGeneralSettings();
+  const { user, isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
+  const {
+    maintenanceMode,
+    appName,
+    forceUpdate,
+    currentApkVersion,
+    latestApkVersion,
+    apkDownloadUrl,
+    updateReleaseNotes,
+  } = useGeneralSettings();
 
   // Offline Auto-Detection
   const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
@@ -51,6 +62,46 @@ export const RootNavigator: React.FC = () => {
       window.removeEventListener('online', handleOnline);
     };
   }, []);
+
+  // Real Phone Status-Bar Notifications for Me > Messages (Announcements)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let isFirstSnapshot = true;
+
+    const unsub = subscribeToAnnouncements(user?.uid, (msgs) => {
+      if (!msgs || msgs.length === 0) {
+        isFirstSnapshot = false;
+        return;
+      }
+      try {
+        const rawSeen = localStorage.getItem('maxplay_notified_msg_ids');
+        const seenIds: string[] = rawSeen ? JSON.parse(rawSeen) : [];
+        const seenSet = new Set(seenIds);
+
+        // Find unread messages that haven't been pushed to the phone's notification shade yet
+        const newMessages = msgs.filter((m) => m.id && !seenSet.has(m.id) && m.isUnread !== false);
+
+        if (newMessages.length > 0) {
+          // On first load, notify at most the single newest unread announcement so we don't spam old history
+          const toNotify = isFirstSnapshot ? [newMessages[0]] : newMessages;
+          toNotify.forEach((m) => {
+            if (m && m.title) {
+              NativeBridgeService.showNativeNotification(
+                m.title,
+                m.body || 'New update in MaxPlay Messages'
+              );
+            }
+          });
+
+          const updatedSeen = Array.from(new Set([...seenIds, ...msgs.map((m) => m.id).filter(Boolean)])).slice(-200);
+          localStorage.setItem('maxplay_notified_msg_ids', JSON.stringify(updatedSeen));
+        }
+      } catch {}
+      isFirstSnapshot = false;
+    });
+
+    return () => unsub();
+  }, [isAuthenticated, user?.uid]);
 
   // PWA State Lock - Check if user is resuming an existing session or standalone mode
   const isPwaStandalone = typeof window !== 'undefined' && 
@@ -142,39 +193,91 @@ export const RootNavigator: React.FC = () => {
   const handleAnimeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('anime', isOpen), [handleDetailOpenChange]);
   const handleMeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('me', isOpen), [handleDetailOpenChange]);
 
-  // Hardware/Phone Triangle Back Button Interceptor
+  // Universal Hardware/Phone Triangle Back Button Interceptor (Web/PWA popstate + Native Android APK Bridge)
   useEffect(() => {
-    const handlePopState = (e: PopStateEvent) => {
+    const executeBackNavigation = (): 'HANDLED' | 'EXIT_CONFIRMED' => {
       const cleanUrl = window.location.pathname + window.location.search;
-      // 1. If a detail modal or sub-screen is open on active tab, pop it
+
+      // 0. If Popunder Ad Shield overlay is open, close it and return to Video Player / Details Screen
+      if (adManager.isAdOverlayOpen()) {
+        adManager.closeAdOverlay();
+        try {
+          window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
+      }
+
+      // 1. If Video Player is in Fullscreen mode, exit fullscreen first
+      if (
+        (window as any).__isMaxPlayPlayerFullscreen &&
+        typeof (window as any).__exitMaxPlayPlayerFullscreen === 'function'
+      ) {
+        (window as any).__exitMaxPlayPlayerFullscreen();
+        try {
+          window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
+      }
+
+      // 2. If on Downloads tab and OfflineDetailScreen or Transfer modal is open, pop it back to Downloads tab
+      if (
+        activeTab === 'downloads' &&
+        typeof (window as any).__handleDownloadsScreenBack === 'function' &&
+        (window as any).__handleDownloadsScreenBack()
+      ) {
+        try {
+          window.history.pushState({ tab: 'downloads', isDetailOpen: false }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
+      }
+
+      // 3. If a detail modal or sub-screen (e.g., Me > Settings, Me > Messages, ContentDetail) is open on active tab, pop it back to parent tab!
       if (isCurrentDetailOpen) {
         const eventName = `MAXPLAY_POP_STACK_${activeTab.toUpperCase()}`;
         window.dispatchEvent(new CustomEvent(eventName));
-        return;
+        try {
+          window.history.pushState({ tab: activeTab, isDetailOpen: false }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
       }
 
-      // 2. If on a non-home tab (e.g., Search, Me, Anime), go back to Home tab
+      // 4. If on a non-home tab (e.g., Search, Downloads, Me, Anime), go back to Home tab
       if (activeTab !== 'home') {
         setActiveTabState('home');
         localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
-        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
-        return;
+        try {
+          window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
       }
 
-      // 3. If already on Home tab with no details open, handle Double-Back to Exit
+      // 5. Already on Home tab with no sub-screens open: Double-Back confirmation to exit
       const now = Date.now();
       if (now - lastBackPressTime.current < 2500) {
         setExitToastVisible(false);
+        return 'EXIT_CONFIRMED';
       } else {
         lastBackPressTime.current = now;
         setExitToastVisible(true);
-        window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
+        try {
+          window.history.pushState({ tab: 'home', isDetailOpen: false }, '', cleanUrl);
+        } catch {}
         setTimeout(() => setExitToastVisible(false), 2500);
+        return 'HANDLED';
       }
     };
 
+    // Expose to Android Native Kotlin MainActivity.onBackPressedDispatcher
+    window.__handleMaxPlayHardwareBack = executeBackNavigation;
+
+    const handlePopState = () => {
+      executeBackNavigation();
+    };
+
     window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
   }, [activeTab, isCurrentDetailOpen]);
 
   // Page visibility listener for PWA resume (Prevents app reset when minimizing/switching apps)
@@ -183,7 +286,7 @@ export const RootNavigator: React.FC = () => {
       if (document.visibilityState === 'visible') {
         // App resumed from background - restore tab state without resetting
         const savedTab = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
-        if (savedTab && ['home', 'search', 'anime', 'me'].includes(savedTab)) {
+        if (savedTab && ['home', 'downloads', 'search', 'anime', 'me'].includes(savedTab)) {
           setActiveTabState(savedTab);
         }
       }
@@ -194,6 +297,48 @@ export const RootNavigator: React.FC = () => {
 
   if (maintenanceMode) {
     return <MaintenanceScreen appName={appName} />;
+  }
+
+  // Non-dismissible Admin Force-Update Gate: blocks old APK versions when Admin enables forceUpdate / minRequiredVersion
+  if (forceUpdate) {
+    return (
+      <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#09090b] p-6 text-center select-none">
+        <div className="relative flex w-full max-w-sm flex-col items-center rounded-3xl bg-gradient-to-b from-[#1c1115] via-[#121216] to-[#0c0c10] p-7 border border-red-500/40 shadow-[0_0_50px_rgba(239,68,68,0.3)]">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/40 border border-red-400/50 animate-pulse">
+            <ShieldAlert className="h-8 w-8 stroke-[2.4]" />
+          </div>
+
+          <span className="mt-4 rounded-full bg-red-500/20 border border-red-500/40 px-3.5 py-1 text-[11px] font-black uppercase tracking-wider text-red-300">
+            Mandatory Update Required • v{latestApkVersion || 'Latest'}
+          </span>
+
+          <h1 className="mt-3 text-2xl font-black text-white tracking-tight">
+            Update {appName} to Continue
+          </h1>
+
+          <p className="mt-2 text-xs text-[#A1A1AA] leading-relaxed">
+            {updateReleaseNotes ||
+              `Your current version (v${currentApkVersion}) is no longer supported. Please download and install the latest v${latestApkVersion || 'New'} APK to continue watching movies, series, and anime without interruption.`}
+          </p>
+
+          <div className="mt-5 flex w-full items-center justify-between rounded-2xl bg-white/5 px-4 py-2.5 border border-white/10 text-xs">
+            <span className="text-white/50 font-semibold">Current: v{currentApkVersion}</span>
+            <span className="text-emerald-400 font-black">Required: v{latestApkVersion || 'Latest'}</span>
+          </div>
+
+          <a
+            href={apkDownloadUrl || '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer"
+          >
+            <Download className="h-4 w-4 stroke-[2.5]" />
+            <span>Download Latest APK Now</span>
+          </a>
+        </div>
+      </div>
+    );
   }
 
   // Handle splash completion and authentication verification barrier
