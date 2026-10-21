@@ -90,47 +90,53 @@ async function deleteChunksByPrefix(prefix: string): Promise<void> {
   });
 }
 
+function unwrapProxyUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let current = rawUrl.trim();
+  for (let i = 0; i < 3; i++) {
+    if (
+      current.includes('/api/proxy?url=') ||
+      current.includes('/api/proxy-m3u8?url=') ||
+      current.includes('/api/proxy-ts?url=')
+    ) {
+      try {
+        const u = new URL(current, window.location.origin);
+        const inner = u.searchParams.get('url');
+        if (inner) {
+          current = decodeURIComponent(inner).trim();
+          continue;
+        }
+      } catch {}
+    }
+    break;
+  }
+  return current;
+}
+
 function resolveRelativeUrl(baseUrl: string, rel: string): string {
+  const cleanRel = unwrapProxyUrl(rel);
+  if (/^https?:\/\//i.test(cleanRel)) {
+    return cleanRel;
+  }
+  const cleanBase = unwrapProxyUrl(baseUrl);
   try {
-    return new URL(rel, baseUrl).href;
+    return new URL(cleanRel, cleanBase).href;
   } catch {
-    return rel;
+    return cleanRel;
   }
 }
 
 function wrapProxyUrl(rawUrl: string): string {
-  const trimmed = rawUrl.trim();
-  // When running inside the Native Kotlin APK,CorsFreeWebViewClient & OkHttp handle CORS natively!
+  const cleanTarget = unwrapProxyUrl(rawUrl);
+  if (!cleanTarget) return '';
+  // When running inside the Native Kotlin APK, CorsFreeWebViewClient & OkHttp handle CORS natively!
   if (NativeBridgeService.isRunningInKotlinApp()) {
-    if (trimmed.includes('/api/proxy?url=')) {
-      try {
-        const u = new URL(trimmed, window.location.origin);
-        const inner = u.searchParams.get('url');
-        if (inner) return decodeURIComponent(inner);
-      } catch {}
-    }
-    return trimmed;
+    return cleanTarget;
   }
-  if (
-    trimmed.startsWith('/api/proxy') ||
-    trimmed.includes('/api/proxy?url=') ||
-    trimmed.startsWith('blob:')
-  ) {
-    return trimmed;
+  if (cleanTarget.startsWith('blob:')) {
+    return cleanTarget;
   }
-  return `/api/proxy?url=${encodeURIComponent(trimmed)}`;
-}
-
-function unwrapProxyUrl(rawUrl: string): string {
-  const trimmed = rawUrl.trim();
-  if (trimmed.includes('/api/proxy?url=')) {
-    try {
-      const u = new URL(trimmed, window.location.origin);
-      const inner = u.searchParams.get('url');
-      if (inner) return decodeURIComponent(inner);
-    } catch {}
-  }
-  return trimmed;
+  return `/api/proxy?url=${encodeURIComponent(cleanTarget)}`;
 }
 
 export interface HlsDownloadProgress {
@@ -152,6 +158,21 @@ export class ClientHlsDownloader {
       ctrl.abort();
       this.activeAborters.delete(storageKey);
     }
+  }
+
+  /**
+   * Accurately classifies standard & widescreen (2.39:1 / 1.85:1) HLS resolutions into standard quality labels.
+   */
+  public static classifyResolutionLabel(width: number, height: number, bandwidth: number = 0): string {
+    if (height >= 1400 || width >= 2500) return '1440p';
+    if (height >= 900 || width >= 1800) return '1080p';
+    if (height >= 580 || width >= 1200) return '720p';
+    if (height >= 400 || width >= 800) return '480p';
+    if (height > 0 || width > 0) return '360p';
+    if (bandwidth >= 2000000) return '1080p';
+    if (bandwidth >= 950000) return '720p';
+    if (bandwidth >= 500000) return '480p';
+    return '360p';
   }
 
   /**
@@ -180,24 +201,40 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Checks whether an HLS audio track matches the user's selected language.
+   * Checks whether an HLS audio track matches the user's selected language (safe against empty substring false-positives).
    */
-  private static matchesTargetLanguage(
-    track: { name: string; language: string; friendly: string },
+  public static matchesTargetLanguage(
+    track: { name: string; language: string; friendly?: string },
     targetLanguage?: string
   ): boolean {
-    if (!targetLanguage || targetLanguage === 'Default') return false;
+    if (!targetLanguage) return false;
     const target = targetLanguage.toLowerCase().trim();
-    const friendly = track.friendly.toLowerCase();
-    const rawName = track.name.toLowerCase();
-    const rawLang = track.language.toLowerCase();
+    if (!target || target === 'default' || target === 'default audio' || target === 'auto') return false;
 
-    if (friendly === target || rawName === target || rawLang === target) return true;
-    if (friendly.includes(target) || target.includes(friendly)) return true;
-    if (rawName && (rawName.includes(target) || target.includes(rawName))) return true;
+    const friendly = (track.friendly || this.normalizeLanguageLabel(track.name, track.language) || '').toLowerCase().trim();
+    const rawName = (track.name || '').toLowerCase().trim();
+    const rawLang = (track.language || '').toLowerCase().trim();
 
-    const normalizedTarget = this.normalizeLanguageLabel(targetLanguage, targetLanguage).toLowerCase();
-    if (normalizedTarget && friendly === normalizedTarget) return true;
+    if (friendly && friendly === target) return true;
+    if (rawName && rawName === target) return true;
+    if (rawLang && rawLang === target) return true;
+
+    const normalizedTarget = this.normalizeLanguageLabel(targetLanguage, targetLanguage).toLowerCase().trim();
+    if (normalizedTarget && friendly && friendly === normalizedTarget) return true;
+
+    if (friendly.length >= 3 && target.length >= 3) {
+      if (friendly.includes(target) || target.includes(friendly)) return true;
+    }
+    if (rawName.length >= 3 && target.length >= 3) {
+      if (rawName.includes(target) || target.includes(rawName)) return true;
+    }
+
+    if (target.includes('hindi') && (rawLang === 'hi' || rawLang === 'hin' || rawName.includes('hin'))) return true;
+    if (target.includes('english') && (rawLang === 'en' || rawLang === 'eng' || rawName.includes('eng'))) return true;
+    if (target.includes('japanese') && (rawLang === 'ja' || rawLang === 'jpn' || rawName.includes('jap') || rawName.includes('jpn'))) return true;
+    if (target.includes('tamil') && (rawLang === 'ta' || rawLang === 'tam' || rawName.includes('tam'))) return true;
+    if (target.includes('telugu') && (rawLang === 'te' || rawLang === 'tel' || rawName.includes('tel'))) return true;
+
     return false;
   }
 
@@ -270,8 +307,9 @@ export class ClientHlsDownloader {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (line.startsWith('#EXT-X-STREAM-INF:')) {
-          const resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
-          const height = resMatch ? parseInt(resMatch[1], 10) : 0;
+          const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+          const width = resMatch ? parseInt(resMatch[1], 10) : 0;
+          const height = resMatch ? parseInt(resMatch[2], 10) : 0;
           const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
           const avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
           const detectedBw = avgBwMatch
@@ -290,23 +328,10 @@ export class ClientHlsDownloader {
 
           if (nextUrl) {
             const resolvedUrl = resolveRelativeUrl(rawMasterUrl, nextUrl);
-            const qLabel =
-              height >= 1000
-                ? '1080p'
-                : height >= 700
-                ? '720p'
-                : height >= 450
-                ? '480p'
-                : height > 0
-                ? `${height}p`
-                : detectedBw >= 2000000
-                ? '1080p'
-                : detectedBw >= 900000
-                ? '720p'
-                : '480p';
+            const qLabel = this.classifyResolutionLabel(width, height, detectedBw);
 
             if (detectedBw > 0) {
-              bandwidthsByQuality[qLabel] = detectedBw;
+              bandwidthsByQuality[qLabel] = Math.max(bandwidthsByQuality[qLabel] || 0, detectedBw);
             }
             if (!qualities.includes(qLabel)) {
               qualities.push(qLabel);
@@ -503,7 +528,15 @@ export class ClientHlsDownloader {
     }
 
     // 2. Parse #EXT-X-STREAM-INF video variants
-    const variants: { height: number; bandwidth: number; audioGroup: string; url: string }[] = [];
+    const variants: {
+      width: number;
+      height: number;
+      qLabel: string;
+      nominalHeight: number;
+      bandwidth: number;
+      audioGroup: string;
+      url: string;
+    }[] = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -511,9 +544,12 @@ export class ClientHlsDownloader {
         const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
         const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
         const audioGroupMatch = line.match(/AUDIO="([^"]+)"/i) || line.match(/AUDIO=([^\s,]+)/i);
+        const width = resMatch ? parseInt(resMatch[1], 10) : 0;
         const height = resMatch ? parseInt(resMatch[2], 10) : 0;
         const bandwidth = bwMatch ? parseInt(bwMatch[1], 10) : 0;
         const audioGroup = (audioGroupMatch ? audioGroupMatch[1] : '').trim();
+        const qLabel = this.classifyResolutionLabel(width, height, bandwidth);
+        const nominalHeight = parseInt(qLabel.replace(/\D/g, ''), 10) || height || 720;
 
         let nextUri = '';
         for (let j = i + 1; j < lines.length; j++) {
@@ -524,7 +560,10 @@ export class ClientHlsDownloader {
         }
         if (nextUri) {
           variants.push({
+            width,
             height,
+            qLabel,
+            nominalHeight,
             bandwidth,
             audioGroup,
             url: resolveRelativeUrl(rawMasterUrl, nextUri),
@@ -541,12 +580,17 @@ export class ClientHlsDownloader {
       };
     }
 
-    // Pick closest height to targetQuality (e.g. if user requested 1080p on a series where Ep 5 maxes at 720p, automatically selects 720p)
-    const reqHeight = parseInt(targetQuality.replace(/\D/g, ''), 10) || 720;
-    variants.sort(
-      (a, b) => Math.abs(a.height - reqHeight) - Math.abs(b.height - reqHeight)
-    );
-    const chosenVariant = variants[0];
+    // Match user's targetQuality accurately (exact classified label first, then closest nominal resolution)
+    const cleanTargetQ = (targetQuality || '720p').toLowerCase().trim();
+    const reqHeight = parseInt(cleanTargetQ.replace(/\D/g, ''), 10) || 720;
+    const exactMatch = variants.find((v) => v.qLabel.toLowerCase() === cleanTargetQ);
+    let chosenVariant = exactMatch;
+    if (!chosenVariant) {
+      variants.sort(
+        (a, b) => Math.abs(a.nominalHeight - reqHeight) - Math.abs(b.nominalHeight - reqHeight)
+      );
+      chosenVariant = variants[0];
+    }
 
     // 3. Resolve matching #EXT-X-MEDIA:TYPE=AUDIO rendition for targetLanguage
     let chosenAudio: AudioRendition | undefined;
@@ -572,7 +616,7 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Parses all segment URLs and total duration from an HLS media playlist.
+   * Parses all segment URLs (including #EXT-X-MAP init segment if fMP4) and total duration from an HLS media playlist.
    */
   private static async parseSegments(
     mediaPlaylistUrl: string,
@@ -601,6 +645,16 @@ export class ClientHlsDownloader {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (!line) continue;
+      if (line.startsWith('#EXT-X-MAP:')) {
+        const uriMatch = line.match(/URI="([^"]+)"/i) || line.match(/URI=([^\s,]+)/i);
+        if (uriMatch && uriMatch[1]) {
+          const mapUrl = resolveRelativeUrl(rawMediaUrl, uriMatch[1].trim());
+          if (mapUrl && !segments.includes(mapUrl)) {
+            segments.push(mapUrl);
+          }
+        }
+        continue;
+      }
       if (line.startsWith('#EXTINF:')) {
         const durMatch = line.match(/#EXTINF:([\d.]+)/);
         if (durMatch) {
@@ -843,7 +897,7 @@ export class ClientHlsDownloader {
           let segBytes = 0;
           let success = false;
 
-          for (let attempt = 0; attempt < 3; attempt++) {
+          for (let attempt = 0; attempt < 5; attempt++) {
             if (signal.aborted) throw new Error('Download aborted');
             try {
               if (useNativeDisk) {
@@ -863,24 +917,33 @@ export class ClientHlsDownloader {
                   break;
                 }
               } else {
-                const resp = await fetch(wrapProxyUrl(job.url), { signal });
-                if (!resp.ok) throw new Error(`Segment HTTP ${resp.status}`);
-                const buf = await resp.arrayBuffer();
-                if (buf && buf.byteLength > 0) {
-                  const chunkKey = job.isAudio
-                    ? `${storageKey}_aud_chunk_${job.segIndex}`
-                    : `${storageKey}_chunk_${job.segIndex}`;
-                  await putChunk(chunkKey, buf);
-                  segBytes = buf.byteLength;
-                  sessionDownloadedBytes += segBytes;
-                  success = true;
-                  break;
+                const segCtrl = new AbortController();
+                const segTimer = setTimeout(() => segCtrl.abort(), 18000);
+                const onAbort = () => segCtrl.abort();
+                signal.addEventListener('abort', onAbort, { once: true });
+                try {
+                  const resp = await fetch(wrapProxyUrl(job.url), { signal: segCtrl.signal });
+                  if (!resp.ok) throw new Error(`Segment HTTP ${resp.status}`);
+                  const buf = await resp.arrayBuffer();
+                  if (buf && buf.byteLength > 0) {
+                    const chunkKey = job.isAudio
+                      ? `${storageKey}_aud_chunk_${job.segIndex}`
+                      : `${storageKey}_chunk_${job.segIndex}`;
+                    await putChunk(chunkKey, buf);
+                    segBytes = buf.byteLength;
+                    sessionDownloadedBytes += segBytes;
+                    success = true;
+                    break;
+                  }
+                } finally {
+                  clearTimeout(segTimer);
+                  signal.removeEventListener('abort', onAbort);
                 }
               }
             } catch (err) {
               if (signal.aborted) throw err;
-              if (attempt === 2) throw err;
-              await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+              if (attempt === 4) throw err;
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
             }
           }
 

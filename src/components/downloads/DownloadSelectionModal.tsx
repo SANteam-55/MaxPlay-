@@ -499,6 +499,11 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
   const extractedMeta = modalServer === 'server2' ? (server2Meta || server1Meta) : (server1Meta || server2Meta);
 
+  const isQualityKey = (val: string): boolean => {
+    if (!val || typeof val !== 'string') return false;
+    return /^(\d{3,4}p|4k|2k|8k|hd|fhd|uhd|sd|auto)$/i.test(val.trim());
+  };
+
   // 2. Available Languages resolution (Real Extracted HLS Tracks + Content Metadata with Dual-Server Awareness!)
   const { availableLanguages, languageServerMap } = useMemo(() => {
     const list: string[] = [];
@@ -507,8 +512,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
     const addLang = (rawLang: string, source: 'server1' | 'server2' | 'both') => {
       if (!rawLang || typeof rawLang !== 'string') return;
+      if (isQualityKey(rawLang)) return;
       const cleaned = ClientHlsDownloader.normalizeLanguageLabel(rawLang, rawLang) || rawLang.trim();
-      if (!cleaned || cleaned === 'Default' || cleaned === 'Default Audio') return;
+      if (!cleaned || cleaned === 'Default' || cleaned === 'Default Audio' || isQualityKey(cleaned)) return;
       const existing = list.find((l) => l.toLowerCase() === cleaned.toLowerCase());
       if (!existing) {
         list.push(cleaned);
@@ -521,24 +527,31 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     const hasLiveS1Audio = Array.isArray(server1Meta?.audioTracks) && server1Meta!.audioTracks!.length > 0;
     const hasLiveS2Audio = Array.isArray(server2Meta?.audioTracks) && server2Meta!.audioTracks!.length > 0;
 
-    if (hasLiveS1Audio) {
-      server1Meta!.audioTracks!.forEach((l) => addLang(l, 'server1'));
-    }
-    if (hasLiveS2Audio) {
-      server2Meta!.audioTracks!.forEach((l) => addLang(l, 'server2'));
-    }
-
-    // Also include explicit language sources if present
-    if (content.videoSources && typeof content.videoSources === 'object') {
-      Object.keys(content.videoSources).forEach((l) => addLang(l, 'server1'));
-    }
-    if (activeEp?.videoSources && typeof activeEp.videoSources === 'object') {
-      Object.keys(activeEp.videoSources).forEach((l) => addLang(l, 'server1'));
+    if (modalServer === 'server2') {
+      if (hasLiveS2Audio) {
+        server2Meta!.audioTracks!.forEach((l) => addLang(l, 'server2'));
+      }
+      if (hasLiveS1Audio) {
+        server1Meta!.audioTracks!.forEach((l) => addLang(l, 'server1'));
+      }
+    } else {
+      if (hasLiveS1Audio) {
+        server1Meta!.audioTracks!.forEach((l) => addLang(l, 'server1'));
+      }
+      if (hasLiveS2Audio) {
+        server2Meta!.audioTracks!.forEach((l) => addLang(l, 'server2'));
+      }
     }
 
     // If neither server reported separate #EXT-X-MEDIA:TYPE=AUDIO tracks (e.g. muxed audio or before probe finishes),
-    // use the content/episode configured languages
+    // use the content/episode configured languages and mark as 'both' so switching language doesn't forcibly jump servers
     if (!hasLiveS1Audio && !hasLiveS2Audio) {
+      if (activeEp?.videoSources && typeof activeEp.videoSources === 'object') {
+        Object.keys(activeEp.videoSources).forEach((l) => addLang(l, 'both'));
+      }
+      if (content.videoSources && typeof content.videoSources === 'object') {
+        Object.keys(content.videoSources).forEach((l) => addLang(l, 'both'));
+      }
       if (activeEp && Array.isArray((activeEp as any).audioTracks)) {
         (activeEp as any).audioTracks.forEach((l: string) => addLang(l, 'both'));
       }
@@ -558,7 +571,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       serverMap['Hindi'] = 'both';
     }
     return { availableLanguages: list, languageServerMap: serverMap };
-  }, [content, isSeries, currentEpisodes, focusedEpisodeIdx, server1Meta, server2Meta]);
+  }, [content, isSeries, currentEpisodes, focusedEpisodeIdx, server1Meta, server2Meta, modalServer]);
 
   const [selectedLanguage, setSelectedLanguage] = useState<string>(availableLanguages[0] || 'Hindi');
 
@@ -573,6 +586,19 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   const qualityOptions = useMemo(() => {
     const activeEp = isSeries ? currentEpisodes[focusedEpisodeIdx] : null;
     const isServer2 = modalServer === 'server2';
+
+    const epPart0 =
+      Array.isArray(activeEp?.videoLinks) && activeEp.videoLinks.length > 0 && typeof activeEp.videoLinks[0] === 'object'
+        ? activeEp.videoLinks[0]
+        : null;
+    const contentPart0 =
+      Array.isArray((content as any)?.videoLinks) && (content as any).videoLinks.length > 0 && typeof (content as any).videoLinks[0] === 'object'
+        ? (content as any).videoLinks[0]
+        : null;
+    const moviePart0 =
+      Array.isArray((content as any)?.movieParts) && (content as any).movieParts.length > 0 && typeof (content as any).movieParts[0] === 'object'
+        ? (content as any).movieParts[0]
+        : null;
 
     // Deterministic series+episode fingerprint so fallback/probed bitrates never produce identical MB across different series
     const seedStr = `${content.id}_${content.title}_${selectedSeasonIdx}_${focusedEpisodeIdx}`;
@@ -603,14 +629,24 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     const calcSizeMb = (dur: number, bitrateBps: number) =>
       Math.max(25, Math.round((bitrateBps * dur) / (8 * 1024 * 1024)));
 
-    // Check explicit per-quality server links (1080p, 720p, 480p, 360p) configured in Admin Panel
+    // Check explicit per-quality server links (1080p, 720p, 480p, 360p) configured in Admin Panel for active server
     const qLinks: Record<string, string> | undefined =
       isServer2 && hasServer2
         ? (activeEp as any)?.secondaryServerQualityLinks ||
           (activeEp as any)?.secondaryQualityLinks ||
+          epPart0?.secondaryServerQualityLinks ||
+          epPart0?.secondaryQualityLinks ||
           (content as any).secondaryServerQualityLinks ||
-          content.secondaryQualityLinks
-        : (activeEp as any)?.qualityLinks || content.qualityLinks;
+          content.secondaryQualityLinks ||
+          contentPart0?.secondaryServerQualityLinks ||
+          contentPart0?.secondaryQualityLinks ||
+          moviePart0?.secondaryServerQualityLinks ||
+          moviePart0?.secondaryQualityLinks
+        : (activeEp as any)?.qualityLinks ||
+          epPart0?.qualityLinks ||
+          content.qualityLinks ||
+          contentPart0?.qualityLinks ||
+          moviePart0?.qualityLinks;
 
     const rawDl =
       extractedMeta?.downloadQualities ||
@@ -623,21 +659,22 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     // First, populate any explicit Admin multi-quality links (1080p, 720p, 480p, 360p)
     if (qLinks && typeof qLinks === 'object') {
       for (const [k, linkUrl] of Object.entries(qLinks)) {
+        const cleanKey = k.trim();
         const cleanLink = SmartStreamService.sanitizeStreamUrl(linkUrl);
-        if (cleanLink && k.toLowerCase() !== 'default') {
+        if (cleanLink && isQualityKey(cleanKey) && cleanKey.toLowerCase() !== 'auto') {
           const bitrate = Math.round(
-            (k.includes('1080')
+            (cleanKey.includes('1080')
               ? 2400000
-              : k.includes('720')
+              : cleanKey.includes('720')
               ? 1200000
-              : k.includes('480')
+              : cleanKey.includes('480')
               ? 650000
               : 360000) * seriesVariance
           );
-          mergedMap.set(k, {
-            id: k,
-            label: `${k} ${k.includes('1080') ? 'Full HD' : k.includes('720') ? 'HD' : k.includes('480') ? 'Standard' : 'Data Saver'}`,
-            badge: k.includes('1080') ? 'Best Quality' : k.includes('720') ? 'Recommended' : 'Data Saver',
+          mergedMap.set(cleanKey, {
+            id: cleanKey,
+            label: `${cleanKey} ${cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver'}`,
+            badge: cleanKey.includes('1080') ? 'Best Quality' : cleanKey.includes('720') ? 'Recommended' : 'Data Saver',
             movieSizeMb: calcSizeMb(durationSec, bitrate),
             epSizeMb: calcSizeMb(epDurationSec, bitrate),
             bandwidth: bitrate,
@@ -651,7 +688,8 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     // Second, merge live probed HLS variants (preserving explicit per-quality link URLs if configured)
     if (Array.isArray(rawDl) && rawDl.length > 0) {
       for (const q of rawDl) {
-        const qId = q.id || '720p';
+        const qId = (q.id || '720p').trim();
+        if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
         const defaultBps = Math.round(
           (qId.includes('1080')
             ? 2400000
@@ -683,7 +721,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
           movieSizeMb: rawSizeMb,
           epSizeMb: rawSizeMb,
           bandwidth: q.bandwidth || defaultBps,
-          url: existingExplicit?.url || q.url,
+          url: existingExplicit?.url || (extractedMeta?.isLiveProbed ? q.url : undefined),
           isLive: Boolean(extractedMeta?.isLiveProbed || existingExplicit),
         });
       }
@@ -701,11 +739,17 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
   }, [content, isSeries, isMovie, currentEpisodes, focusedEpisodeIdx, selectedSeasonIdx, extractedMeta, modalServer, hasServer2]);
 
   const [selectedQuality, setSelectedQuality] = useState<string>(() => {
+    try {
+      const savedDlQ = localStorage.getItem('maxplay_download_quality');
+      if (savedDlQ && savedDlQ !== 'auto') return savedDlQ;
+      const savedVidQ = localStorage.getItem('maxplay_video_quality');
+      if (savedVidQ && savedVidQ !== 'auto') return savedVidQ;
+    } catch {}
     return qualityOptions[0]?.id || '720p';
   });
 
-  const activeQualityId = qualityOptions.some((q) => q.id === selectedQuality)
-    ? selectedQuality
+  const activeQualityId = qualityOptions.some((q) => q.id.toLowerCase() === selectedQuality.toLowerCase())
+    ? qualityOptions.find((q) => q.id.toLowerCase() === selectedQuality.toLowerCase())!.id
     : (qualityOptions[0]?.id || '720p');
 
   const toggleEpisode = (idx: number) => {
@@ -752,7 +796,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     return false;
   }, [content, currentEpisodes, primaryUrl, secondaryUrl]);
 
-  // Robust download URL resolution strictly for HLS mode streams (supports explicit targetServer & deep videoLinks[0])
+  // Robust download URL resolution strictly for HLS mode streams (prioritizes permanent server/qualityLinks over expiring CDN URLs!)
   const resolveItemDownloadUrl = (
     ep: any | null,
     activeQuality: string,
@@ -767,11 +811,18 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
 
     const findInQualityDict = (dict: Record<string, string> | undefined | null): string => {
       if (!dict || typeof dict !== 'object') return '';
-      if (dict[activeQuality]) return SmartStreamService.sanitizeStreamUrl(dict[activeQuality]);
-      if (dict['1080p']) return SmartStreamService.sanitizeStreamUrl(dict['1080p']);
-      if (dict['720p']) return SmartStreamService.sanitizeStreamUrl(dict['720p']);
-      if (dict['480p']) return SmartStreamService.sanitizeStreamUrl(dict['480p']);
-      if (dict['360p']) return SmartStreamService.sanitizeStreamUrl(dict['360p']);
+      if (dict[activeQuality] && dict[activeQuality].trim()) {
+        return SmartStreamService.sanitizeStreamUrl(dict[activeQuality]);
+      }
+      const lowerKey = Object.keys(dict).find((k) => k.trim().toLowerCase() === activeQuality.trim().toLowerCase());
+      if (lowerKey && dict[lowerKey] && dict[lowerKey].trim()) {
+        return SmartStreamService.sanitizeStreamUrl(dict[lowerKey]);
+      }
+      for (const fallbackKey of ['1080p', '720p', '480p', '360p']) {
+        if (dict[fallbackKey] && dict[fallbackKey].trim()) {
+          return SmartStreamService.sanitizeStreamUrl(dict[fallbackKey]);
+        }
+      }
       const vals = Object.values(dict).filter((v) => typeof v === 'string' && v.trim().length > 0);
       return SmartStreamService.sanitizeStreamUrl(vals[0] || '');
     };
@@ -780,11 +831,14 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       if (!sources || typeof sources !== 'object') return '';
       const keys = Object.keys(sources);
       if (keys.length === 0) return '';
-      const matchedKey = keys.find(
-        (k) =>
-          k.toLowerCase().includes(preferredLanguage.toLowerCase()) ||
-          preferredLanguage.toLowerCase().includes(k.toLowerCase())
-      ) || keys[0];
+      const matchedKey =
+        keys.find(
+          (k) =>
+            k.toLowerCase() === preferredLanguage.toLowerCase() ||
+            (k.length >= 3 && preferredLanguage.length >= 3 &&
+              (k.toLowerCase().includes(preferredLanguage.toLowerCase()) ||
+               preferredLanguage.toLowerCase().includes(k.toLowerCase())))
+        ) || keys[0];
 
       const targetLangObj = sources[matchedKey];
       if (targetLangObj && typeof targetLangObj === 'object') {
@@ -801,73 +855,106 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       (selectedSeasonIdx === initialSeasonIndex &&
         (!ep || currentEpisodes[focusedEpisodeIdx] === ep));
 
+    const epPart0 =
+      Array.isArray(ep?.videoLinks) && ep.videoLinks.length > 0 && typeof ep.videoLinks[0] === 'object'
+        ? ep.videoLinks[0]
+        : null;
+    const contentPart0 =
+      Array.isArray((content as any)?.videoLinks) && (content as any).videoLinks.length > 0 && typeof (content as any).videoLinks[0] === 'object'
+        ? (content as any).videoLinks[0]
+        : null;
+    const moviePart0 =
+      Array.isArray((content as any)?.movieParts) && (content as any).movieParts.length > 0 && typeof (content as any).movieParts[0] === 'object'
+        ? (content as any).movieParts[0]
+        : null;
+
     // Check deep extracted server URLs for this item
     const deepUrls = extractUrlsFromItem(ep, isInitialFocus);
 
     if (ep) {
       if (isServer2) {
-        // Prioritize explicit per-quality link on Server 2 (e.g. 480p or 720p link) if configured
+        // 1. Prioritize explicit per-quality link on Server 2 (e.g. 1080p, 720p, 480p, 360p)
         const fromEpSecQuality = findInQualityDict(
-          (ep as any)?.secondaryServerQualityLinks || (ep as any)?.secondaryQualityLinks
+          (ep as any)?.secondaryServerQualityLinks ||
+            (ep as any)?.secondaryQualityLinks ||
+            epPart0?.secondaryServerQualityLinks ||
+            epPart0?.secondaryQualityLinks
         );
         if (fromEpSecQuality && isHlsStream(fromEpSecQuality)) return fromEpSecQuality;
 
-        const epSecDl = (ep as any)?.secondaryDownloadQualities;
+        // 2. Next check permanent Server 2 master/hoster URL (so we resolve fresh Master .m3u8 with audio tracks!)
+        if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
+
+        // 3. Fallback to secondaryDownloadQualities if no permanent link was found
+        const epSecDl = (ep as any)?.secondaryDownloadQualities || epPart0?.secondaryDownloadQualities;
         if (Array.isArray(epSecDl) && epSecDl.length > 0) {
           const match = epSecDl.find((q: any) => q.id === activeQuality) || epSecDl[0];
           if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
         }
-        if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
-      }
+      } else {
+        // 1. Prioritize explicit per-quality link on Server 1 (e.g. 1080p, 720p, 480p, 360p)
+        const fromEpQuality = findInQualityDict(ep.qualityLinks || epPart0?.qualityLinks);
+        if (fromEpQuality && isHlsStream(fromEpQuality)) return fromEpQuality;
 
-      // Prioritize explicit per-quality link on Server 1 (e.g. 1080p, 720p, 480p, 360p) if configured
-      const fromEpQuality = findInQualityDict(ep.qualityLinks);
-      if (fromEpQuality && isHlsStream(fromEpQuality)) return fromEpQuality;
+        // 2. Check language-specific videoSources on Server 1
+        const fromEpSources = findInSources(ep.videoSources || epPart0?.videoSources);
+        if (fromEpSources && isHlsStream(fromEpSources)) return fromEpSources;
 
-      const epDl = (ep as any)?.downloadQualities;
-      if (Array.isArray(epDl) && epDl.length > 0) {
-        const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
-        if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
-      } else if (epDl && typeof epDl === 'object') {
-        const fromEpDlDict = findInQualityDict(epDl);
-        if (fromEpDlDict && isHlsStream(fromEpDlDict)) return fromEpDlDict;
+        // 3. Check permanent Server 1 master/hoster URL
+        if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
+
+        // 4. Last resort fallback to downloadQualities
+        const epDl = (ep as any)?.downloadQualities || epPart0?.downloadQualities;
+        if (Array.isArray(epDl) && epDl.length > 0) {
+          const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
+          if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
+        }
       }
-      const fromEpSources = findInSources(ep.videoSources);
-      if (fromEpSources && isHlsStream(fromEpSources)) return fromEpSources;
 
       if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
       if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
     }
 
-    // Content-level resolution (Prioritize explicit qualityLinks[activeQuality] / secondaryQualityLinks[activeQuality])
+    // Content-level resolution (Prioritize explicit qualityLinks / secondaryQualityLinks and permanent URLs)
     if (isServer2) {
       const fromContentSecQuality = findInQualityDict(
-        (content as any).secondaryServerQualityLinks || content.secondaryQualityLinks
+        (content as any).secondaryServerQualityLinks ||
+          content.secondaryQualityLinks ||
+          contentPart0?.secondaryServerQualityLinks ||
+          contentPart0?.secondaryQualityLinks ||
+          moviePart0?.secondaryServerQualityLinks ||
+          moviePart0?.secondaryQualityLinks
       );
       if (fromContentSecQuality && isHlsStream(fromContentSecQuality)) return fromContentSecQuality;
 
-      const contentSecDl = (content as any)?.secondaryDownloadQualities;
+      if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
+
+      const contentSecDl = (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities;
       if (Array.isArray(contentSecDl) && contentSecDl.length > 0) {
         const match = contentSecDl.find((q: any) => q.id === activeQuality) || contentSecDl[0];
         if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
       }
-      if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
+    } else {
+      const fromContentQuality = findInQualityDict(
+        content.qualityLinks || contentPart0?.qualityLinks || moviePart0?.qualityLinks
+      );
+      if (fromContentQuality && isHlsStream(fromContentQuality)) return fromContentQuality;
+
+      const fromContentSources = findInSources(
+        content.videoSources || contentPart0?.videoSources || moviePart0?.videoSources
+      );
+      if (fromContentSources && isHlsStream(fromContentSources)) return fromContentSources;
+
+      if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
+
+      const contentDl = (content as any)?.downloadQualities || contentPart0?.downloadQualities;
+      if (Array.isArray(contentDl) && contentDl.length > 0) {
+        const match = contentDl.find((q: any) => q.id === activeQuality) || contentDl[0];
+        if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
+      }
     }
-
-    const fromContentQuality = findInQualityDict(content.qualityLinks);
-    if (fromContentQuality && isHlsStream(fromContentQuality)) return fromContentQuality;
-
-    const fromContentSources = findInSources(content.videoSources);
-    if (fromContentSources && isHlsStream(fromContentSources)) return fromContentSources;
 
     if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
-
-    const contentDl = (content as any)?.downloadQualities;
-    if (Array.isArray(contentDl) && contentDl.length > 0) {
-      const match = contentDl.find((q: any) => q.id === activeQuality) || contentDl[0];
-      if (match?.url && isHlsStream(match.url)) return match.url;
-    }
-
     if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
 
     if (targetServer === modalServer) {
@@ -1316,7 +1403,7 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {qualityOptions.map((q) => {
-                  const isSelected = selectedQuality === q.id;
+                  const isSelected = activeQualityId === q.id;
                   const sizeText = isMovie
                     ? (q.movieSizeMb >= 1000 ? `${(q.movieSizeMb / 1024).toFixed(1)} GB` : `${q.movieSizeMb} MB`)
                     : (q.epSizeMb >= 1000 ? `${(q.epSizeMb / 1024).toFixed(1)} GB/ep` : `${q.epSizeMb} MB/ep`);

@@ -24,6 +24,54 @@ import { adManager } from '../../services/adService';
 import { useAuth } from '../../context/AuthContext';
 import { SmartStreamService } from '../../services/smartStreamService';
 import { NativeBridgeService } from '../../services/nativeBridgeService';
+import { ClientHlsDownloader } from '../../services/clientHlsDownloader';
+
+const isQualityLabelKey = (val?: string): boolean => {
+  if (!val || typeof val !== 'string') return false;
+  return /^(\d{3,4}p|4k|2k|8k|hd|fhd|uhd|sd|auto)$/i.test(val.trim());
+};
+
+const findMatchingHlsLevelIndex = (levels: any[], qualStr?: string): number => {
+  if (!levels || levels.length === 0 || !qualStr || qualStr.toLowerCase() === 'auto') return -1;
+  const cleanQ = qualStr.toLowerCase().trim();
+  const targetHeight = parseInt(cleanQ.replace(/\D/g, ''), 10);
+
+  // 1. Exact classified label match (handles cinematic widescreen 1920x800 = 1080p, 1280x534 = 720p, 854x356 = 480p, 640x268 = 360p)
+  const classifiedIdx = levels.findIndex((lvl: any) => {
+    const label = ClientHlsDownloader.classifyResolutionLabel(
+      lvl.width || 0,
+      lvl.height || 0,
+      lvl.bitrate || 0
+    ).toLowerCase();
+    return label === cleanQ;
+  });
+  if (classifiedIdx !== -1) return classifiedIdx;
+
+  // 2. Exact height match
+  if (!isNaN(targetHeight) && targetHeight > 0) {
+    const exactHeightIdx = levels.findIndex((lvl: any) => lvl.height === targetHeight);
+    if (exactHeightIdx !== -1) return exactHeightIdx;
+
+    // 3. Closest nominal height match
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    levels.forEach((lvl: any, idx: number) => {
+      const label = ClientHlsDownloader.classifyResolutionLabel(
+        lvl.width || 0,
+        lvl.height || 0,
+        lvl.bitrate || 0
+      );
+      const nomH = parseInt(label.replace(/\D/g, ''), 10) || lvl.height || 720;
+      const diff = Math.abs(nomH - targetHeight);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = idx;
+      }
+    });
+    return bestIdx;
+  }
+  return -1;
+};
 
 // Comprehensive ISO 639 & friendly language label mapper
 export const formatLanguageLabel = (name?: string, lang?: string, index?: number): string => {
@@ -107,6 +155,7 @@ interface InlinePlayerProps {
   skipMarkers?: any;
   isSmartHls?: boolean;
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
+  onDiscoveredQualities?: (qualities: string[]) => void;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -135,6 +184,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   skipMarkers,
   isSmartHls,
   onDiscoveredAudioTracks,
+  onDiscoveredQualities,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -496,9 +546,18 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const addLang = (raw?: string) => {
       if (!raw || typeof raw !== 'string') return;
       const clean = raw.trim();
-      if (!clean || clean.toLowerCase() === 'default' || clean.toLowerCase() === 'default audio') return;
-      if (!list.some((existing) => existing.toLowerCase() === clean.toLowerCase())) {
-        list.push(clean);
+      if (
+        !clean ||
+        clean.toLowerCase() === 'default' ||
+        clean.toLowerCase() === 'default audio' ||
+        isQualityLabelKey(clean)
+      ) {
+        return;
+      }
+      const normalized = ClientHlsDownloader.normalizeLanguageLabel(clean, clean) || clean;
+      if (!normalized || isQualityLabelKey(normalized)) return;
+      if (!list.some((existing) => existing.toLowerCase() === normalized.toLowerCase())) {
+        list.push(normalized);
       }
     };
 
@@ -507,9 +566,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       hlsAudioTracks.forEach((t) => addLang(t.name));
     }
 
-    // 2. Multi-language videoSources
+    // 2. Multi-language videoSources (only valid language keys, never quality keys)
     if (videoSources && typeof videoSources === 'object') {
       Object.keys(videoSources).forEach((k) => {
+        if (isQualityLabelKey(k)) return;
         const val = videoSources[k];
         if (typeof val === 'string' && val.trim().length > 0) {
           addLang(k);
@@ -527,28 +587,57 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     return list;
   }, [videoSources, hlsAudioTracks, propAvailableLanguages]);
 
-  // Keep currentLanguage in sync with activeLanguage prop and available languages
+  // Keep currentLanguage in sync with activeLanguage prop and immediately switch live HLS audio track when changed from Details Screen!
   useEffect(() => {
-    // Smart Auto-Fallback Guard: Ensure activeLanguage actually exists in this part
-    if (activeLanguage && availableLanguages.includes(activeLanguage)) {
-      setCurrentLanguage(activeLanguage);
+    let targetLang = currentLanguage;
+    if (activeLanguage && availableLanguages.some((l) => l.toLowerCase() === activeLanguage.toLowerCase())) {
+      const matched = availableLanguages.find((l) => l.toLowerCase() === activeLanguage.toLowerCase()) || activeLanguage;
+      setCurrentLanguage(matched);
+      targetLang = matched;
     } else if (availableLanguages.length > 0) {
       const fallback = availableLanguages[0];
       setCurrentLanguage(fallback);
+      targetLang = fallback;
       if (onLanguageChange && fallback !== activeLanguage) {
         onLanguageChange(fallback);
       }
     }
-  }, [activeLanguage, availableLanguages]);
 
-  // Keep currentQuality in sync with activeQuality prop
+    const hls = hlsRef.current;
+    if (hls && isHlsStreamRef.current && hlsAudioTracks.length > 0 && targetLang) {
+      const matchIdx = hlsAudioTracks.findIndex((t) =>
+        ClientHlsDownloader.matchesTargetLanguage(
+          { name: (t as any).rawName || t.name, language: t.lang || '', friendly: t.name },
+          targetLang
+        )
+      );
+      if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
+        hls.audioTrack = matchIdx;
+      }
+    }
+  }, [activeLanguage, availableLanguages, hlsAudioTracks]);
+
+  // Keep currentQuality in sync with activeQuality prop AND immediately switch live HLS level when changed from Details Screen!
   useEffect(() => {
-    if (activeQuality) {
-      setCurrentQuality(activeQuality);
+    if (!activeQuality) return;
+    setCurrentQuality(activeQuality);
+
+    const hls = hlsRef.current;
+    if (hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 0) {
+      if (activeQuality.toLowerCase() === 'auto') {
+        hls.currentLevel = -1;
+      } else {
+        const levelIdx = findMatchingHlsLevelIndex(hls.levels, activeQuality);
+        if (levelIdx !== -1 && hls.currentLevel !== levelIdx) {
+          hls.currentLevel = levelIdx;
+          hls.loadLevel = levelIdx;
+        }
+      }
     }
   }, [activeQuality]);
 
   // Derive available qualities based on Admin multi-quality server links AND dynamic HLS levels
+  // Strictly filters out any language names so languages NEVER leak into the Quality Box!
   const availableQualities = useMemo(() => {
     let links: Record<string, string> | null = null;
 
@@ -561,7 +650,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           : Object.keys(videoSources)[0];
       const langVal = langKey ? videoSources[langKey] : null;
       if (langVal && typeof langVal === 'object') {
-        links = { ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}), ...langVal };
+        links = { ...langVal, ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}) };
       }
     }
 
@@ -572,14 +661,24 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const combinedSet = new Set<string>();
     if (links && typeof links === 'object') {
       Object.keys(links).forEach((q) => {
-        if (q.toLowerCase() !== 'default' && links![q] && String(links![q]).trim().length > 0) {
-          combinedSet.add(q);
+        const cleanQ = q.trim();
+        if (
+          cleanQ.toLowerCase() !== 'default' &&
+          cleanQ.toLowerCase() !== 'auto' &&
+          isQualityLabelKey(cleanQ) &&
+          links![q] &&
+          String(links![q]).trim().length > 0
+        ) {
+          combinedSet.add(cleanQ);
         }
       });
     }
     if (hlsQualities.length > 0) {
       hlsQualities.forEach((q) => {
-        if (q.toLowerCase() !== 'auto') combinedSet.add(q);
+        const cleanQ = q.trim();
+        if (cleanQ.toLowerCase() !== 'auto' && isQualityLabelKey(cleanQ)) {
+          combinedSet.add(cleanQ);
+        }
       });
     }
 
@@ -591,7 +690,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     return ['auto'];
   }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities]);
 
-  // Pick the optimal video URL based on language, quality, and Smart Network/RAM detection
+  // Pick the optimal video URL based on active server qualityLinks, language, and quality
   const activeVideoUrl = useMemo(() => {
     let links: Record<string, string> | null = null;
     let langStringUrl = '';
@@ -605,7 +704,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           : Object.keys(videoSources)[0];
       const langVal = langKey ? videoSources[langKey] : null;
       if (langVal && typeof langVal === 'object') {
-        links = { ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}), ...langVal };
+        // Explicit qualityLinks for the active server always takes priority over legacy videoSources
+        links = { ...langVal, ...(qualityLinks && typeof qualityLinks === 'object' ? qualityLinks : {}) };
       } else if (typeof langVal === 'string' && langVal.trim().length > 0) {
         langStringUrl = SmartStreamService.sanitizeStreamUrl(langVal);
       }
@@ -698,7 +798,36 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const lastActiveUrlRef = useRef<string>('');
   const isSwitchingSourceRef = useRef<boolean>(false);
   const targetSeekTimeRef = useRef<number>(initialTime);
+  const savedSwitchTimeRef = useRef<number>(0);
+  const wasPlayingBeforeSwitchRef = useRef<boolean>(false);
+  const networkStruggleCountRef = useRef<number>(0);
   const isInitialSeekDoneRef = useRef<boolean>(initialTime <= 0);
+
+  // Smart Network Auto-Downgrade helper: steps down to the next available weaker quality when internet struggles
+  const tryStepDownToWeakerQuality = useCallback((): boolean => {
+    const ladder = ['1080p', '720p', '480p', '360p'];
+    const currQ = (currentQuality === 'auto' ? actualQuality : currentQuality) || '1080p';
+    const currIdx = ladder.findIndex((q) => currQ.toLowerCase().includes(q.replace('p', '')));
+    const startIdx = currIdx !== -1 ? currIdx + 1 : 1;
+
+    for (let i = startIdx; i < ladder.length; i++) {
+      const candidateQ = ladder[i];
+      if (availableQualities.some((q) => q.toLowerCase() === candidateQ.toLowerCase())) {
+        console.warn(`[SmartPlayer] Weak connection detected on ${currQ}. Auto-stepping down to ${candidateQ}...`);
+        setCurrentQuality(candidateQ);
+        if (onQualityChange) onQualityChange(candidateQ);
+        if (hlsRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
+          const lvlIdx = findMatchingHlsLevelIndex(hlsRef.current.levels, candidateQ);
+          if (lvlIdx !== -1) {
+            hlsRef.current.currentLevel = lvlIdx;
+            hlsRef.current.loadLevel = lvlIdx;
+          }
+        }
+        return true;
+      }
+    }
+    return false;
+  }, [currentQuality, actualQuality, availableQualities, onQualityChange]);
 
   // Resolve Smart Stream URL (VOE / external hosters via backend proxy with 3-hour cache)
   useEffect(() => {
@@ -706,6 +835,18 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       setResolvedStreamUrl('');
       setIsResolvingStream(false);
       return;
+    }
+
+    // Preserve current playback position BEFORE resolving new quality/server link
+    if (prevStreamKeyRef.current === streamKey) {
+      const liveVideoTime = videoRef.current?.currentTime || 0;
+      const bestTime = Math.max(liveVideoTime, currentTime, savedSwitchTimeRef.current);
+      if (bestTime > 0.5) {
+        savedSwitchTimeRef.current = bestTime;
+      }
+      if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+        wasPlayingBeforeSwitchRef.current = true;
+      }
     }
 
     streamRetryAttemptedRef.current = false;
@@ -741,6 +882,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       .catch((err) => {
         if (!isMounted) return;
         console.warn('Smart stream extraction error:', err);
+        // If targeted quality link failed to extract, try stepping down to a weaker quality link automatically!
+        if (tryStepDownToWeakerQuality()) {
+          return;
+        }
         const fallback = SmartStreamService.getEmbedUrl(activeVideoUrl);
         if (fallback) {
           setEmbedFallbackUrl(fallback);
@@ -766,6 +911,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (streamKey !== prevStreamKeyRef.current) {
       prevStreamKeyRef.current = streamKey;
       lastActiveUrlRef.current = '';
+      savedSwitchTimeRef.current = 0;
+      wasPlayingBeforeSwitchRef.current = false;
+      networkStruggleCountRef.current = 0;
       setCurrentTime(initialTime);
       targetSeekTimeRef.current = initialTime;
       isInitialSeekDoneRef.current = initialTime <= 0;
@@ -794,13 +942,16 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const video = videoRef.current;
     if (!video || !resolvedStreamUrl) return;
 
-    // Check if this is a quality/language switch on the same streamKey
-    const isSameStreamSwitch = (prevStreamKeyRef.current === streamKey) && !!lastActiveUrlRef.current && lastActiveUrlRef.current !== resolvedStreamUrl;
+    // Check if this is a quality/language/server switch on the same streamKey
+    const isSameStreamSwitch =
+      prevStreamKeyRef.current === streamKey &&
+      Boolean(lastActiveUrlRef.current && lastActiveUrlRef.current !== resolvedStreamUrl);
     lastActiveUrlRef.current = resolvedStreamUrl;
 
     let targetStartTime = initialTime;
-    if (isSameStreamSwitch && video.currentTime > 0) {
-      targetStartTime = video.currentTime;
+    const bestSavedTime = Math.max(video.currentTime || 0, savedSwitchTimeRef.current || 0);
+    if (isSameStreamSwitch && bestSavedTime > 0.5) {
+      targetStartTime = bestSavedTime;
       isSwitchingSourceRef.current = true;
     } else {
       targetStartTime = initialTime;
@@ -822,7 +973,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
-        startPosition: targetStartTime,
+        startPosition: targetStartTime > 0 ? targetStartTime : -1,
         enableWorker: true,
         lowLatencyMode: false,
         startFragPrefetch: true,
@@ -832,36 +983,50 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         maxBufferSize: 60 * 1000 * 1000,
         fragLoadingMaxRetry: 6,
         manifestLoadingMaxRetry: 4,
-        levelLoadingMaxRetry: 4
+        levelLoadingMaxRetry: 4,
       });
       hlsRef.current = hls;
       hls.loadSource(resolvedStreamUrl);
       hls.attachMedia(video);
-      
+
       hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
         setIsLoading(false);
         video.playbackRate = playbackRate;
 
-        // Auto-detect available qualities from HLS master manifest
+        // 1. Auto-detect available qualities from HLS master manifest using widescreen-aware classifier
         if (data && data.levels && data.levels.length > 0) {
-          const heights = data.levels
-            .map((lvl) => lvl.height)
-            .filter((h) => typeof h === 'number' && h > 0);
-          const uniqueQualities = Array.from(new Set(heights))
-            .sort((a, b) => b - a)
-            .map((h) => `${h}p`);
+          const classifiedLabels = data.levels.map((lvl: any) =>
+            ClientHlsDownloader.classifyResolutionLabel(lvl.width || 0, lvl.height || 0, lvl.bitrate || 0)
+          );
+          const uniqueQualities = Array.from(new Set(classifiedLabels)).sort(
+            (a, b) => (parseInt(b) || 0) - (parseInt(a) || 0)
+          );
           if (uniqueQualities.length > 0) {
             setHlsQualities(uniqueQualities);
+            if (onDiscoveredQualities) {
+              onDiscoveredQualities(uniqueQualities);
+            }
+          }
+
+          // Immediately lock onto the user's targeted/selected quality level!
+          const desiredQ = currentQuality || activeQuality || 'auto';
+          if (desiredQ && desiredQ.toLowerCase() !== 'auto') {
+            const targetLevelIdx = findMatchingHlsLevelIndex(data.levels, desiredQ);
+            if (targetLevelIdx !== -1) {
+              hls.currentLevel = targetLevelIdx;
+              hls.loadLevel = targetLevelIdx;
+              hls.startLevel = targetLevelIdx;
+            }
           }
         }
 
-        // Auto-detect audio tracks from HLS
+        // 2. Auto-detect audio tracks from HLS
         if (hls.audioTracks && hls.audioTracks.length > 0) {
           const parsedAudio = hls.audioTracks.map((t, idx) => ({
             id: idx,
             name: formatLanguageLabel(t.name, t.lang, idx),
             rawName: t.name || '',
-            lang: t.lang || ''
+            lang: t.lang || '',
           }));
           setHlsAudioTracks(parsedAudio);
           if (onDiscoveredAudioTracks) {
@@ -870,17 +1035,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             );
           }
 
-          const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
+          const req = (currentLanguage || activeLanguage || '').trim();
           if (req) {
-            const matchIdx = parsedAudio.findIndex(a => 
-              a.name.toLowerCase() === req || 
-              a.rawName.toLowerCase() === req ||
-              a.lang.toLowerCase() === req ||
-              a.name.toLowerCase().includes(req) ||
-              req.includes(a.name.toLowerCase()) ||
-              (req.includes('hindi') && (a.rawName.toLowerCase().includes('hin') || a.lang.toLowerCase().includes('hi'))) ||
-              (req.includes('english') && (a.rawName.toLowerCase().includes('eng') || a.lang.toLowerCase().includes('en'))) ||
-              (req.includes('japanese') && (a.rawName.toLowerCase().includes('jpn') || a.lang.toLowerCase().includes('ja')))
+            const matchIdx = parsedAudio.findIndex((a) =>
+              ClientHlsDownloader.matchesTargetLanguage(
+                { name: a.rawName, language: a.lang, friendly: a.name },
+                req
+              )
             );
             if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
               hls.audioTrack = matchIdx;
@@ -888,14 +1049,23 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           }
         }
 
+        if (targetSeekTimeRef.current > 0.5 && Math.abs((video.currentTime || 0) - targetSeekTimeRef.current) > 1.5) {
+          try {
+            video.currentTime = targetSeekTimeRef.current;
+          } catch {}
+        }
+
         setTimeout(() => {
           isInitialSeekDoneRef.current = true;
           isSwitchingSourceRef.current = false;
           targetSeekTimeRef.current = 0;
-        }, 400);
+          savedSwitchTimeRef.current = 0;
+        }, 450);
 
-        if (autoPlay || hasStarted || isPlaying) {
-          video.play().catch(e => console.warn('Autoplay blocked:', e));
+        if (autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current) {
+          wasPlayingBeforeSwitchRef.current = false;
+          setHasStarted(true);
+          video.play().catch((e) => console.warn('Autoplay blocked:', e));
         }
       });
 
@@ -905,7 +1075,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             id: idx,
             name: formatLanguageLabel(t.name, t.lang, idx),
             rawName: t.name || '',
-            lang: t.lang || ''
+            lang: t.lang || '',
           }));
           setHlsAudioTracks(parsedAudio);
           if (onDiscoveredAudioTracks) {
@@ -914,17 +1084,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             );
           }
 
-          const req = (currentLanguage || activeLanguage || '').toLowerCase().trim();
+          const req = (currentLanguage || activeLanguage || '').trim();
           if (req) {
-            const matchIdx = parsedAudio.findIndex(a => 
-              a.name.toLowerCase() === req || 
-              a.rawName.toLowerCase() === req ||
-              a.lang.toLowerCase() === req ||
-              a.name.toLowerCase().includes(req) ||
-              req.includes(a.name.toLowerCase()) ||
-              (req.includes('hindi') && (a.rawName.toLowerCase().includes('hin') || a.lang.toLowerCase().includes('hi'))) ||
-              (req.includes('english') && (a.rawName.toLowerCase().includes('eng') || a.lang.toLowerCase().includes('en'))) ||
-              (req.includes('japanese') && (a.rawName.toLowerCase().includes('jpn') || a.lang.toLowerCase().includes('ja')))
+            const matchIdx = parsedAudio.findIndex((a: any) =>
+              ClientHlsDownloader.matchesTargetLanguage(
+                { name: a.rawName, language: a.lang, friendly: a.name },
+                req
+              )
             );
             if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
               hls.audioTrack = matchIdx;
@@ -944,16 +1110,41 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         if (hls.levels && hls.levels[data.level]) {
           const lvl = hls.levels[data.level];
-          if (lvl.height) {
-            setActualQuality(`${lvl.height}p`);
-          }
+          const label = ClientHlsDownloader.classifyResolutionLabel(
+            lvl.width || 0,
+            lvl.height || 0,
+            lvl.bitrate || 0
+          );
+          setActualQuality(label);
         }
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
+        // Non-fatal buffer stall / fragment timeout detection -> Smart Auto-Downgrade to weaker quality!
+        if (
+          !data.fatal &&
+          (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+            data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT ||
+            data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR)
+        ) {
+          networkStruggleCountRef.current += 1;
+          if (networkStruggleCountRef.current >= 2) {
+            networkStruggleCountRef.current = 0;
+            tryStepDownToWeakerQuality();
+          }
+        }
+
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
+              // First try stepping down to a weaker quality if user's connection can't sustain high bitrate
+              if (networkStruggleCountRef.current >= 1 && tryStepDownToWeakerQuality()) {
+                networkStruggleCountRef.current = 0;
+                hls.startLoad();
+                return;
+              }
+              networkStruggleCountRef.current += 1;
+
               // Smart retry if 3-hour stream token expired
               if (
                 SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls) &&
@@ -974,6 +1165,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                     }
                   })
                   .catch((e) => {
+                    if (tryStepDownToWeakerQuality()) return;
                     const fallback = SmartStreamService.getEmbedUrl(activeVideoUrl);
                     if (fallback) {
                       setEmbedFallbackUrl(fallback);
@@ -987,22 +1179,23 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                   });
                 return;
               }
-              console.warn("fatal network error encountered, try to recover");
+              console.warn('fatal network error encountered, try to recover');
               hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn("fatal media error encountered, try to recover");
+              console.warn('fatal media error encountered, try to recover');
               const now = performance.now();
               if (now - recoverDecodingErrorDateRef.current > 3000) {
                 recoverDecodingErrorDateRef.current = now;
                 hls.recoverMediaError();
               } else {
-                console.warn("media error recurring, swapping audio codec to prevent decode crash");
+                console.warn('media error recurring, swapping audio codec to prevent decode crash');
                 hls.swapAudioCodec();
                 hls.recoverMediaError();
               }
               break;
             default:
+              if (tryStepDownToWeakerQuality()) return;
               setIsLoading(false);
               isSwitchingSourceRef.current = false;
               setPlaybackError('Stream failed to load: ' + data.type);
@@ -1267,27 +1460,24 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   };
   
   const changeLanguage = (lang: string) => {
+    if (videoRef.current && videoRef.current.currentTime > 0.5) {
+      savedSwitchTimeRef.current = videoRef.current.currentTime;
+    }
+    if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+      wasPlayingBeforeSwitchRef.current = true;
+    }
+
     setCurrentLanguage(lang);
     if (onLanguageChange) onLanguageChange(lang);
 
     // 1. If HLS stream has internal audio tracks, switch audio track immediately
     if (hlsRef.current && isHlsStreamRef.current && hlsAudioTracks.length > 0) {
-      const normLang = lang.toLowerCase().trim();
-      const trackIdx = hlsAudioTracks.findIndex((t) => {
-        const tName = (t.name || '').toLowerCase();
-        const tRaw = ((t as any).rawName || '').toLowerCase();
-        const tLang = (t.lang || '').toLowerCase();
-        return tName === normLang ||
-               tRaw === normLang ||
-               tLang === normLang ||
-               tName.includes(normLang) ||
-               normLang.includes(tName) ||
-               (normLang.includes('hindi') && (tName.includes('hin') || tRaw.includes('hin') || tLang.includes('hi'))) ||
-               (normLang.includes('english') && (tName.includes('eng') || tRaw.includes('eng') || tLang.includes('en'))) ||
-               (normLang.includes('japanese') && (tName.includes('jpn') || tRaw.includes('jpn') || tLang.includes('ja'))) ||
-               (normLang.includes('tamil') && (tName.includes('tam') || tRaw.includes('tam') || tLang.includes('ta'))) ||
-               (normLang.includes('telugu') && (tName.includes('tel') || tRaw.includes('tel') || tLang.includes('te')));
-      });
+      const trackIdx = hlsAudioTracks.findIndex((t) =>
+        ClientHlsDownloader.matchesTargetLanguage(
+          { name: (t as any).rawName || t.name, language: t.lang || '', friendly: t.name },
+          lang
+        )
+      );
 
       if (trackIdx !== -1) {
         hlsRef.current.audioTrack = trackIdx;
@@ -1305,15 +1495,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     // 2. If HTML5 Video has native audioTracks
     if (videoRef.current && (videoRef.current as any).audioTracks) {
       const nativeTracks = (videoRef.current as any).audioTracks;
-      const normLang = lang.toLowerCase().trim();
       for (let i = 0; i < nativeTracks.length; i++) {
         const track = nativeTracks[i];
-        const label = (track.label || track.language || '').toLowerCase();
-        if (label.includes(normLang) || normLang.includes(label)) {
-          track.enabled = true;
-        } else {
-          track.enabled = false;
-        }
+        const isMatch = ClientHlsDownloader.matchesTargetLanguage(
+          { name: track.label || '', language: track.language || '' },
+          lang
+        );
+        track.enabled = isMatch;
       }
     }
 
@@ -1322,23 +1510,29 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   };
   
   const changeQuality = (qual: string) => {
+    // Capture current playback position before switching quality link/level
+    if (videoRef.current && videoRef.current.currentTime > 0.5) {
+      savedSwitchTimeRef.current = videoRef.current.currentTime;
+    }
+    if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+      wasPlayingBeforeSwitchRef.current = true;
+    }
+
     setCurrentQuality(qual);
     try {
       localStorage.setItem('maxplay_preferred_quality', qual);
     } catch {}
     if (onQualityChange) onQualityChange(qual);
 
-    // If HLS stream has internal multi-quality levels, switch level seamlessly
+    // If HLS stream has internal multi-quality levels, switch level immediately using widescreen-aware matcher
     if (hlsRef.current && isHlsStreamRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
-      if (qual === 'auto') {
+      if (qual.toLowerCase() === 'auto') {
         hlsRef.current.currentLevel = -1;
       } else {
-        const targetHeight = parseInt(qual);
-        if (!isNaN(targetHeight)) {
-          const levelIdx = hlsRef.current.levels.findIndex((lvl) => lvl.height === targetHeight);
-          if (levelIdx !== -1) {
-            hlsRef.current.currentLevel = levelIdx;
-          }
+        const levelIdx = findMatchingHlsLevelIndex(hlsRef.current.levels, qual);
+        if (levelIdx !== -1) {
+          hlsRef.current.currentLevel = levelIdx;
+          hlsRef.current.loadLevel = levelIdx;
         }
       }
     }

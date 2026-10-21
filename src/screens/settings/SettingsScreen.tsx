@@ -43,7 +43,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
   });
 
   const [preferredLang, setPreferredLang] = useState(() => localStorage.getItem('maxplay_preferred_lang') || 'English');
-  const [preferredQuality, setPreferredQuality] = useState(() => localStorage.getItem('maxplay_preferred_quality') || 'Auto');
+  const [preferredQuality, setPreferredQuality] = useState(() => {
+    const raw = localStorage.getItem('maxplay_preferred_quality') || localStorage.getItem('maxplay_video_quality') || 'Auto';
+    return raw.toLowerCase() === 'auto' ? 'Auto' : raw;
+  });
 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [modalInfo, setModalInfo] = useState<{ title: string; body: string } | null>(null);
@@ -127,8 +130,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
   };
 
   const handleSetQuality = (q: string) => {
-    setPreferredQuality(q);
-    localStorage.setItem('maxplay_preferred_quality', q);
+    const displayVal = q.toLowerCase() === 'auto' ? 'Auto' : q;
+    const normalizedVal = q.toLowerCase() === 'auto' ? 'auto' : q;
+    setPreferredQuality(displayVal);
+    localStorage.setItem('maxplay_preferred_quality', normalizedVal);
+    localStorage.setItem('maxplay_video_quality', normalizedVal);
+    if (normalizedVal !== 'auto') {
+      localStorage.setItem('maxplay_download_quality', normalizedVal);
+    }
     setShowQualityModal(false);
   };
 
@@ -473,29 +482,46 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
       {showQualityModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm sm:p-4 animate-in fade-in duration-200">
           <div className="flex w-full sm:max-w-xs flex-col rounded-t-3xl sm:rounded-3xl bg-[#121212] border border-[#1C1C1E] shadow-2xl animate-in slide-in-from-bottom-10 sm:slide-in-from-bottom-0">
-            <div className="flex items-center justify-between p-5 border-b border-[#1C1C1E]">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Tv className="h-5 w-5 text-[#10B981]" /> Watch Quality
-              </h3>
-              <button onClick={() => setShowQualityModal(false)} className="text-[#A1A1AA] hover:text-white transition">
-                <X className="h-5 w-5" />
-              </button>
+            <div className="flex flex-col p-5 border-b border-[#1C1C1E] gap-1">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Tv className="h-5 w-5 text-[#10B981]" /> Target Watch Quality
+                </h3>
+                <button onClick={() => setShowQualityModal(false)} className="text-[#A1A1AA] hover:text-white transition">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-[#A1A1AA] leading-snug">
+                Video will load in your targeted quality first and automatically step down if internet is slow.
+              </p>
             </div>
             <div className="flex flex-col p-2 max-h-[50vh] overflow-y-auto">
-              {['Auto', '1080p', '720p', '480p', '360p'].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => handleSetQuality(q)}
-                  className={`flex items-center justify-between p-4 rounded-xl transition cursor-pointer ${
-                    preferredQuality === q ? 'bg-[#10B981]/10' : 'hover:bg-[#1C1C1E]'
-                  }`}
-                >
-                  <span className={`text-sm font-medium ${preferredQuality === q ? 'text-[#10B981]' : 'text-white'}`}>
-                    {q}
-                  </span>
-                  {preferredQuality === q && <CheckCircle2 className="h-5 w-5 text-[#10B981]" />}
-                </button>
-              ))}
+              {[
+                { id: 'Auto', desc: 'Smart adaptive quality' },
+                { id: '1080p', desc: 'Full HD (Auto-fallback on slow net)' },
+                { id: '720p', desc: 'HD Ready (Balanced)' },
+                { id: '480p', desc: 'Standard Definition' },
+                { id: '360p', desc: 'Data Saver (Fastest)' },
+              ].map((item) => {
+                const isSelected = preferredQuality.toLowerCase() === item.id.toLowerCase();
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleSetQuality(item.id)}
+                    className={`flex items-center justify-between p-3.5 rounded-xl transition cursor-pointer text-left ${
+                      isSelected ? 'bg-[#10B981]/10' : 'hover:bg-[#1C1C1E]'
+                    }`}
+                  >
+                    <div className="flex flex-col">
+                      <span className={`text-sm font-bold ${isSelected ? 'text-[#10B981]' : 'text-white'}`}>
+                        {item.id}
+                      </span>
+                      <span className="text-[11px] text-[#71717A]">{item.desc}</span>
+                    </div>
+                    {isSelected && <CheckCircle2 className="h-5 w-5 text-[#10B981] shrink-0" />}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

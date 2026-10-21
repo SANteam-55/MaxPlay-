@@ -37,6 +37,7 @@ import { InlinePlayer } from '../../components/player/InlinePlayer';
 import { DownloadSelectionModal } from '../../components/downloads/DownloadSelectionModal';
 import { downloadManager } from '../../services/DownloadManager';
 import { SmartStreamService } from '../../services/smartStreamService';
+import { ClientHlsDownloader } from '../../services/clientHlsDownloader';
 import { useAuthContext } from '../../context/AuthContext';
 import { 
   subscribeToMyList, 
@@ -620,10 +621,29 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [newComment, setNewComment] = useState('');
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   
-  // Independent playback, language, and quality state
+  // Independent playback, language, and quality state (respects Me > Settings preferred quality & language!)
   const [playbackPosition, setPlaybackPosition] = useState(() => initialSavedData?.currentTime || initialSavedData?.watchedSeconds || 0);
-  const [activeLanguage, setActiveLanguage] = useState<string>(() => initialSavedData?.activeLanguage || '');
-  const [activeQuality, setActiveQuality] = useState<string>(() => initialSavedData?.activeQuality || 'auto');
+  const [activeLanguage, setActiveLanguage] = useState<string>(() => {
+    if (initialSavedData?.activeLanguage) return initialSavedData.activeLanguage;
+    try {
+      return localStorage.getItem('maxplay_preferred_lang') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [activeQuality, setActiveQuality] = useState<string>(() => {
+    try {
+      const prefQ = localStorage.getItem('maxplay_preferred_quality') || localStorage.getItem('maxplay_video_quality');
+      if (prefQ && prefQ.trim()) {
+        const cleanPref = prefQ.trim();
+        return cleanPref.toLowerCase() === 'auto' ? 'auto' : cleanPref;
+      }
+    } catch {}
+    if (initialSavedData?.activeQuality) {
+      return initialSavedData.activeQuality.toLowerCase() === 'auto' ? 'auto' : initialSavedData.activeQuality;
+    }
+    return 'auto';
+  });
   const [partProgressMap, setPartProgressMap] = useState<Record<string, { time: number; duration?: number; language?: string; quality?: string }>>(() => initialSavedData?.partProgressMap || {});
 
   // Ultra Pro Max Resume Controls & Anti-Overwrite Guards
@@ -651,16 +671,40 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   };
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
   const [showDetails, setShowDetails] = useState(false);
-  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2'>('server1');
+  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2'>(() => {
+    try {
+      if (content?.id) {
+        const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
+        if (savedForContent === 'server1' || savedForContent === 'server2') return savedForContent;
+      }
+      const savedGlobal = localStorage.getItem('maxplay_preferred_server');
+      if (savedGlobal === 'server1' || savedGlobal === 'server2') return savedGlobal;
+    } catch {}
+    return 'server1';
+  });
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
+  const [isQualityModalOpen, setIsQualityModalOpen] = useState(false);
   const [isSeasonModalOpen, setIsSeasonModalOpen] = useState(false);
   const [discoveredAudioTracks, setDiscoveredAudioTracks] = useState<string[]>([]);
+  const [discoveredQualities, setDiscoveredQualities] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
-  // Auto-detect and switch to Server 2 if Server 1 is not provided/empty
+  // Remembered Server Selection helper (persists per-title and globally)
+  const handleSelectServer = (srv: 'server1' | 'server2') => {
+    saveProgressNow(playbackPosition, false, true);
+    setSelectedServer(srv);
+    try {
+      if (content?.id) {
+        localStorage.setItem(`maxplay_server_${content.id}`, srv);
+      }
+      localStorage.setItem('maxplay_preferred_server', srv);
+    } catch {}
+  };
+
+  // Auto-detect and restore remembered server (or auto-switch if only one server has links)
   useEffect(() => {
     if (!content) return;
     const ep0 = content.episodesList?.[0] || content.seasonsData?.[0]?.episodes?.[0];
@@ -683,8 +727,28 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       ((ep0 as any)?.secondaryServerQualityLinks && Object.keys((ep0 as any).secondaryServerQualityLinks).length > 0) ||
       (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryServerUrl || p?.secondaryUrl)))
     );
+
+    let desiredServer: 'server1' | 'server2' = selectedServer;
+    try {
+      const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
+      if (savedForContent === 'server1' || savedForContent === 'server2') {
+        desiredServer = savedForContent;
+      } else {
+        const savedGlobal = localStorage.getItem('maxplay_preferred_server');
+        if (savedGlobal === 'server1' || savedGlobal === 'server2') {
+          desiredServer = savedGlobal;
+        }
+      }
+    } catch {}
+
     if (!hasS1 && hasS2) {
       setSelectedServer('server2');
+    } else if (!hasS2 && hasS1) {
+      setSelectedServer('server1');
+    } else if (desiredServer === 'server2' && hasS2) {
+      setSelectedServer('server2');
+    } else if (desiredServer === 'server1' && hasS1) {
+      setSelectedServer('server1');
     }
   }, [content?.id]);
 
@@ -699,6 +763,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastSaveTimeRef = useRef<number>(0);
   const languageTriggerRef = useRef<HTMLButtonElement>(null);
+  const qualityTriggerRef = useRef<HTMLButtonElement>(null);
   const seasonTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Initialize details screen ad grace period
@@ -934,8 +999,13 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 setSeasonEpisodeMap(prev => ({ ...prev, [targetSeason]: targetEpisode }));
               }
               setSelectedPartIndex(targetPart);
-              if (cloud.activeLanguage) setActiveLanguage(cloud.activeLanguage);
-              if (cloud.activeQuality) setActiveQuality(cloud.activeQuality);
+              if (cloud.activeLanguage && !isQualityKeyString(cloud.activeLanguage)) {
+                setActiveLanguage(cloud.activeLanguage);
+              }
+              const userGlobalQualityPref = localStorage.getItem('maxplay_preferred_quality') || localStorage.getItem('maxplay_video_quality');
+              if (!userGlobalQualityPref && cloud.activeQuality && isQualityKeyString(cloud.activeQuality)) {
+                setActiveQuality(cloud.activeQuality.toLowerCase() === 'auto' ? 'auto' : cloud.activeQuality);
+              }
               setPlaybackPosition(targetTime);
 
               // Update stateRefs immediately
@@ -1094,12 +1164,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           const targetLang = (activeLanguage && currentEp.videoSources[activeLanguage]) ? activeLanguage : Object.keys(currentEp.videoSources)[0];
           const langEntry = targetLang ? currentEp.videoSources[targetLang] : undefined;
           if (langEntry && typeof langEntry === 'object') {
-            playerQualityLinks = { ...epQualityObj, ...langEntry };
+            playerQualityLinks = { ...langEntry, ...epQualityObj };
           } else {
             playerQualityLinks = { ...epQualityObj };
           }
           const smartInit = SmartStreamService.selectSourceUrlForQuality(
-            typeof langEntry === 'string' ? langEntry : (currentEp.videoUrl || content.videoUrl || ''),
+            typeof langEntry === 'string' && Object.keys(epQualityObj).length === 0
+              ? langEntry
+              : (currentEp.videoUrl || content.videoUrl || ''),
             playerQualityLinks,
             activeQuality
           );
@@ -1109,12 +1181,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           const targetLang = (activeLanguage && content.videoSources[activeLanguage]) ? activeLanguage : Object.keys(content.videoSources)[0];
           const langEntry = targetLang ? content.videoSources[targetLang] : undefined;
           if (langEntry && typeof langEntry === 'object') {
-            playerQualityLinks = { ...epQualityObj, ...langEntry };
+            playerQualityLinks = { ...langEntry, ...epQualityObj };
           } else {
             playerQualityLinks = { ...epQualityObj };
           }
           const smartInit = SmartStreamService.selectSourceUrlForQuality(
-            typeof langEntry === 'string' ? langEntry : (currentEp.videoUrl || content.videoUrl || ''),
+            typeof langEntry === 'string' && Object.keys(epQualityObj).length === 0
+              ? langEntry
+              : (currentEp.videoUrl || content.videoUrl || ''),
             playerQualityLinks,
             activeQuality
           );
@@ -1143,12 +1217,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           const targetLang = (activeLanguage && extraPartObj.videoSources[activeLanguage]) ? activeLanguage : Object.keys(extraPartObj.videoSources)[0];
           const langEntry = targetLang ? extraPartObj.videoSources[targetLang] : undefined;
           if (langEntry && typeof langEntry === 'object') {
-            playerQualityLinks = { ...partQualityObj, ...langEntry };
+            playerQualityLinks = { ...langEntry, ...partQualityObj };
           } else {
             playerQualityLinks = { ...partQualityObj };
           }
           const smartPart = SmartStreamService.selectSourceUrlForQuality(
-            typeof langEntry === 'string' ? langEntry : (extraPartObj.videoUrl || ''),
+            typeof langEntry === 'string' && Object.keys(partQualityObj).length === 0
+              ? langEntry
+              : (extraPartObj.videoUrl || ''),
             playerQualityLinks,
             activeQuality
           );
@@ -1245,12 +1321,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         const targetLang = (activeLanguage && activeMoviePart.videoSources[activeLanguage]) ? activeLanguage : Object.keys(activeMoviePart.videoSources)[0];
         const langEntry = targetLang ? activeMoviePart.videoSources[targetLang] : undefined;
         if (langEntry && typeof langEntry === 'object') {
-          playerQualityLinks = { ...movieQualityObj, ...langEntry };
+          playerQualityLinks = { ...langEntry, ...movieQualityObj };
         } else {
           playerQualityLinks = { ...movieQualityObj };
         }
         const smartMovie = SmartStreamService.selectSourceUrlForQuality(
-          typeof langEntry === 'string' ? langEntry : (activeMoviePart.videoUrl || content.videoUrl || ''),
+          typeof langEntry === 'string' && Object.keys(movieQualityObj).length === 0
+            ? langEntry
+            : (activeMoviePart.videoUrl || content.videoUrl || ''),
           playerQualityLinks,
           activeQuality
         );
@@ -1273,12 +1351,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         const targetLang = (activeLanguage && content.videoSources[activeLanguage]) ? activeLanguage : Object.keys(content.videoSources)[0];
         const langEntry = targetLang ? content.videoSources[targetLang] : undefined;
         if (langEntry && typeof langEntry === 'object') {
-          playerQualityLinks = { ...movieQualityObj, ...langEntry };
+          playerQualityLinks = { ...langEntry, ...movieQualityObj };
         } else {
           playerQualityLinks = { ...movieQualityObj };
         }
         const smartMovie = SmartStreamService.selectSourceUrlForQuality(
-          typeof langEntry === 'string' ? langEntry : (content.videoUrl || ''),
+          typeof langEntry === 'string' && Object.keys(movieQualityObj).length === 0
+            ? langEntry
+            : (content.videoUrl || ''),
           playerQualityLinks,
           activeQuality
         );
@@ -1410,9 +1490,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }
 
-  // Reset discoveredAudioTracks when switching episode or server
+  // Reset discoveredAudioTracks and discoveredQualities when switching episode or server
   useEffect(() => {
     setDiscoveredAudioTracks([]);
+    setDiscoveredQualities([]);
   }, [content?.id, selectedSeasonIndex, selectedEpisodeIndex, selectedServer]);
 
   // Pre-warm both Server 1 and Server 2 streams in the background for instant 0ms playback & server switching
@@ -1425,15 +1506,29 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }, [primaryServerUrl, secondaryServerUrl]);
 
-  // Derive available languages dynamically for the current part (Merges live discovered HLS audio tracks + configured languages across BOTH servers)
+  const isQualityKeyString = (val?: string): boolean => {
+    if (!val || typeof val !== 'string') return false;
+    return /^(\d{3,4}p|4k|2k|8k|hd|fhd|uhd|sd|auto)$/i.test(val.trim());
+  };
+
+  // Derive available languages dynamically for the current part & active server (Strictly filters out any quality labels!)
   const availableLanguages = useMemo(() => {
     const merged: string[] = [];
     const addUnique = (lang?: string) => {
       if (!lang || typeof lang !== 'string') return;
       const clean = lang.trim();
-      if (!clean || clean.toLowerCase() === 'default' || clean.toLowerCase() === 'default audio') return;
-      if (!merged.some((m) => m.toLowerCase() === clean.toLowerCase())) {
-        merged.push(clean);
+      if (
+        !clean ||
+        clean.toLowerCase() === 'default' ||
+        clean.toLowerCase() === 'default audio' ||
+        isQualityKeyString(clean)
+      ) {
+        return;
+      }
+      const normalized = ClientHlsDownloader.normalizeLanguageLabel(clean, clean) || clean;
+      if (!normalized || isQualityKeyString(normalized)) return;
+      if (!merged.some((m) => m.toLowerCase() === normalized.toLowerCase())) {
+        merged.push(normalized);
       }
     };
 
@@ -1451,36 +1546,84 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
 
-    // 3. Explicit multi-language videoSources (Check episode, movie part, and content level so Server 2 NEVER loses the Audio Selector box!)
-    if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
-      Object.keys(playerVideoSources).forEach(addUnique);
-    }
-    if (currentEpisode?.videoSources && typeof currentEpisode.videoSources === 'object') {
-      Object.keys(currentEpisode.videoSources).forEach(addUnique);
-    }
-    if (activeMoviePart && typeof activeMoviePart === 'object' && activeMoviePart.videoSources && typeof activeMoviePart.videoSources === 'object') {
-      Object.keys(activeMoviePart.videoSources).forEach(addUnique);
-    }
-    if (content.videoSources && typeof content.videoSources === 'object') {
-      Object.keys(content.videoSources).forEach(addUnique);
+    // 3. Only include Server 1 videoSources when on Server 1 (or if Server 2 hasn't reported live HLS audio tracks yet)
+    if (selectedServer === 'server1' || merged.length === 0) {
+      if (playerVideoSources && typeof playerVideoSources === 'object' && Object.keys(playerVideoSources).length > 0) {
+        Object.keys(playerVideoSources).forEach(addUnique);
+      }
+      if (currentEpisode?.videoSources && typeof currentEpisode.videoSources === 'object') {
+        Object.keys(currentEpisode.videoSources).forEach(addUnique);
+      }
+      if (activeMoviePart && typeof activeMoviePart === 'object' && activeMoviePart.videoSources && typeof activeMoviePart.videoSources === 'object') {
+        Object.keys(activeMoviePart.videoSources).forEach(addUnique);
+      }
+      if (content.videoSources && typeof content.videoSources === 'object') {
+        Object.keys(content.videoSources).forEach(addUnique);
+      }
     }
 
     // 4. Episode / Movie / Content configured languages
-    const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks || (currentEpisode as any)?.audioLanguages;
-    if (Array.isArray(partLangs) && partLangs.length > 0) {
-      partLangs.forEach((l: any) => addUnique(typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)));
-    }
-    if (content.availableLanguages && content.availableLanguages.length > 0) {
-      content.availableLanguages.forEach(addUnique);
-    }
-    if (content.languages && content.languages.length > 0) {
-      content.languages.forEach(addUnique);
-    }
-    if ((content as any)?.audioLanguages && (content as any).audioLanguages.length > 0) {
-      (content as any).audioLanguages.forEach(addUnique);
+    if (merged.length === 0 || selectedServer === 'server1') {
+      const partLangs = (activeMoviePart as any)?.languages || (activeMoviePart as any)?.audioTracks || (currentEpisode as any)?.languages || (currentEpisode as any)?.audioTracks || (currentEpisode as any)?.audioLanguages;
+      if (Array.isArray(partLangs) && partLangs.length > 0) {
+        partLangs.forEach((l: any) => addUnique(typeof l === 'string' ? l : (l?.name || l?.label || l?.lang)));
+      }
+      if (content.availableLanguages && content.availableLanguages.length > 0) {
+        content.availableLanguages.forEach(addUnique);
+      }
+      if (content.languages && content.languages.length > 0) {
+        content.languages.forEach(addUnique);
+      }
+      if ((content as any)?.audioLanguages && (content as any).audioLanguages.length > 0) {
+        (content as any).audioLanguages.forEach(addUnique);
+      }
     }
     return merged;
   }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.videoSources, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
+
+  // Derive available qualities strictly for the active server (Server 1 vs Server 2), never mixing language names into qualities!
+  const availableDetailQualities = useMemo(() => {
+    const qSet = new Set<string>();
+    const addQual = (q?: string) => {
+      if (!q || typeof q !== 'string') return;
+      const clean = q.trim();
+      if (!clean || clean.toLowerCase() === 'auto' || clean.toLowerCase() === 'default') return;
+      if (isQualityKeyString(clean)) {
+        qSet.add(clean);
+      }
+    };
+
+    // 1. Explicit per-quality links for the active server (playerQualityLinks is already resolved for selectedServer!)
+    if (playerQualityLinks && typeof playerQualityLinks === 'object') {
+      Object.entries(playerQualityLinks).forEach(([k, v]) => {
+        if (v && typeof v === 'string' && v.trim().length > 0) {
+          addQual(k);
+        }
+      });
+    }
+
+    // 2. Live discovered HLS qualities from the active server's stream
+    if (discoveredQualities.length > 0) {
+      discoveredQualities.forEach(addQual);
+    }
+
+    // 3. Cached stream metadata for the active server
+    const activeTargetUrl = selectedServer === 'server2' && secondaryServerUrl ? secondaryServerUrl : primaryServerUrl;
+    if (activeTargetUrl) {
+      const cachedMeta = SmartStreamService.getCachedStreamMeta(activeTargetUrl);
+      if (cachedMeta && Array.isArray((cachedMeta as any).qualities)) {
+        (cachedMeta as any).qualities.forEach(addQual);
+      }
+    }
+
+    // Standard fallback ladder for HLS streams if master manifest is still probing
+    if (qSet.size === 0) {
+      ['1080p', '720p', '480p', '360p'].forEach((q) => qSet.add(q));
+    }
+
+    const sorted = Array.from(qSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
+    return ['auto', ...sorted];
+  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -2198,8 +2341,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
           return (
             <InlinePlayer
-              key={`${content.id}-${currentPartKey}-${selectedServer}`}
-              streamKey={`${content.id}-${currentPartKey}-${selectedServer}`}
+              key={`${content.id}-${currentPartKey}`}
+              streamKey={`${content.id}-${currentPartKey}`}
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}
               videoSources={playerVideoSources}
@@ -2218,13 +2361,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               activeQuality={activeQuality}
               onLanguageChange={(lang) => {
                 setActiveLanguage(lang);
+                try {
+                  localStorage.setItem('maxplay_preferred_lang', lang);
+                } catch {}
                 saveProgressNow(playbackPosition, false, true);
               }}
               onQualityChange={(qual) => {
                 setActiveQuality(qual);
+                try {
+                  localStorage.setItem('maxplay_preferred_quality', qual);
+                  localStorage.setItem('maxplay_video_quality', qual);
+                } catch {}
                 saveProgressNow(playbackPosition, false, true);
               }}
               onDiscoveredAudioTracks={setDiscoveredAudioTracks}
+              onDiscoveredQualities={setDiscoveredQualities}
               onProgress={handleProgress}
               onDuration={handleDurationUpdate}
               onPause={(time, totalDuration) => {
@@ -2536,6 +2687,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       setIsSeasonModalOpen(false);
+                      setIsQualityModalOpen(false);
                       setIsLanguageModalOpen(prev => {
                         const next = !prev;
                         if (next) {
@@ -2551,7 +2703,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <Volume2 className="w-3 h-3 text-[#06b6d4]" />
                     </div>
                     <span className="font-mono text-cyan-300 font-extrabold tracking-wide">
-                      {activeLanguage || 'Audio'}
+                      {activeLanguage || availableLanguages[0] || 'Audio'}
                     </span>
                     <ChevronDown className="w-3.5 h-3.5 text-cyan-400/60 group-hover:text-cyan-300 transition-transform group-hover:translate-y-0.5" />
                   </button>
@@ -2564,10 +2716,61 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     type="language"
                     contentTitle={content.title}
                     languages={availableLanguages}
-                    activeLanguage={activeLanguage}
+                    activeLanguage={activeLanguage || availableLanguages[0] || ''}
                     onSelectLanguage={(newLang) => {
                       saveProgressNow(playbackPosition, false, true);
                       setActiveLanguage(newLang);
+                      try {
+                        localStorage.setItem('maxplay_preferred_lang', newLang);
+                      } catch {}
+                    }}
+                  />
+
+                  {/* Quality Selector Trigger Button (Solo Leveling HUD) */}
+                  <button
+                    ref={qualityTriggerRef}
+                    data-selector-trigger="quality"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsLanguageModalOpen(false);
+                      setIsSeasonModalOpen(false);
+                      setIsQualityModalOpen(prev => {
+                        const next = !prev;
+                        if (next) {
+                          adManager.handleSelectorClick(!!user?.isPremium);
+                        }
+                        return next;
+                      });
+                    }}
+                    className="relative inline-flex items-center gap-2 bg-[#0d1f1c] hover:bg-[#132d28] active:scale-95 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_12px_rgba(16,185,129,0.12)] transition-all cursor-pointer group"
+                    title="Change Video Quality"
+                  >
+                    <div className="w-4 h-4 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:bg-emerald-500/30 transition-colors">
+                      <Sparkles className="w-3 h-3 text-[#10b981]" />
+                    </div>
+                    <span className="font-mono text-emerald-300 font-extrabold tracking-wide uppercase">
+                      {activeQuality === 'auto' ? 'Auto' : activeQuality}
+                    </span>
+                    <ChevronDown className="w-3.5 h-3.5 text-emerald-400/60 group-hover:text-emerald-300 transition-transform group-hover:translate-y-0.5" />
+                  </button>
+
+                  {/* Quality Dropdown */}
+                  <SoloLevelingSelectorModal
+                    isOpen={isQualityModalOpen}
+                    onClose={() => setIsQualityModalOpen(false)}
+                    triggerRef={qualityTriggerRef}
+                    type="quality"
+                    contentTitle={content.title}
+                    qualities={availableDetailQualities}
+                    activeQuality={activeQuality}
+                    onSelectQuality={(newQual) => {
+                      saveProgressNow(playbackPosition, false, true);
+                      setActiveQuality(newQual);
+                      try {
+                        localStorage.setItem('maxplay_preferred_quality', newQual);
+                        localStorage.setItem('maxplay_video_quality', newQual);
+                      } catch {}
                     }}
                   />
 
@@ -2581,6 +2784,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsLanguageModalOpen(false);
+                          setIsQualityModalOpen(false);
                           setIsSeasonModalOpen(prev => {
                             const next = !prev;
                             if (next) {
@@ -3308,7 +3512,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedServer('server1');
+                      handleSelectServer('server1');
                       setIsServerModalOpen(false);
                       setToastMessage('Switched to Server 1');
                       setTimeout(() => setToastMessage(null), 2500);
@@ -3378,7 +3582,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedServer('server2');
+                      handleSelectServer('server2');
                       setIsServerModalOpen(false);
                       setToastMessage(
                         hasSecondary || isPrimaryAlreadyBackupCompatible

@@ -30,7 +30,7 @@ interface SoloLevelingSelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
   triggerRef?: React.RefObject<HTMLElement | null>;
-  type: 'language' | 'season';
+  type: 'language' | 'season' | 'quality';
   // Language props
   languages?: string[];
   activeLanguage?: string;
@@ -39,6 +39,10 @@ interface SoloLevelingSelectorModalProps {
   seasons?: SeasonOption[];
   selectedSeasonIndex?: number;
   onSelectSeason?: (seasonIndex: number) => void;
+  // Quality props
+  qualities?: string[];
+  activeQuality?: string;
+  onSelectQuality?: (qual: string) => void;
   // Context
   contentTitle?: string;
 }
@@ -54,6 +58,9 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
   seasons = [],
   selectedSeasonIndex = 0,
   onSelectSeason,
+  qualities = [],
+  activeQuality = 'auto',
+  onSelectQuality,
   contentTitle = 'Content'
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
@@ -120,6 +127,26 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
     };
   };
 
+  const getQualityMeta = (q: string) => {
+    const clean = q.toLowerCase().trim();
+    if (clean === 'auto') {
+      return { name: 'Auto (Smart)', badge: 'ADAPTIVE' };
+    }
+    if (clean.includes('1080')) {
+      return { name: '1080p Full HD', badge: 'ULTRA HD' };
+    }
+    if (clean.includes('720')) {
+      return { name: '720p HD Ready', badge: 'BALANCED' };
+    }
+    if (clean.includes('480')) {
+      return { name: '480p Standard', badge: 'SMOOTH' };
+    }
+    if (clean.includes('360')) {
+      return { name: '360p Data Saver', badge: 'FAST LOAD' };
+    }
+    return { name: q.toUpperCase(), badge: 'STREAM' };
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -156,6 +183,8 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                 <div className="w-6 h-6 rounded-lg bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center shadow-[0_0_8px_rgba(6,182,212,0.4)] text-cyan-300 shrink-0">
                   {type === 'language' ? (
                     <Volume2 className="w-3 h-3" />
+                  ) : type === 'quality' ? (
+                    <Sparkles className="w-3 h-3" />
                   ) : (
                     <Layers className="w-3 h-3" />
                   )}
@@ -168,7 +197,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                     </span>
                   </div>
                   <h3 className="text-xs font-black tracking-wider text-white uppercase truncate drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
-                    {type === 'language' ? 'AUDIO STREAM' : 'SELECT DUNGEON'}
+                    {type === 'language' ? 'AUDIO STREAM' : type === 'quality' ? 'VIDEO QUALITY' : 'SELECT DUNGEON'}
                   </h3>
                 </div>
               </div>
@@ -193,7 +222,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                 // Language Options List
                 languages.map((lang, index) => {
                   const meta = getLanguageMeta(lang);
-                  const isSelected = activeLanguage === lang;
+                  const isSelected = activeLanguage.toLowerCase() === lang.toLowerCase();
 
                   return (
                     <motion.div
@@ -249,6 +278,71 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                           </div>
                         ) : (
                           <div className="text-[9px] font-mono text-cyan-400/50 group-hover:text-cyan-300 px-1.5 py-0.5 rounded border border-transparent group-hover:border-cyan-500/40 transition-colors">
+                            [ SELECT ]
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : type === 'quality' ? (
+                // Quality Options List
+                qualities.map((q, index) => {
+                  const meta = getQualityMeta(q);
+                  const isSelected = (activeQuality || 'auto').toLowerCase() === q.toLowerCase();
+
+                  return (
+                    <motion.div
+                      key={q}
+                      whileHover={{ scale: 1.01 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        onSelectQuality?.(q);
+                        onClose();
+                      }}
+                      className={`relative group rounded-lg p-2 cursor-pointer transition-all duration-200 border flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-emerald-950/90 via-[#08241d] to-cyan-950/80 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.35)]'
+                          : 'bg-[#081226]/60 hover:bg-[#0c2420]/80 border-emerald-500/20 hover:border-emerald-400/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div
+                          className={`w-6 h-6 rounded flex items-center justify-center font-mono text-[9px] font-black shrink-0 transition-all ${
+                            isSelected
+                              ? 'bg-emerald-400 text-black shadow-[0_0_8px_#34d399]'
+                              : 'bg-emerald-950/70 text-emerald-400 border border-emerald-500/40 group-hover:border-emerald-300'
+                          }`}
+                        >
+                          {q.toLowerCase() === 'auto' ? 'AI' : `0${index}`}
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-[11px] sm:text-xs text-white tracking-wide truncate">
+                              {meta.name}
+                            </span>
+                            <span
+                              className={`text-[7px] font-mono px-1 py-0.5 rounded font-black tracking-wider ${
+                                isSelected
+                                  ? 'bg-emerald-400/25 text-emerald-200 border border-emerald-400/50 shadow-[0_0_4px_rgba(16,185,129,0.3)]'
+                                  : 'bg-white/5 text-white/50 border border-white/10'
+                              }`}
+                            >
+                              {meta.badge}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 ml-2">
+                        {isSelected ? (
+                          <div className="flex items-center gap-1 text-[9px] font-mono font-black text-emerald-300 bg-emerald-500/25 px-1.5 py-0.5 rounded border border-emerald-400/70 shadow-[0_0_6px_rgba(16,185,129,0.4)]">
+                            <Check className="w-2.5 h-2.5 text-emerald-300 stroke-[3]" />
+                            <span>ACTIVE</span>
+                          </div>
+                        ) : (
+                          <div className="text-[9px] font-mono text-emerald-400/50 group-hover:text-emerald-300 px-1.5 py-0.5 rounded border border-transparent group-hover:border-emerald-500/40 transition-colors">
                             [ SELECT ]
                           </div>
                         )}
