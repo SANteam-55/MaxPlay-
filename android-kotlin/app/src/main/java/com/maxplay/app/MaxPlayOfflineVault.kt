@@ -573,4 +573,515 @@ object MaxPlayOfflineVault {
         }
         return null
     }
+
+    /**
+     * Scans the user's Android device storage via MediaStore.Video.Media for all video files
+     * so they can be listed automatically in Downloads > Local files and played directly in MaxPlay.
+     */
+    fun scanDeviceLocalVideos(context: Context): JSONObject {
+        val out = JSONObject()
+        val arr = JSONArray()
+        try {
+            val projection = arrayOf(
+                android.provider.MediaStore.Video.Media._ID,
+                android.provider.MediaStore.Video.Media.DISPLAY_NAME,
+                android.provider.MediaStore.Video.Media.TITLE,
+                android.provider.MediaStore.Video.Media.SIZE,
+                android.provider.MediaStore.Video.Media.DURATION,
+                android.provider.MediaStore.Video.Media.WIDTH,
+                android.provider.MediaStore.Video.Media.HEIGHT,
+                android.provider.MediaStore.Video.Media.MIME_TYPE,
+                android.provider.MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                android.provider.MediaStore.Video.Media.DATE_MODIFIED
+            )
+
+            val sortOrder = "${android.provider.MediaStore.Video.Media.DATE_MODIFIED} DESC"
+            val cursor = context.contentResolver.query(
+                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                sortOrder
+            )
+
+            cursor?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media._ID)
+                val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
+                val titleCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.TITLE)
+                val sizeCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.SIZE)
+                val durCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DURATION)
+                val wCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.WIDTH)
+                val hCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.HEIGHT)
+                val mimeCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.MIME_TYPE)
+                val folderCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                val dateCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DATE_MODIFIED)
+
+                var count = 0
+                while (c.moveToNext() && count < 200) {
+                    val id = c.getLong(idCol)
+                    val sizeBytes = c.getLong(sizeCol)
+                    if (sizeBytes < 64 * 1024L) continue // Ignore tiny/corrupt files
+
+                    val displayName = c.getString(nameCol) ?: ""
+                    val rawTitle = c.getString(titleCol) ?: displayName
+                    val cleanTitle = rawTitle.replace(Regex("\\.(mp4|mkv|webm|mov|avi|flv|3gp)$", RegexOption.IGNORE_CASE), "")
+                        .ifBlank { "Video $id" }
+
+                    val durMs = c.getLong(durCol)
+                    val width = c.getInt(wCol)
+                    val height = c.getInt(hCol)
+                    val mime = c.getString(mimeCol) ?: "video/mp4"
+                    val folder = c.getString(folderCol) ?: "Phone Storage"
+                    val dateMod = c.getLong(dateCol)
+
+                    val shortSide = kotlin.math.min(width, height).let { if (it > 0) it else height }
+                    val resLabel = when {
+                        shortSide >= 2000 || width >= 3800 -> "4K"
+                        shortSide >= 1000 || height >= 1000 -> "1080p"
+                        shortSide >= 700 || height >= 700 -> "720p"
+                        shortSide >= 450 || height >= 450 -> "480p"
+                        shortSide > 0 -> "${shortSide}p"
+                        else -> "HD"
+                    }
+
+                    val sizeMb = String.format(java.util.Locale.US, "%.1f", sizeBytes / (1024.0 * 1024.0)).toDouble()
+
+                    val obj = JSONObject().apply {
+                        put("id", id.toString())
+                        put("title", cleanTitle)
+                        put("folderName", folder)
+                        put("sizeMb", sizeMb)
+                        put("durationSec", (durMs / 1000L).toInt())
+                        put("resolution", resLabel)
+                        put("mimeType", mime)
+                        put("dateModified", dateMod)
+                        put("playbackUrl", "https://maxplay.local/device-video/$id")
+                    }
+                    arr.put(obj)
+                    count++
+                }
+            }
+            out.put("ok", true)
+            out.put("videos", arr)
+        } catch (e: Exception) {
+            out.put("ok", false)
+            out.put("videos", arr)
+            out.put("error", e.message ?: "Scan failed")
+        }
+        return out
+    }
+
+    /**
+     * Streams any local video from Android MediaStore (`https://maxplay.local/device-video/{id}`)
+     * with full HTTP Range seeking support so users can scrub anywhere in 0ms without copying the file into RAM.
+     */
+    fun interceptDeviceVideoRequest(
+        context: Context,
+        url: String,
+        rangeHeader: String?
+    ): WebResourceResponse? {
+        return try {
+            val marker = "/device-video/"
+            val idx = url.indexOf(marker)
+            if (idx == -1) return null
+
+            val idStr = url.substring(idx + marker.length).substringBefore("?").substringBefore("/").trim()
+            val videoId = idStr.toLongOrNull() ?: return null
+
+            val contentUri = android.content.ContentUris.withAppendedId(
+                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                videoId
+            )
+
+            val mimeType = context.contentResolver.getType(contentUri) ?: "video/mp4"
+            val afd = context.contentResolver.openAssetFileDescriptor(contentUri, "r") ?: return null
+            val totalLength = afd.length
+
+            val baseHeaders = mutableMapOf(
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers" to "*",
+                "Access-Control-Expose-Headers" to "Content-Length, Content-Range, Accept-Ranges",
+                "Accept-Ranges" to "bytes"
+            )
+
+            if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=") && totalLength > 0) {
+                val rangeSpec = rangeHeader.removePrefix("bytes=").substringBefore(",")
+                val parts = rangeSpec.split("-")
+                val start = parts.getOrNull(0)?.trim()?.toLongOrNull() ?: 0L
+                val end = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.toLongOrNull()
+                    ?: (totalLength - 1L)
+                val clampedStart = start.coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
+                val clampedEnd = end.coerceIn(clampedStart, (totalLength - 1L).coerceAtLeast(clampedStart))
+                val contentLength = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
+
+                val fis = afd.createInputStream()
+                if (clampedStart > 0L) {
+                    var skipped = 0L
+                    while (skipped < clampedStart) {
+                        val s = fis.skip(clampedStart - skipped)
+                        if (s <= 0L) break
+                        skipped += s
+                    }
+                }
+
+                baseHeaders["Content-Range"] = "bytes $clampedStart-$clampedEnd/$totalLength"
+                baseHeaders["Content-Length"] = contentLength.toString()
+
+                return WebResourceResponse(
+                    mimeType,
+                    null,
+                    206,
+                    "Partial Content",
+                    baseHeaders,
+                    fis
+                )
+            } else {
+                if (totalLength > 0) {
+                    baseHeaders["Content-Length"] = totalLength.toString()
+                }
+                return WebResourceResponse(
+                    mimeType,
+                    null,
+                    200,
+                    "OK",
+                    baseHeaders,
+                    afd.createInputStream()
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // =========================================================================
+    // DIRECT APP-TO-APP P2P TRANSFER ENGINE (MaxPlay-to-MaxPlay Direct Stream)
+    // =========================================================================
+    @Volatile
+    private var p2pServerSocket: java.net.ServerSocket? = null
+    @Volatile
+    private var p2pActiveCode: String = ""
+    @Volatile
+    private var p2pActiveStorageKey: String = ""
+    @Volatile
+    private var p2pActiveMetadataJson: String = "{}"
+
+    private fun getLocalLanIpAddress(context: Context): String {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            var candidateIp = ""
+            while (interfaces.hasMoreElements()) {
+                val intf = interfaces.nextElement()
+                if (!intf.isUp || intf.isLoopback) continue
+                val name = intf.name.lowercase()
+                val addrs = intf.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                        val ip = addr.hostAddress ?: continue
+                        if (name.contains("wlan") || name.contains("ap") || name.contains("swlan")) {
+                            return ip
+                        }
+                        if (candidateIp.isEmpty()) {
+                            candidateIp = ip
+                        }
+                    }
+                }
+            }
+            if (candidateIp.isNotEmpty()) return candidateIp
+        } catch (_: Exception) {}
+        return "127.0.0.1"
+    }
+
+    fun stopDirectTransferServer() {
+        try {
+            p2pActiveCode = ""
+            p2pServerSocket?.close()
+            p2pServerSocket = null
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Starts an embedded HTTP ServerSocket on port 48821 (or dynamic fallback port) so another
+     * MaxPlay app on the same Wi-Fi / Hotspot can stream segments directly App-to-App.
+     */
+    fun startDirectTransferServer(
+        context: Context,
+        storageKey: String,
+        transferCode: String,
+        metadataJson: String
+    ): JSONObject {
+        val out = JSONObject()
+        try {
+            stopDirectTransferServer()
+
+            val safe = sanitizeKey(storageKey)
+            val itemDir = File(getVaultRoot(context), safe)
+            if (!itemDir.exists()) {
+                out.put("ok", false)
+                out.put("error", "Offline item directory not found on disk")
+                return out
+            }
+
+            val segFiles = (itemDir.listFiles { _, name ->
+                name.startsWith("seg_") && name.endsWith(".ts")
+            } ?: emptyArray()).filter { it.length() > 512L }.sortedBy {
+                it.name.removePrefix("seg_").removeSuffix(".ts").toIntOrNull() ?: 0
+            }
+
+            if (segFiles.isEmpty()) {
+                out.put("ok", false)
+                out.put("error", "No video segments found for this download")
+                return out
+            }
+
+            val audFiles = (itemDir.listFiles { _, name ->
+                name.startsWith("aud_") && name.endsWith(".ts")
+            } ?: emptyArray()).filter { it.length() > 512L }.sortedBy {
+                it.name.removePrefix("aud_").removeSuffix(".ts").toIntOrNull() ?: 0
+            }
+
+            var totalBytes = 0L
+            segFiles.forEach { totalBytes += it.length() }
+            audFiles.forEach { totalBytes += it.length() }
+
+            val server = try {
+                java.net.ServerSocket(48821)
+            } catch (_: Exception) {
+                java.net.ServerSocket(0)
+            }
+
+            p2pServerSocket = server
+            p2pActiveCode = transferCode.trim()
+            p2pActiveStorageKey = storageKey
+            p2pActiveMetadataJson = metadataJson
+
+            val boundPort = server.localPort
+            val localIp = getLocalLanIpAddress(context)
+
+            InbuiltStreamScraper.backgroundExecutor.execute {
+                while (p2pServerSocket == server && !server.isClosed) {
+                    try {
+                        val client = server.accept()
+                        InbuiltStreamScraper.backgroundExecutor.execute {
+                            handleP2pClientSocket(context, client, segFiles, audFiles, totalBytes)
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+
+            out.put("ok", true)
+            out.put("ip", localIp)
+            out.put("port", boundPort)
+            out.put("totalSegments", segFiles.size)
+            out.put("totalAudioSegments", audFiles.size)
+            out.put("totalBytes", totalBytes)
+        } catch (e: Exception) {
+            out.put("ok", false)
+            out.put("error", e.message ?: "Failed to start transfer server")
+        }
+        return out
+    }
+
+    private fun handleP2pClientSocket(
+        context: Context,
+        socket: java.net.Socket,
+        segFiles: List<File>,
+        audFiles: List<File>,
+        totalBytes: Long
+    ) {
+        socket.use { s ->
+            try {
+                s.soTimeout = 15000
+                val reader = java.io.BufferedReader(java.io.InputStreamReader(s.getInputStream()))
+                val requestLine = reader.readLine() ?: return
+                val parts = requestLine.split(" ")
+                if (parts.size < 2) return
+                val reqPath = parts[1].substringBefore("?")
+
+                val outStream = s.getOutputStream()
+                val prefix = "/maxplay-p2p/$p2pActiveCode/"
+                if (!reqPath.startsWith(prefix)) {
+                    val errBytes = "Not Found".toByteArray()
+                    outStream.write("HTTP/1.1 404 Not Found\r\nContent-Length: ${errBytes.size}\r\n\r\n".toByteArray())
+                    outStream.write(errBytes)
+                    outStream.flush()
+                    return
+                }
+
+                val targetName = reqPath.removePrefix(prefix)
+                if (targetName == "manifest.json") {
+                    val metaObj = try { JSONObject(p2pActiveMetadataJson) } catch (_: Exception) { JSONObject() }
+                    val manifestJson = JSONObject().apply {
+                        put("ok", true)
+                        put("code", p2pActiveCode)
+                        put("storageKey", p2pActiveStorageKey)
+                        put("totalSegments", segFiles.size)
+                        put("totalAudioSegments", audFiles.size)
+                        put("totalDurationSec", segFiles.size * 4.0)
+                        put("totalBytes", totalBytes)
+                        put("metadata", metaObj)
+                    }.toString().toByteArray(Charsets.UTF_8)
+
+                    val headers = "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: application/json\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Content-Length: ${manifestJson.size}\r\n" +
+                        "Connection: close\r\n\r\n"
+                    outStream.write(headers.toByteArray(Charsets.UTF_8))
+                    outStream.write(manifestJson)
+                    outStream.flush()
+                    return
+                }
+
+                val safe = sanitizeKey(p2pActiveStorageKey)
+                val itemDir = File(getVaultRoot(context), safe)
+                val targetFile = if (targetName.startsWith("seg_") && targetName.endsWith(".ts")) {
+                    val idx = targetName.removePrefix("seg_").removeSuffix(".ts").toIntOrNull() ?: -1
+                    segFiles.getOrNull(idx) ?: File(itemDir, targetName)
+                } else if (targetName.startsWith("aud_") && targetName.endsWith(".ts")) {
+                    val idx = targetName.removePrefix("aud_").removeSuffix(".ts").toIntOrNull() ?: -1
+                    audFiles.getOrNull(idx) ?: File(itemDir, targetName)
+                } else {
+                    null
+                }
+
+                if (targetFile != null && targetFile.exists()) {
+                    val headers = "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: video/mp2t\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Content-Length: ${targetFile.length()}\r\n" +
+                        "Connection: close\r\n\r\n"
+                    outStream.write(headers.toByteArray(Charsets.UTF_8))
+                    FileInputStream(targetFile).use { fis ->
+                        val buf = ByteArray(64 * 1024)
+                        var r: Int
+                        while (fis.read(buf).also { r = it } != -1) {
+                            outStream.write(buf, 0, r)
+                        }
+                    }
+                    outStream.flush()
+                } else {
+                    outStream.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                    outStream.flush()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Streams all segments directly from another MaxPlay device over LAN HTTP (`http://senderIp:senderPort/maxplay-p2p/{code}/...`)
+     * into this device's native offline vault (`targetStorageKey`).
+     */
+    fun receiveDirectTransferFromPeer(
+        context: Context,
+        senderIp: String,
+        senderPort: Int,
+        transferCode: String,
+        targetStorageKey: String,
+        onProgress: (Int, String) -> Unit
+    ): JSONObject {
+        val out = JSONObject()
+        try {
+            val baseUrl = "http://${senderIp.trim()}:$senderPort/maxplay-p2p/${transferCode.trim()}"
+            onProgress(5, "Connecting to sender MaxPlay app ($senderIp)...")
+
+            val manifestReq = Request.Builder().url("$baseUrl/manifest.json").build()
+            val manifestObj = downloadHttpClient.newCall(manifestReq).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    throw Exception("Could not connect to sender phone over Wi-Fi/Hotspot (HTTP ${resp.code})")
+                }
+                val str = resp.body?.string() ?: throw Exception("Empty manifest from sender")
+                JSONObject(str)
+            }
+
+            val totalSegs = manifestObj.optInt("totalSegments", 0)
+            val totalAudSegs = manifestObj.optInt("totalAudioSegments", 0)
+            val totalDur = manifestObj.optDouble("totalDurationSec", totalSegs * 4.0)
+            val metaObj = manifestObj.optJSONObject("metadata") ?: JSONObject()
+            val langLabel = metaObj.optString("language", "Default")
+
+            if (totalSegs <= 0) {
+                throw Exception("Sender has 0 segments for this item")
+            }
+
+            val itemDir = getItemDir(context, targetStorageKey)
+            var receivedBytes = 0L
+            val totalUnits = (totalSegs + totalAudSegs).coerceAtLeast(1)
+            var completedUnits = 0
+
+            for (i in 0 until totalSegs) {
+                val segUrl = "$baseUrl/seg_${i}.ts"
+                val segFile = File(itemDir, "seg_${i}.ts")
+                val req = Request.Builder().url(segUrl).build()
+                downloadHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw Exception("Segment $i transfer interrupted")
+                    val body = resp.body ?: throw Exception("Empty segment $i")
+                    FileOutputStream(segFile).use { fos ->
+                        body.byteStream().use { input ->
+                            val buf = ByteArray(64 * 1024)
+                            var r: Int
+                            while (input.read(buf).also { r = it } != -1) {
+                                fos.write(buf, 0, r)
+                                receivedBytes += r
+                            }
+                        }
+                    }
+                }
+                completedUnits++
+                val pct = (10 + ((completedUnits.toDouble() / totalUnits.toDouble()) * 85.0)).toInt().coerceIn(10, 95)
+                if (i % 3 == 0 || i == totalSegs - 1) {
+                    val mbNow = String.format(java.util.Locale.US, "%.1f", receivedBytes / (1024.0 * 1024.0))
+                    onProgress(pct, "Receiving directly from MaxPlay ($mbNow MB)...")
+                }
+            }
+
+            for (i in 0 until totalAudSegs) {
+                val audUrl = "$baseUrl/aud_${i}.ts"
+                val audFile = File(itemDir, "aud_${i}.ts")
+                val req = Request.Builder().url(audUrl).build()
+                downloadHttpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful && resp.body != null) {
+                        FileOutputStream(audFile).use { fos ->
+                            resp.body!!.byteStream().use { input ->
+                                val buf = ByteArray(64 * 1024)
+                                var r: Int
+                                while (input.read(buf).also { r = it } != -1) {
+                                    fos.write(buf, 0, r)
+                                    receivedBytes += r
+                                }
+                            }
+                        }
+                    }
+                }
+                completedUnits++
+                val pct = (10 + ((completedUnits.toDouble() / totalUnits.toDouble()) * 85.0)).toInt().coerceIn(10, 96)
+                if (i % 4 == 0 || i == totalAudSegs - 1) {
+                    val mbNow = String.format(java.util.Locale.US, "%.1f", receivedBytes / (1024.0 * 1024.0))
+                    onProgress(pct, "Receiving audio track ($mbNow MB)...")
+                }
+            }
+
+            saveDownloadManifest(
+                context = context,
+                storageKey = targetStorageKey,
+                totalSegments = totalSegs,
+                totalDurationSec = totalDur,
+                isSingleFile = totalSegs == 1,
+                totalAudioSegments = totalAudSegs,
+                languageLabel = langLabel
+            )
+
+            onProgress(100, "Transfer Complete!")
+            out.put("ok", true)
+            out.put("totalBytes", receivedBytes)
+            out.put("metadata", metaObj)
+        } catch (e: Exception) {
+            out.put("ok", false)
+            out.put("error", e.message ?: "Direct P2P transfer failed")
+        }
+        return out
+    }
 }

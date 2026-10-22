@@ -52,6 +52,11 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
   useEffect(() => {
     if (!currentItem) return;
     const imgUrl = currentItem.backdropUrl || currentItem.posterUrl || '';
+    const genreHint =
+      (Array.isArray(currentItem.genres) && currentItem.genres[0]) ||
+      currentItem.category ||
+      currentItem.title ||
+      '';
     let isMounted = true;
 
     // 1. Check if real extracted color is already cached:
@@ -62,8 +67,8 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
       return;
     }
 
-    // 2. Extract real color from image without emitting any dummy/flashing colors
-    extractAmbientPalette(imgUrl).then((pal) => {
+    // 2. Extract real color from image (with automatic proxy & vibrant fallback)
+    extractAmbientPalette(imgUrl, genreHint, currentItem.type).then((pal) => {
       if (isMounted) {
         setPalette(pal);
         onPaletteChangeRef.current?.(pal);
@@ -243,11 +248,15 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
             className="absolute inset-0 h-full w-full object-cover object-center transition-transform duration-1000 group-hover:scale-105"
           />
           
-          {/* Smooth Multi-Stop Bottom Cinema Gradient Fade: 100% natural, seamless merge with #0A0A0A */}
+          {/* Smooth Multi-Stop Bottom Cinema Gradient + Ambient Color Side-Effect Fade */}
           <div 
-            className="absolute inset-x-0 bottom-0 h-36 sm:h-44 pointer-events-none z-10"
+            className="absolute inset-x-0 bottom-0 h-44 sm:h-52 pointer-events-none z-10 transition-all duration-700"
             style={{
-              background: 'linear-gradient(to top, #0A0A0A 0%, rgba(10, 10, 10, 0.95) 18%, rgba(10, 10, 10, 0.70) 40%, rgba(10, 10, 10, 0.32) 65%, rgba(10, 10, 10, 0.08) 85%, transparent 100%)'
+              background: `
+                radial-gradient(ellipse 90% 80% at 15% 100%, rgba(${palette.topLeftRgb.join(',')}, 0.42) 0%, transparent 70%),
+                radial-gradient(ellipse 90% 80% at 85% 100%, rgba(${palette.topRightRgb.join(',')}, 0.42) 0%, transparent 70%),
+                linear-gradient(to top, #0A0A0A 0%, rgba(${palette.primaryRgb.join(',')}, 0.30) 24%, rgba(10, 10, 10, 0.62) 48%, rgba(10, 10, 10, 0.18) 75%, transparent 100%)
+              `
             }}
           />
 

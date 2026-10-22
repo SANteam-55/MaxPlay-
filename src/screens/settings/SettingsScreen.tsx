@@ -21,6 +21,7 @@ import { db } from '../../services/firebase';
 import { LegalDocScreen, LegalDocType } from './LegalDocScreen';
 import { MaxPlayLogo } from '../../components/common/MaxPlayLogo';
 import { NativeBanner } from '../../components/ads/NativeBanner';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface SettingsScreenProps {
   onBack: () => void;
@@ -39,8 +40,17 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     return localStorage.getItem('maxplay_family_mode') === 'true';
   });
   const [autoMiniplayer, setAutoMiniplayer] = useState(() => {
-    return localStorage.getItem('maxplay_auto_miniplayer') === 'true';
+    const saved = localStorage.getItem('maxplay_auto_miniplayer');
+    if (saved === null) {
+      localStorage.setItem('maxplay_auto_miniplayer', 'true');
+      return true;
+    }
+    return saved !== 'false';
   });
+
+  useEffect(() => {
+    NativeBridgeService.setAutoPipEnabled(autoMiniplayer);
+  }, [autoMiniplayer]);
 
   const [preferredLang, setPreferredLang] = useState(() => localStorage.getItem('maxplay_preferred_lang') || 'English');
   const [preferredQuality, setPreferredQuality] = useState(() => {
@@ -121,6 +131,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     const val = !autoMiniplayer;
     setAutoMiniplayer(val);
     localStorage.setItem('maxplay_auto_miniplayer', String(val));
+    NativeBridgeService.setAutoPipEnabled(val);
   };
 
   const handleSetLang = (lang: string) => {

@@ -129,22 +129,26 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
 
   const getQualityMeta = (q: string) => {
     const clean = q.toLowerCase().trim();
+    const serverMatch = q.match(/\[(S1|S2)\]/i);
+    const serverTag = serverMatch ? serverMatch[1].toUpperCase() : undefined;
+    const baseQ = q.replace(/\s*\[(S1|S2)\]/i, '').trim();
+
     if (clean === 'auto') {
-      return { name: 'Auto (Smart)', badge: 'ADAPTIVE' };
+      return { name: 'Auto (Smart)', badge: 'ADAPTIVE', serverTag: undefined, baseQ: 'auto' };
     }
     if (clean.includes('1080')) {
-      return { name: '1080p Full HD', badge: 'ULTRA HD' };
+      return { name: '1080p Full HD', badge: serverTag ? `SWITCH TO ${serverTag}` : 'ULTRA HD', serverTag, baseQ };
     }
     if (clean.includes('720')) {
-      return { name: '720p HD Ready', badge: 'BALANCED' };
+      return { name: '720p HD Ready', badge: serverTag ? `SWITCH TO ${serverTag}` : 'BALANCED', serverTag, baseQ };
     }
     if (clean.includes('480')) {
-      return { name: '480p Standard', badge: 'SMOOTH' };
+      return { name: '480p Standard', badge: serverTag ? `SWITCH TO ${serverTag}` : 'SMOOTH', serverTag, baseQ };
     }
     if (clean.includes('360')) {
-      return { name: '360p Data Saver', badge: 'FAST LOAD' };
+      return { name: '360p Data Saver', badge: serverTag ? `SWITCH TO ${serverTag}` : 'FAST LOAD', serverTag, baseQ };
     }
-    return { name: q.toUpperCase(), badge: 'STREAM' };
+    return { name: baseQ.toUpperCase(), badge: serverTag ? `SWITCH TO ${serverTag}` : 'STREAM', serverTag, baseQ };
   };
 
   return (
@@ -152,6 +156,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
       {isOpen && (
         <motion.div
           ref={modalRef}
+          onClick={(e) => e.stopPropagation()}
           initial={{ scale: 0.95, opacity: 0, y: -10 }}
           animate={{ 
             scale: 1, 
@@ -165,7 +170,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
             y: -5,
             transition: { duration: 0.15 }
           }}
-          className="absolute left-0 top-[calc(100%+8px)] z-50 w-[300px] sm:w-[360px] bg-[#030712]/95 text-white rounded-xl border border-cyan-400/50 shadow-[0_10px_35px_rgba(6,182,212,0.4),0_0_50px_rgba(147,51,234,0.15),inset_0_0_15px_rgba(6,182,212,0.15)] max-h-[60vh] flex flex-col overflow-hidden select-none backdrop-blur-md origin-top-left"
+          className="absolute left-0 top-[calc(100%+8px)] z-[100] w-[300px] sm:w-[360px] bg-[#030712]/95 text-white rounded-xl border border-cyan-400/50 shadow-[0_10px_35px_rgba(6,182,212,0.4),0_0_50px_rgba(147,51,234,0.15),inset_0_0_15px_rgba(6,182,212,0.15)] max-h-[60vh] flex flex-col overflow-hidden select-none backdrop-blur-md origin-top-left"
         >
             {/* Holographic Top & Bottom Laser Edge Accents */}
             <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-300 to-transparent shadow-[0_0_10px_#22d3ee]" />
@@ -289,7 +294,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                 // Quality Options List
                 qualities.map((q, index) => {
                   const meta = getQualityMeta(q);
-                  const isSelected = (activeQuality || 'auto').toLowerCase() === q.toLowerCase();
+                  const isSelected = !meta.serverTag && (activeQuality || 'auto').toLowerCase() === meta.baseQ.toLowerCase();
 
                   return (
                     <motion.div
@@ -303,6 +308,8 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                       className={`relative group rounded-lg p-2 cursor-pointer transition-all duration-200 border flex items-center justify-between ${
                         isSelected
                           ? 'bg-gradient-to-r from-emerald-950/90 via-[#08241d] to-cyan-950/80 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.35)]'
+                          : meta.serverTag
+                          ? 'bg-[#141026]/75 hover:bg-[#1e1738]/90 border-amber-500/35 hover:border-amber-400/70'
                           : 'bg-[#081226]/60 hover:bg-[#0c2420]/80 border-emerald-500/20 hover:border-emerald-400/50'
                       }`}
                     >
@@ -311,14 +318,21 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                           className={`w-6 h-6 rounded flex items-center justify-center font-mono text-[9px] font-black shrink-0 transition-all ${
                             isSelected
                               ? 'bg-emerald-400 text-black shadow-[0_0_8px_#34d399]'
+                              : meta.serverTag
+                              ? 'bg-amber-500/25 text-amber-300 border border-amber-400/60 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
                               : 'bg-emerald-950/70 text-emerald-400 border border-emerald-500/40 group-hover:border-emerald-300'
                           }`}
                         >
-                          {q.toLowerCase() === 'auto' ? 'AI' : `0${index}`}
+                          {meta.serverTag ? meta.serverTag : q.toLowerCase() === 'auto' ? 'AI' : `0${index}`}
                         </div>
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
+                            {meta.serverTag && (
+                              <span className="text-[9px] font-mono font-black px-1.5 py-0.5 rounded bg-amber-500/25 text-amber-300 border border-amber-400/50">
+                                {meta.serverTag}
+                              </span>
+                            )}
                             <span className="font-bold text-[11px] sm:text-xs text-white tracking-wide truncate">
                               {meta.name}
                             </span>
@@ -326,6 +340,8 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                               className={`text-[7px] font-mono px-1 py-0.5 rounded font-black tracking-wider ${
                                 isSelected
                                   ? 'bg-emerald-400/25 text-emerald-200 border border-emerald-400/50 shadow-[0_0_4px_rgba(16,185,129,0.3)]'
+                                  : meta.serverTag
+                                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                                   : 'bg-white/5 text-white/50 border border-white/10'
                               }`}
                             >
@@ -342,8 +358,12 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                             <span>ACTIVE</span>
                           </div>
                         ) : (
-                          <div className="text-[9px] font-mono text-emerald-400/50 group-hover:text-emerald-300 px-1.5 py-0.5 rounded border border-transparent group-hover:border-emerald-500/40 transition-colors">
-                            [ SELECT ]
+                          <div className={`text-[9px] font-mono px-1.5 py-0.5 rounded border border-transparent transition-colors ${
+                            meta.serverTag
+                              ? 'text-amber-300/80 group-hover:text-amber-200 group-hover:border-amber-500/40'
+                              : 'text-emerald-400/50 group-hover:text-emerald-300 group-hover:border-emerald-500/40'
+                          }`}>
+                            {meta.serverTag ? `[ ${meta.serverTag} ]` : '[ SELECT ]'}
                           </div>
                         )}
                       </div>

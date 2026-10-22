@@ -82,6 +82,32 @@ interface MaxPlayKotlinBridge {
   showNativeNotification?: (title: string, body: string, imageUrl?: string) => boolean;
   startVoiceRecognition?: () => boolean;
   exportAndShareMaxPlayFile?: (storageKey: string, fileName: string, metadataJson: string) => string;
+  setStatusBarColor?: (hexColor: string) => boolean;
+  setAutoPipEnabled?: (enabled: boolean) => boolean;
+  setVideoPlayingState?: (isPlaying: boolean) => boolean;
+  scanDeviceLocalVideos?: () => string;
+  requestVideoStoragePermission?: () => boolean;
+  startDirectTransferServer?: (storageKey: string, transferCode: string, metadataJson: string) => string;
+  stopDirectTransferServer?: () => boolean;
+  receiveDirectTransferFromPeer?: (
+    senderIp: string,
+    senderPort: number,
+    transferCode: string,
+    targetStorageKey: string,
+    callbackId: string
+  ) => void;
+}
+
+export interface DeviceLocalVideoItem {
+  id: string;
+  title: string;
+  folderName: string;
+  sizeMb: number;
+  durationSec: number;
+  resolution: string;
+  mimeType: string;
+  dateModified: number;
+  playbackUrl: string;
 }
 
 declare global {
@@ -93,6 +119,7 @@ declare global {
     __onMaxPlaySegmentComplete?: (callbackId: string, res: any) => void;
     __onMaxPlayPipModeChanged?: (isInPip: boolean) => void;
     __onMaxPlayVoiceResult?: (spokenText: string) => void;
+    __onMaxPlayTransferProgress?: (callbackId: string, pct: number, msg: string) => void;
     __handleMaxPlayHardwareBack?: () => string;
   }
 }
@@ -980,5 +1007,194 @@ export class NativeBridgeService {
       }
     } catch {}
     return null;
+  }
+
+  /**
+   * Sets the real Android phone top Status Bar color (where time, network, and battery indicators sit)
+   * and updates the browser `<meta name="theme-color">` tag so top ambient glow extends into the status bar.
+   */
+  public static setNativeStatusBarColor(hexColor: string): boolean {
+    try {
+      const cleanHex = hexColor && hexColor.startsWith('#') ? hexColor : '#0A0A0A';
+      if (typeof document !== 'undefined') {
+        let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.name = 'theme-color';
+          document.head.appendChild(meta);
+        }
+        if (meta.content !== cleanHex) {
+          meta.content = cleanHex;
+        }
+      }
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.setStatusBarColor === 'function') {
+        return Boolean(window.MaxPlayNative.setStatusBarColor(cleanHex));
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Enables or disables automatic Android Picture-in-Picture (PiP) when minimizing the app during video playback.
+   */
+  public static setAutoPipEnabled(enabled: boolean): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.setAutoPipEnabled === 'function') {
+        return Boolean(window.MaxPlayNative.setAutoPipEnabled(enabled));
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Notifies the Native Kotlin Activity whether a video is currently playing so `onUserLeaveHint`
+   * only triggers native PiP when a video is actively playing.
+   */
+  public static setVideoPlayingState(isPlaying: boolean): boolean {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.setVideoPlayingState === 'function') {
+        return Boolean(window.MaxPlayNative.setVideoPlayingState(isPlaying));
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Scans the user's phone storage for all local video files via Android MediaStore.Video.Media.
+   */
+  public static scanDeviceLocalVideos(requestPermissionIfEmpty = false): DeviceLocalVideoItem[] {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.scanDeviceLocalVideos === 'function') {
+        const raw = window.MaxPlayNative.scanDeviceLocalVideos();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.videos)) {
+            if (
+              parsed.videos.length === 0 &&
+              requestPermissionIfEmpty &&
+              typeof window.MaxPlayNative?.requestVideoStoragePermission === 'function'
+            ) {
+              window.MaxPlayNative.requestVideoStoragePermission();
+            }
+            return parsed.videos;
+          }
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  /**
+   * Requests Android READ_MEDIA_VIDEO / READ_EXTERNAL_STORAGE runtime permission.
+   */
+  public static requestVideoStoragePermission(): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.requestVideoStoragePermission === 'function'
+      ) {
+        return Boolean(window.MaxPlayNative.requestVideoStoragePermission());
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Starts a direct App-to-App HTTP Transfer Server on the sender phone (port 48821) for a specific storageKey.
+   */
+  public static startDirectTransferServerNative(
+    storageKey: string,
+    transferCode: string,
+    metadata: Record<string, any>
+  ): {
+    ok: boolean;
+    ip?: string;
+    port?: number;
+    totalSegments?: number;
+    totalAudioSegments?: number;
+    totalBytes?: number;
+    error?: string;
+  } | null {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.startDirectTransferServer === 'function'
+      ) {
+        const raw = window.MaxPlayNative.startDirectTransferServer(
+          storageKey,
+          transferCode,
+          JSON.stringify(metadata)
+        );
+        if (raw) {
+          return JSON.parse(raw);
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Stops the active direct App-to-App HTTP Transfer Server on the sender phone.
+   */
+  public static stopDirectTransferServerNative(): void {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.stopDirectTransferServer === 'function'
+      ) {
+        window.MaxPlayNative.stopDirectTransferServer();
+      }
+    } catch {}
+  }
+
+  /**
+   * Connects directly from the Receiver MaxPlay app to the Sender MaxPlay app over LAN HTTP
+   * and streams all offline segments directly into the Receiver's native disk vault.
+   */
+  public static receiveDirectTransferFromPeerNative(
+    senderIp: string,
+    senderPort: number,
+    transferCode: string,
+    targetStorageKey: string,
+    onProgress?: (pct: number, msg: string) => void
+  ): Promise<{ ok: boolean; totalBytes?: number; error?: string }> {
+    return new Promise((resolve) => {
+      if (
+        !this.isRunningInKotlinApp() ||
+        typeof window.MaxPlayNative?.receiveDirectTransferFromPeer !== 'function'
+      ) {
+        resolve({ ok: false, error: 'Native P2P transfer not available' });
+        return;
+      }
+
+      const callbackId = `p2p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      window.__onMaxPlayTransferProgress = (cbId: string, pct: number, msg: string) => {
+        if (cbId === callbackId && onProgress) {
+          onProgress(pct, msg);
+        }
+      };
+
+      window.__maxplaySegmentCallbacks = window.__maxplaySegmentCallbacks || {};
+      window.__maxplaySegmentCallbacks[callbackId] = (res: any) => {
+        if (res && res.ok) {
+          resolve({ ok: true, totalBytes: Number(res.totalBytes || 0) });
+        } else {
+          resolve({ ok: false, error: res?.error || 'Direct P2P stream failed' });
+        }
+      };
+
+      try {
+        window.MaxPlayNative.receiveDirectTransferFromPeer(
+          senderIp,
+          senderPort,
+          transferCode,
+          targetStorageKey,
+          callbackId
+        );
+      } catch (e: any) {
+        delete window.__maxplaySegmentCallbacks[callbackId];
+        resolve({ ok: false, error: e?.message || 'Bridge exception' });
+      }
+    });
   }
 }

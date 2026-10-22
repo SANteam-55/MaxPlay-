@@ -123,8 +123,11 @@ export const QualityDrawer: React.FC<QualityDrawerProps> = ({
                   <div className="my-1 border-t border-white/5" />
 
                   {specificQualities.map((q) => {
-                    const isActive = !isAutoMode && currentQuality.toLowerCase() === q.toLowerCase();
-                    const badge = getQualityBadge(q);
+                    const serverMatch = q.match(/\[(S1|S2)\]/i);
+                    const serverTag = serverMatch ? serverMatch[1].toUpperCase() : null;
+                    const baseQ = q.replace(/\s*\[(S1|S2)\]/i, '').trim();
+                    const isActive = !serverTag && !isAutoMode && currentQuality.toLowerCase() === baseQ.toLowerCase();
+                    const badge = getQualityBadge(baseQ);
 
                     return (
                       <button
@@ -136,16 +139,27 @@ export const QualityDrawer: React.FC<QualityDrawerProps> = ({
                         className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
                           isActive
                             ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-white shadow-md shadow-purple-500/10'
+                            : serverTag
+                            ? 'border-amber-500/25 bg-amber-500/5 text-white/90 hover:bg-amber-500/15 hover:border-amber-400/50'
                             : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-sm font-extrabold tracking-wide">{q.toUpperCase()}</span>
+                        <div className="flex items-center gap-2">
+                          {serverTag && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/50 shadow-sm">
+                              {serverTag}
+                            </span>
+                          )}
+                          <span className="text-sm font-extrabold tracking-wide">{baseQ.toUpperCase()}</span>
                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${badge.color}`}>
                             {badge.label}
                           </span>
                         </div>
-                        {isActive && <Check className="h-4 w-4 text-[#8B5CF6]" />}
+                        {isActive ? (
+                          <Check className="h-4 w-4 text-[#8B5CF6]" />
+                        ) : serverTag ? (
+                          <span className="text-[9px] font-bold text-amber-300/80">Switch {serverTag}</span>
+                        ) : null}
                       </button>
                     );
                   })}

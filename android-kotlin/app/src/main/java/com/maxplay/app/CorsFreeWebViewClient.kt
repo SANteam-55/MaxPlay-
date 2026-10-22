@@ -76,7 +76,8 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         val method = request.method?.uppercase() ?: "GET"
 
         // 0. Serve Local Offline Vault Segments & Playlists (https://maxplay.local/offline-vault/{key}/...)
-        if (host == "maxplay.local" && path.startsWith("/offline-vault/")) {
+        //    AND Scanned Phone Local Videos (https://maxplay.local/device-video/{id})
+        if (host == "maxplay.local") {
             if (method == "OPTIONS") {
                 return WebResourceResponse(
                     "text/plain",
@@ -87,9 +88,17 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     ByteArrayInputStream(ByteArray(0))
                 )
             }
-            val vaultResp = MaxPlayOfflineVault.interceptOfflineVaultRequest(context.applicationContext, reqUrl)
-            if (vaultResp != null) {
-                return vaultResp
+            if (path.startsWith("/offline-vault/")) {
+                val vaultResp = MaxPlayOfflineVault.interceptOfflineVaultRequest(context.applicationContext, reqUrl)
+                if (vaultResp != null) {
+                    return vaultResp
+                }
+            } else if (path.startsWith("/device-video/")) {
+                val rangeHeader = request.requestHeaders?.get("Range") ?: request.requestHeaders?.get("range")
+                val devResp = MaxPlayOfflineVault.interceptDeviceVideoRequest(context.applicationContext, reqUrl, rangeHeader)
+                if (devResp != null) {
+                    return devResp
+                }
             }
         }
 

@@ -18,7 +18,8 @@ import { NetworkGridRow } from '../../components/home/NetworkGridRow';
 import { getDefaultRowsForScreen } from '../../utils/screenRowDefaults';
 import { DEFAULT_NETWORK_PRESETS } from '../../utils/networkPresets';
 import { NetworkItem } from '../../types';
-import { AmbientColorPalette, getCachedPalette, NEUTRAL_AMBIENT_PALETTE } from '../../utils/colorExtractor';
+import { AmbientColorPalette, getCachedPalette, NEUTRAL_AMBIENT_PALETTE, rgbToStatusBarHex } from '../../utils/colorExtractor';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface HomeScreenProps {
   onSelectContent?: (content: ContentItem) => void;
@@ -246,39 +247,67 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   // Only activate banner color fade when data is loaded, hero banner exists, and page is not scrolled
   const hasBannerData = !loading && filteredHeroBanner.length > 0;
 
+  // Sync phone top Status Bar color (time, network, battery bar) with Hero Banner top glow color
+  useEffect(() => {
+    if (hasBannerData && !isScrolled) {
+      const topRgb = bannerPalette.topCenterRgb || bannerPalette.primaryRgb || [18, 18, 24];
+      const isNeutral = topRgb[0] === 18 && topRgb[1] === 18 && topRgb[2] === 24;
+      const statusHex = isNeutral ? '#0A0A0A' : rgbToStatusBarHex(topRgb, 0.62);
+      NativeBridgeService.setNativeStatusBarColor(statusHex);
+    } else {
+      NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
+    }
+    return () => {
+      NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
+    };
+  }, [hasBannerData, isScrolled, bannerPalette]);
+
   return (
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
       className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] pb-24 md:pb-8 text-left select-none scrollbar-none relative"
     >
-      {/* Dynamic OTT Atmospheric Ambient Glow: Flows from top (0px), wraps the search bar and hot tabs, and extends smoothly slightly BELOW the hot tabs (~180px) fading into the hero banner with zero hard lines */}
+      {/* Dynamic OTT Atmospheric Top Ambient Glow: Flows from the very top status bar edge (0px), wraps the search bar and hot tabs, and merges seamlessly into the hero banner */}
       <div 
-        className={`absolute top-0 left-0 right-0 h-[180px] pointer-events-none z-20 transition-opacity duration-700 ease-in-out ${
+        className={`absolute top-0 left-0 right-0 h-[230px] pointer-events-none z-20 transition-opacity duration-700 ease-in-out ${
           hasBannerData && !isScrolled ? 'opacity-100' : 'opacity-0'
         }`} 
         style={{
           background: `
-            radial-gradient(ellipse 120% 90% at 0% 0%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.70) 0%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.38) 45%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.12) 75%, 
+            radial-gradient(ellipse 130% 100% at 0% 0%, 
+              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.82) 0%, 
+              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.48) 48%, 
+              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.16) 78%, 
               transparent 100%),
-            radial-gradient(ellipse 120% 90% at 100% 0%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.70) 0%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.38) 45%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.12) 75%, 
-              transparent 100%),
-            linear-gradient(to bottom, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.50) 0%, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.25) 45%, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.06) 80%, 
+            radial-gradient(ellipse 130% 100% at 100% 0%, 
+              rgba(${bannerPalette.topRightRgb.join(',')}, 0.82) 0%, 
+              rgba(${bannerPalette.topRightRgb.join(',')}, 0.48) 48%, 
+              rgba(${bannerPalette.topRightRgb.join(',')}, 0.16) 78%, 
               transparent 100%),
             linear-gradient(to bottom, 
-              rgba(10, 10, 10, 0.75) 0%, 
-              rgba(10, 10, 10, 0.40) 50%, 
-              rgba(10, 10, 10, 0.12) 80%, 
+              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.72) 0%, 
+              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.36) 48%, 
+              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.10) 82%, 
+              transparent 100%),
+            linear-gradient(to bottom, 
+              rgba(10, 10, 10, 0.45) 0%, 
+              rgba(10, 10, 10, 0.25) 50%, 
               transparent 100%)
+          `
+        }}
+      />
+
+      {/* Deep Hero Banner Lower Side-Effect Ambient Halo: Extends the Hero Banner's color glow down below the banner into Categories & Top 10 */}
+      <div
+        className={`absolute top-[180px] left-0 right-0 h-[420px] pointer-events-none z-[1] transition-all duration-700 ease-in-out ${
+          hasBannerData ? 'opacity-100' : 'opacity-0'
+        }`}
+        style={{
+          background: `
+            radial-gradient(ellipse 110% 70% at 20% 35%, rgba(${bannerPalette.topLeftRgb.join(',')}, 0.34) 0%, transparent 75%),
+            radial-gradient(ellipse 110% 70% at 80% 35%, rgba(${bannerPalette.topRightRgb.join(',')}, 0.34) 0%, transparent 75%),
+            radial-gradient(ellipse 120% 80% at 50% 45%, rgba(${bannerPalette.primaryRgb.join(',')}, 0.28) 0%, rgba(${bannerPalette.primaryRgb.join(',')}, 0.10) 55%, transparent 100%)
           `
         }}
       />

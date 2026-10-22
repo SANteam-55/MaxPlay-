@@ -35,6 +35,10 @@ class MainActivity : AppCompatActivity() {
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var fileUploadCallback: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
     private val bgNotificationScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    @Volatile
+    var autoPipEnabled: Boolean = true
+    @Volatile
+    var isVideoCurrentlyPlaying: Boolean = false
 
     fun getScraperContainer(): ViewGroup = rootContainer
 
@@ -49,6 +53,11 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        try {
+            val prefs = getSharedPreferences("maxplay_native_prefs", MODE_PRIVATE)
+            autoPipEnabled = prefs.getBoolean("auto_pip", true)
+        } catch (_: Exception) {}
 
         // Keep screen on during streaming & downloads and use deep #0A0A0A status bar
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -321,6 +330,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Dynamically sets the Android top system Status Bar color (where time, network, and battery indicators sit)
+     * to match the Hero Banner's ambient glow color.
+     */
+    fun setStatusBarColorHex(hexColor: String) {
+        runOnUiThread {
+            try {
+                window.statusBarColor = Color.parseColor(hexColor)
+            } catch (_: Exception) {
+                window.statusBarColor = Color.parseColor("#0A0A0A")
+            }
+        }
+    }
+
+    fun setAutoPipPreference(enabled: Boolean) {
+        autoPipEnabled = enabled
+        try {
+            getSharedPreferences("maxplay_native_prefs", MODE_PRIVATE)
+                .edit()
+                .putBoolean("auto_pip", enabled)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    fun setVideoPlayingState(isPlaying: Boolean) {
+        isVideoCurrentlyPlaying = isPlaying
+    }
+
+    /**
+     * Automatically triggers Native Android Picture-in-Picture (PiP) when the user presses Home / minimizes the app
+     * while a video is actively playing and Auto-Miniplayer is enabled in Settings.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (autoPipEnabled && isVideoCurrentlyPlaying) {
+            enterNativePipMode()
+        }
+    }
+
+    /**
      * Enters native Android Picture-in-Picture (PiP) floating window mode (Android 8.0+).
      * Immediately notifies the React player so ONLY the video player fills the PiP window.
      */
@@ -388,6 +436,13 @@ class MainActivity : AppCompatActivity() {
                     if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         needed.add("android.permission.POST_NOTIFICATIONS")
                     }
+                    if (checkSelfPermission("android.permission.READ_MEDIA_VIDEO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        needed.add("android.permission.READ_MEDIA_VIDEO")
+                    }
+                } else {
+                    if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        needed.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
                 }
                 if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     needed.add(android.Manifest.permission.RECORD_AUDIO)
@@ -397,6 +452,47 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (_: Exception) {}
+    }
+
+    fun requestVideoStoragePermission(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val perm = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    "android.permission.READ_MEDIA_VIDEO"
+                } else {
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE
+                }
+                if (checkSelfPermission(perm) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    runOnUiThread {
+                        try {
+                            requestPermissions(arrayOf(perm), 1002)
+                        } catch (_: Exception) {}
+                    }
+                    return true
+                }
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1001 || requestCode == 1002) {
+            runOnUiThread {
+                try {
+                    webView.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('MAXPLAY_LOCAL_VIDEOS_PERMISSION_GRANTED'));",
+                        null
+                    )
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     /**
@@ -620,6 +716,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         try {
             bgNotificationScheduler.shutdownNow()
+            MaxPlayOfflineVault.stopDirectTransferServer()
         } catch (_: Exception) {}
         super.onDestroy()
     }

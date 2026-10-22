@@ -364,6 +364,105 @@ class MaxPlayNativeBridge(
         return MaxPlayOfflineVault.deleteOfflineItem(activity.applicationContext, storageKey)
     }
 
+    @JavascriptInterface
+    fun setStatusBarColor(hexColor: String): Boolean {
+        return try {
+            activity.setStatusBarColorHex(hexColor)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun setAutoPipEnabled(enabled: Boolean): Boolean {
+        return try {
+            activity.setAutoPipPreference(enabled)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun setVideoPlayingState(isPlaying: Boolean): Boolean {
+        return try {
+            activity.setVideoPlayingState(isPlaying)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun scanDeviceLocalVideos(): String {
+        return MaxPlayOfflineVault.scanDeviceLocalVideos(activity.applicationContext).toString()
+    }
+
+    @JavascriptInterface
+    fun requestVideoStoragePermission(): Boolean {
+        return activity.requestVideoStoragePermission()
+    }
+
+    @JavascriptInterface
+    fun startDirectTransferServer(
+        storageKey: String,
+        transferCode: String,
+        metadataJson: String
+    ): String {
+        return MaxPlayOfflineVault.startDirectTransferServer(
+            context = activity.applicationContext,
+            storageKey = storageKey,
+            transferCode = transferCode,
+            metadataJson = metadataJson
+        ).toString()
+    }
+
+    @JavascriptInterface
+    fun stopDirectTransferServer(): Boolean {
+        return try {
+            MaxPlayOfflineVault.stopDirectTransferServer()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun receiveDirectTransferFromPeer(
+        senderIp: String,
+        senderPort: Int,
+        transferCode: String,
+        targetStorageKey: String,
+        callbackId: String
+    ) {
+        val safeCallbackId = JSONObject.quote(callbackId)
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val res = MaxPlayOfflineVault.receiveDirectTransferFromPeer(
+                context = activity.applicationContext,
+                senderIp = senderIp,
+                senderPort = senderPort,
+                transferCode = transferCode,
+                targetStorageKey = targetStorageKey
+            ) { pct, msg ->
+                val safeMsg = JSONObject.quote(msg)
+                val progJs = "window.__onMaxPlayTransferProgress && window.__onMaxPlayTransferProgress($safeCallbackId, $pct, $safeMsg);"
+                activity.runOnUiThread {
+                    try {
+                        webView.evaluateJavascript(progJs, null)
+                    } catch (_: Exception) {}
+                }
+            }
+            val escapedJson = JSONObject.quote(res.toString())
+            val doneJs = "window.__onMaxPlaySegmentComplete && window.__onMaxPlaySegmentComplete($safeCallbackId, JSON.parse($escapedJson));"
+            activity.runOnUiThread {
+                try {
+                    webView.evaluateJavascript(doneJs, null)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     private fun parseHeadersJson(headersJson: String?): Map<String, String> {
         if (headersJson.isNullOrBlank()) return emptyMap()
         val map = mutableMapOf<String, String>()

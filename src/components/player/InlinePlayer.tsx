@@ -154,6 +154,7 @@ interface InlinePlayerProps {
   onGlobalSeek?: (targetTime: number) => void;
   skipMarkers?: any;
   isSmartHls?: boolean;
+  crossServerQualities?: string[];
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
   onDiscoveredQualities?: (qualities: string[]) => void;
 }
@@ -183,6 +184,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onGlobalSeek,
   skipMarkers,
   isSmartHls,
+  crossServerQualities = [],
   onDiscoveredAudioTracks,
   onDiscoveredQualities,
 }) => {
@@ -504,6 +506,30 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     };
   }, [showControls, isPlaying, activeMenu, isLocked, resetControlsTimeout]);
 
+  // Sync active video playing state with Native Android PiP Bridge and In-App Miniplayer state
+  useEffect(() => {
+    const autoPipEnabled = localStorage.getItem('maxplay_auto_miniplayer') !== 'false';
+    NativeBridgeService.setAutoPipEnabled(autoPipEnabled);
+    NativeBridgeService.setVideoPlayingState(Boolean(isPlaying && resolvedStreamUrl));
+  }, [isPlaying, resolvedStreamUrl]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__maxplayActivePlaybackState = {
+        streamUrl: resolvedStreamUrl,
+        currentTime: videoRef.current?.currentTime || currentTime || 0,
+        isPlaying: Boolean(isPlaying || (videoRef.current && !videoRef.current.paused)),
+        isIframe: Boolean(isIframe),
+      };
+    }
+  }, [resolvedStreamUrl, currentTime, isPlaying, isIframe]);
+
+  useEffect(() => {
+    return () => {
+      NativeBridgeService.setVideoPlayingState(false);
+    };
+  }, []);
+
   // Prevent default browser context menu (Back, Forward, Reload, Print, Share, etc.) during player interactions
   useEffect(() => {
     const handlePreventContextMenu = (e: Event) => {
@@ -605,14 +631,27 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
     const hls = hlsRef.current;
     if (hls && isHlsStreamRef.current && hlsAudioTracks.length > 0 && targetLang) {
-      const matchIdx = hlsAudioTracks.findIndex((t) =>
+      let matchIdx = hlsAudioTracks.findIndex((t) =>
         ClientHlsDownloader.matchesTargetLanguage(
           { name: (t as any).rawName || t.name, language: t.lang || '', friendly: t.name },
           targetLang
         )
       );
+      if (matchIdx === -1 && availableLanguages.length > 0) {
+        const orderIdx = availableLanguages.findIndex(
+          (l) => l.toLowerCase().trim() === targetLang.toLowerCase().trim()
+        );
+        if (orderIdx !== -1 && orderIdx < hlsAudioTracks.length) {
+          matchIdx = orderIdx;
+        }
+      }
       if (matchIdx !== -1 && hls.audioTrack !== matchIdx) {
         hls.audioTrack = matchIdx;
+        if (videoRef.current && videoRef.current.readyState >= 1 && videoRef.current.currentTime > 0.2) {
+          try {
+            videoRef.current.currentTime = videoRef.current.currentTime + 0.01;
+          } catch {}
+        }
       }
     }
   }, [activeLanguage, availableLanguages, hlsAudioTracks]);
@@ -749,13 +788,16 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       });
     }
 
-    if (combinedSet.size > 0) {
-      const sorted = Array.from(combinedSet).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
-      return ['auto', ...sorted];
+    if (combinedSet.size > 0 || (crossServerQualities && crossServerQualities.length > 0)) {
+      const sortedCurrent = Array.from(combinedSet).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+      const crossList = (crossServerQualities || []).filter(
+        (cq) => cq && /\[(S1|S2)\]/i.test(cq)
+      );
+      return ['auto', ...sortedCurrent, ...crossList];
     }
 
     return ['auto'];
-  }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities]);
+  }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities, crossServerQualities]);
 
   // Pick the optimal video URL based on active server qualityLinks, language, and quality
   const activeVideoUrl = useMemo(() => {

@@ -31,6 +31,14 @@ export const NEUTRAL_AMBIENT_PALETTE: AmbientColorPalette = {
 // In-memory cache for fast instant lookups
 const colorCache = new Map<string, AmbientColorPalette>();
 
+export function rgbToStatusBarHex(rgb: [number, number, number], intensity = 0.62): string {
+  const r = Math.max(10, Math.min(255, Math.round(rgb[0] * intensity)));
+  const g = Math.max(10, Math.min(255, Math.round(rgb[1] * intensity)));
+  const b = Math.max(10, Math.min(255, Math.round(rgb[2] * intensity)));
+  const toHex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
 /**
  * Retrieve cached palette from memory or localStorage for 0ms synchronous access
  */
@@ -38,12 +46,16 @@ export function getCachedPalette(imageUrl?: string): AmbientColorPalette | null 
   if (!imageUrl) return null;
   if (colorCache.has(imageUrl)) return colorCache.get(imageUrl)!;
   try {
-    // Generate safe short key
-    const key = 'mp_pal_' + imageUrl.slice(-60).replace(/[^a-zA-Z0-9]/g, '');
+    // Generate safe short key (v3 bypasses any old flat-black cached entries)
+    const key = 'mp_pal_v3_' + imageUrl.slice(-60).replace(/[^a-zA-Z0-9]/g, '');
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.topLeftRgb)) {
+      if (
+        parsed &&
+        Array.isArray(parsed.topLeftRgb) &&
+        !(parsed.topLeftRgb[0] === 18 && parsed.topLeftRgb[1] === 18 && parsed.topLeftRgb[2] === 24)
+      ) {
         colorCache.set(imageUrl, parsed);
         return parsed;
       }
@@ -141,19 +153,19 @@ const PRESET_PALETTES: Record<string, PresetCornerPalette> = {
   },
 };
 
-function boostSaturation(rgb: [number, number, number], minSat = 0.45): [number, number, number] {
+function boostSaturation(rgb: [number, number, number], minSat = 0.52): [number, number, number] {
   let [r, g, b] = rgb;
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const delta = max - min;
   if (delta === 0) {
     // Monochromatic/grey: give a subtle violet/cyan tint rather than flat grey
-    return [Math.max(r, 45), Math.max(g, 40), Math.max(b, 75)];
+    return [Math.max(r, 95), Math.max(g, 55), Math.max(b, 165)];
   }
 
   const l = (max + min) / 510;
   const s = l > 0.5 ? delta / (510 - max - min) : delta / (max + min);
-  const targetS = Math.min(1, Math.max(minSat, s * 1.3));
+  const targetS = Math.min(1, Math.max(minSat, s * 1.38));
 
   // RGB to HSL hue calculation
   let h = 0;
@@ -165,8 +177,8 @@ function boostSaturation(rgb: [number, number, number], minSat = 0.45): [number,
     h = ((r - g) / delta + 4) / 6;
   }
 
-  // Clamped lightness for ambient light readability
-  const targetL = Math.max(0.25, Math.min(0.70, l));
+  // Clamped lightness for rich ambient light visibility
+  const targetL = Math.max(0.32, Math.min(0.68, l));
 
   // HSL to RGB
   const hue2rgb = (p: number, q: number, t: number) => {
@@ -217,7 +229,7 @@ function extractRegionColor(
       const saturation = max === 0 ? 0 : (max - min) / max;
 
       // Ignore pure blacks and pure whites
-      if (brightness > 0.10 && brightness < 0.96 && saturation > 0.12) {
+      if (brightness > 0.08 && brightness < 0.96 && saturation > 0.10) {
         const vibrancy = saturation * Math.sqrt(brightness);
         if (vibrancy > maxVibrancy) {
           maxVibrancy = vibrancy;
@@ -233,24 +245,55 @@ function extractRegionColor(
     }
   }
 
-  if (maxVibrancy > 0.08) {
-    return boostSaturation([bestR, bestG, bestB], 0.50);
+  if (maxVibrancy > 0.06) {
+    return boostSaturation([bestR, bestG, bestB], 0.55);
   }
 
   if (validPixels > 0) {
     const avgR = Math.round(totalR / validPixels);
     const avgG = Math.round(totalG / validPixels);
     const avgB = Math.round(totalB / validPixels);
-    return boostSaturation([avgR, avgG, avgB], 0.40);
+    return boostSaturation([avgR, avgG, avgB], 0.48);
   }
 
   return defaultFallback;
 }
 
-export function getFallbackPalette(_genreOrTitle?: string, _type?: string): AmbientColorPalette {
-  // Always return a clean, non-intrusive neutral cinema ambient palette
-  // to strictly prevent color flashing, glitches, or discordant hue jumps on load
-  return NEUTRAL_AMBIENT_PALETTE;
+export function getFallbackPalette(genreOrTitle?: string, type?: string, seedUrl?: string): AmbientColorPalette {
+  const hint = `${genreOrTitle || ''} ${type || ''} ${seedUrl || ''}`.toLowerCase();
+  let presetKey = '';
+  if (hint.includes('action') || hint.includes('war') || hint.includes('fight')) presetKey = 'action';
+  else if (hint.includes('sci-fi') || hint.includes('scifi') || hint.includes('space') || hint.includes('cyber')) presetKey = 'scifi';
+  else if (hint.includes('horror') || hint.includes('dark') || hint.includes('evil')) presetKey = 'horror';
+  else if (hint.includes('romance') || hint.includes('love')) presetKey = 'romance';
+  else if (hint.includes('comedy') || hint.includes('family') || hint.includes('adventure')) presetKey = 'comedy';
+  else if (hint.includes('thriller') || hint.includes('crime') || hint.includes('mystery')) presetKey = 'thriller';
+  else if (hint.includes('fantasy') || hint.includes('magic')) presetKey = 'fantasy';
+  else if (hint.includes('anime')) presetKey = 'anime';
+  else if (hint.includes('drama')) presetKey = 'drama';
+
+  if (!presetKey) {
+    const keys = ['action', 'anime', 'fantasy', 'scifi', 'romance', 'comedy', 'drama', 'thriller'];
+    let hash = 0;
+    const str = seedUrl || genreOrTitle || 'maxplay';
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) & 0x7fffffff;
+    }
+    presetKey = keys[hash % keys.length];
+  }
+
+  const p = PRESET_PALETTES[presetKey] || PRESET_PALETTES.default;
+  return {
+    primary: `rgb(${p.primary.join(',')})`,
+    primaryRgb: p.primary,
+    secondary: `rgb(${p.secondary.join(',')})`,
+    secondaryRgb: p.secondary,
+    topLeftRgb: p.topLeft,
+    topRightRgb: p.topRight,
+    topCenterRgb: p.topCenter,
+    glowTop: `rgba(${p.primary.join(',')}, 0.90)`,
+    glowHalo: `rgba(${p.primary.join(',')}, 0.65)`,
+  };
 }
 
 export function extractAmbientPalette(
@@ -264,69 +307,78 @@ export function extractAmbientPalette(
     return Promise.resolve(cached);
   }
 
-  const fallback = getFallbackPalette(genreOrTitle, type);
+  const vibrantFallback = getFallbackPalette(genreOrTitle, type, imageUrl);
 
   if (!imageUrl) {
-    return Promise.resolve(fallback);
+    return Promise.resolve(vibrantFallback);
   }
 
   return new Promise((resolve) => {
+    let resolved = false;
+    let triedProxy = false;
+
+    const finish = (palette: AmbientColorPalette, shouldCache = true) => {
+      if (resolved) return;
+      resolved = true;
+      colorCache.set(imageUrl, palette);
+      if (shouldCache) {
+        try {
+          const key = 'mp_pal_v3_' + imageUrl.slice(-60).replace(/[^a-zA-Z0-9]/g, '');
+          localStorage.setItem(key, JSON.stringify(palette));
+        } catch {}
+      }
+      resolve(palette);
+    };
+
     const img = new Image();
     if (!imageUrl.startsWith('data:') && !imageUrl.startsWith('blob:')) {
       img.crossOrigin = 'anonymous';
     }
 
-    let resolved = false;
-    const finish = (palette: AmbientColorPalette) => {
-      if (resolved) return;
-      resolved = true;
-      colorCache.set(imageUrl, palette);
-      try {
-        const key = 'mp_pal_' + imageUrl.slice(-60).replace(/[^a-zA-Z0-9]/g, '');
-        localStorage.setItem(key, JSON.stringify(palette));
-      } catch {}
-      resolve(palette);
+    // Generous 1600ms timeout so slower poster CDNs or proxy retry can finish cleanly
+    const timer = setTimeout(() => {
+      finish(vibrantFallback, false);
+    }, 1600);
+
+    const retryViaProxyOrFallback = () => {
+      if (!triedProxy && imageUrl.startsWith('http')) {
+        triedProxy = true;
+        img.crossOrigin = 'anonymous';
+        img.src = `/api/proxy?url=${encodeURIComponent(imageUrl)}`;
+        return;
+      }
+      clearTimeout(timer);
+      finish(vibrantFallback, true);
     };
 
-    // Fast timeout safety (400ms): if network or CORS is slow, resolve fallback immediately so UI is never blocked
-    const timer = setTimeout(() => {
-      finish(fallback);
-    }, 400);
-
     img.onload = () => {
-      clearTimeout(timer);
       try {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) {
-          finish(fallback);
+          clearTimeout(timer);
+          finish(vibrantFallback, false);
           return;
         }
 
         const width = 64;
-        const height = 32;
+        const height = 40;
         canvas.width = width;
         canvas.height = height;
         ctx.drawImage(img, 0, 0, width, height);
 
-        // This call will succeed for same-origin and CORS-enabled hosts (e.g. Unsplash, imgbb, etc.)
-        // and safely throw SecurityError if CORS is denied
         const imgData = ctx.getImageData(0, 0, width, height).data;
+        clearTimeout(timer);
 
-        // Extract corner-matched colors
-        // Top-Left corner: x in [0, 22], y in [0, 14]
-        const topLeft = extractRegionColor(imgData, width, 0, 22, 0, 14, fallback.topLeftRgb);
+        // Extract corner-matched & overall colors across top & middle regions
+        const topLeft = extractRegionColor(imgData, width, 0, 22, 0, 22, vibrantFallback.topLeftRgb);
+        const topRight = extractRegionColor(imgData, width, 42, 63, 0, 22, vibrantFallback.topRightRgb);
+        const topCenter = extractRegionColor(imgData, width, 18, 46, 0, 24, vibrantFallback.topCenterRgb);
 
-        // Top-Right corner: x in [42, 63], y in [0, 14]
-        const topRight = extractRegionColor(imgData, width, 42, 63, 0, 14, fallback.topRightRgb);
-
-        // Top-Center: x in [20, 44], y in [0, 14]
-        const topCenter = extractRegionColor(imgData, width, 20, 44, 0, 14, fallback.topCenterRgb);
-
-        // Overall most vibrant pixel for primary theme
-        let bestR = fallback.primaryRgb[0];
-        let bestG = fallback.primaryRgb[1];
-        let bestB = fallback.primaryRgb[2];
+        // Overall most vibrant pixel across the entire image for primary theme
+        let bestR = vibrantFallback.primaryRgb[0];
+        let bestG = vibrantFallback.primaryRgb[1];
+        let bestB = vibrantFallback.primaryRgb[2];
         let maxVibrancy = 0;
 
         for (let i = 0; i < imgData.length; i += 16) {
@@ -341,8 +393,8 @@ export function extractAmbientPalette(
           const saturation = max === 0 ? 0 : (max - min) / max;
           const brightness = max / 255;
 
-          if (brightness > 0.15 && brightness < 0.95 && saturation > 0.18) {
-            const vibrancy = saturation * brightness;
+          if (brightness > 0.12 && brightness < 0.95 && saturation > 0.14) {
+            const vibrancy = saturation * Math.sqrt(brightness);
             if (vibrancy > maxVibrancy) {
               maxVibrancy = vibrancy;
               bestR = r;
@@ -352,7 +404,10 @@ export function extractAmbientPalette(
           }
         }
 
-        const primaryRgb = maxVibrancy > 0.1 ? boostSaturation([bestR, bestG, bestB], 0.50) : fallback.primaryRgb;
+        const primaryRgb =
+          maxVibrancy > 0.08
+            ? boostSaturation([bestR, bestG, bestB], 0.56)
+            : topCenter;
         const secondaryRgb = topRight;
 
         const palette: AmbientColorPalette = {
@@ -363,18 +418,17 @@ export function extractAmbientPalette(
           topLeftRgb: topLeft,
           topRightRgb: topRight,
           topCenterRgb: topCenter,
-          glowTop: `rgba(${primaryRgb.join(',')}, 0.88)`,
-          glowHalo: `rgba(${primaryRgb.join(',')}, 0.60)`,
+          glowTop: `rgba(${primaryRgb.join(',')}, 0.92)`,
+          glowHalo: `rgba(${primaryRgb.join(',')}, 0.68)`,
         };
-        finish(palette);
-      } catch (err) {
-        finish(fallback);
+        finish(palette, true);
+      } catch (_err) {
+        retryViaProxyOrFallback();
       }
     };
 
     img.onerror = () => {
-      clearTimeout(timer);
-      finish(fallback);
+      retryViaProxyOrFallback();
     };
 
     img.src = imageUrl;

@@ -689,6 +689,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [isSeasonModalOpen, setIsSeasonModalOpen] = useState(false);
   const [discoveredAudioTracks, setDiscoveredAudioTracks] = useState<string[]>([]);
   const [discoveredQualities, setDiscoveredQualities] = useState<string[]>([]);
+  const [s1DiscoveredQualities, setS1DiscoveredQualities] = useState<string[]>([]);
+  const [s2DiscoveredQualities, setS2DiscoveredQualities] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
@@ -2352,6 +2354,80 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [playbackPosition, selectedSeasonIndex, partProgressMap, saveProgressNow]);
 
+  // Close any active floating Miniplayer when ContentDetailScreen opens
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('MAXPLAY_CLOSE_MINIPLAYER'));
+  }, [content?.id]);
+
+  const triggerMiniplayerOnLeave = useCallback(() => {
+    try {
+      const autoPipEnabled = localStorage.getItem('maxplay_auto_miniplayer') !== 'false';
+      if (!autoPipEnabled || !content) return;
+      const activeState = (window as any).__maxplayActivePlaybackState;
+      const streamUrl = activeState?.streamUrl;
+      if (!streamUrl || activeState?.isIframe) return;
+      const resumeSec = Math.max(Number(activeState?.currentTime) || 0, playbackPosition || 0);
+      saveProgressNow(resumeSec, false, true);
+
+      const resumeContent = {
+        ...content,
+        _historyResume: {
+          seasonIndex: selectedSeasonIndex,
+          episodeIndex: selectedEpisodeIndex,
+          partIndex: selectedPartIndex,
+          watchedSeconds: resumeSec,
+          currentTime: resumeSec,
+          activeLanguage,
+          activeQuality,
+        },
+      };
+
+      window.dispatchEvent(
+        new CustomEvent('MAXPLAY_ACTIVATE_MINIPLAYER', {
+          detail: {
+            content: resumeContent,
+            streamUrl,
+            currentTime: resumeSec,
+            title: playerTitle || content.title || 'MaxPlay Video',
+            posterUrl: posterOrBackdrop,
+          },
+        })
+      );
+    } catch {}
+  }, [
+    content,
+    playbackPosition,
+    selectedSeasonIndex,
+    selectedEpisodeIndex,
+    selectedPartIndex,
+    activeLanguage,
+    activeQuality,
+    playerTitle,
+    posterOrBackdrop,
+    saveProgressNow,
+  ]);
+
+  const handleBackWithMiniplayer = useCallback(() => {
+    triggerMiniplayerOnLeave();
+    onBack();
+  }, [triggerMiniplayerOnLeave, onBack]);
+
+  useEffect(() => {
+    const onHardwarePop = () => {
+      triggerMiniplayerOnLeave();
+    };
+    window.addEventListener('MAXPLAY_POP_STACK_HOME', onHardwarePop, { capture: true });
+    window.addEventListener('MAXPLAY_POP_STACK_SEARCH', onHardwarePop, { capture: true });
+    window.addEventListener('MAXPLAY_POP_STACK_ANIME', onHardwarePop, { capture: true });
+    window.addEventListener('MAXPLAY_POP_STACK_ME', onHardwarePop, { capture: true });
+    return () => {
+      window.removeEventListener('MAXPLAY_POP_STACK_HOME', onHardwarePop, { capture: true });
+      window.removeEventListener('MAXPLAY_POP_STACK_SEARCH', onHardwarePop, { capture: true });
+      window.removeEventListener('MAXPLAY_POP_STACK_ANIME', onHardwarePop, { capture: true });
+      window.removeEventListener('MAXPLAY_POP_STACK_ME', onHardwarePop, { capture: true });
+    };
+  }, [triggerMiniplayerOnLeave]);
+
   return (
     <div className="relative flex flex-col h-full w-full overflow-hidden bg-[#09090b]">
       {/* 1. Sticky/Pinned Video Player Area at Top */}
@@ -2423,6 +2499,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               onGlobalSeek={allCurrentParts.length > 1 ? handleGlobalSeek : undefined}
               activeLanguage={activeLanguage}
               activeQuality={activeQuality}
+              crossServerQualities={crossServerQualities}
               onLanguageChange={(lang) => {
                 setActiveLanguage(lang);
                 try {
@@ -2431,12 +2508,24 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 saveProgressNow(playbackPosition, false, true);
               }}
               onQualityChange={(qual) => {
-                setActiveQuality(qual);
-                try {
-                  localStorage.setItem('maxplay_preferred_quality', qual);
-                  localStorage.setItem('maxplay_video_quality', qual);
-                } catch {}
+                const s2Match = /\[S2\]/i.test(qual);
+                const s1Match = /\[S1\]/i.test(qual);
+                const cleanQ = qual.replace(/\s*\[(S1|S2)\]/i, '').trim();
                 saveProgressNow(playbackPosition, false, true);
+                if (s2Match && selectedServer !== 'server2') {
+                  handleSelectServer('server2');
+                  setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
+                  setTimeout(() => setToastMessage(null), 2800);
+                } else if (s1Match && selectedServer !== 'server1') {
+                  handleSelectServer('server1');
+                  setToastMessage(`Switched to Server 1 • ${cleanQ.toUpperCase()}`);
+                  setTimeout(() => setToastMessage(null), 2800);
+                }
+                setActiveQuality(cleanQ);
+                try {
+                  localStorage.setItem('maxplay_preferred_quality', cleanQ);
+                  localStorage.setItem('maxplay_video_quality', cleanQ);
+                } catch {}
               }}
               onDiscoveredAudioTracks={setDiscoveredAudioTracks}
               onDiscoveredQualities={setDiscoveredQualities}
@@ -2447,7 +2536,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               }}
               onNext={hasNext ? handleNextEpisode : undefined}
               onComplete={isAutoNextEnabled && hasNext ? handleNextEpisode : undefined}
-              onBack={onBack}
+              onBack={handleBackWithMiniplayer}
             />
           );
         })()}

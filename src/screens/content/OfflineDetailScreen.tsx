@@ -38,9 +38,17 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
     let isCancelled = false;
     const fetchUrl = async () => {
       try {
+        if (currentFile.videoUrl && currentFile.videoUrl.includes('/device-video/')) {
+          if (!isCancelled) {
+            setCurrentBlobUrl(currentFile.videoUrl);
+          }
+          return;
+        }
         const url = await downloadManager.getOfflineVideoUrl(currentFile.id, currentFile.episodeId, currentFile.episodeIndex);
         if (!isCancelled && url) {
           setCurrentBlobUrl(url);
+        } else if (!isCancelled && currentFile.videoUrl) {
+          setCurrentBlobUrl(currentFile.videoUrl);
         }
       } catch (err) {
         console.warn('Failed to load blobUrl in OfflineDetailScreen:', err);
