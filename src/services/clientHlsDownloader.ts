@@ -1055,13 +1055,22 @@ export class ClientHlsDownloader {
     }
   }
 
+  private static localDirectUrls = new Map<string, string>();
+
   /**
    * Returns a playable Offline URL for a downloaded item:
    * - In Kotlin APK: Returns `https://maxplay.local/offline-vault/{safeKey}/index.m3u8` (0 MB RAM!).
+   * - For imported Local Video files: Returns the live object URL or reassembles the MP4 chunks from IndexedDB.
    * - In Web Browser: Builds an in-memory HLS `.m3u8` Blob playlist (including separate audio track if present) over IndexedDB segment blobs.
    */
   public static async getOfflineBlobUrl(storageKey: string): Promise<string | null> {
     try {
+      // 0. If an imported local video has a direct session object URL, return it immediately
+      const directLocalUrl = this.localDirectUrls.get(storageKey);
+      if (directLocalUrl) {
+        return directLocalUrl;
+      }
+
       // 1. Priority: Native Android Disk Vault (Zero RAM overhead!)
       if (
         NativeBridgeService.supportsNativeOfflineVault() &&
@@ -1075,6 +1084,9 @@ export class ClientHlsDownloader {
       const totalChunks = await getChunk<number>(`${storageKey}_totalChunks`);
       if (!totalChunks || totalChunks <= 0) return null;
 
+      const isSingleFileFlag = await getChunk<number>(`${storageKey}_isSingleFile`);
+      const mimeType = ((await getChunk<any>(`${storageKey}_mimeType`)) as string) || 'video/mp4';
+
       // Revoke any previous temporary blob URLs for this storageKey
       const oldUrls = this.activeBlobUrls.get(storageKey);
       if (oldUrls) {
@@ -1085,11 +1097,15 @@ export class ClientHlsDownloader {
         });
       }
 
-      // Single MP4 file
-      if (totalChunks === 1) {
-        const chunk0 = await getChunk<ArrayBuffer>(`${storageKey}_chunk_0`);
-        if (!chunk0) return null;
-        const blob = new Blob([chunk0], { type: 'video/mp4' });
+      // Single MP4/MKV/WebM file (either 1 chunk or chunked local video file)
+      if (totalChunks === 1 || isSingleFileFlag === 1) {
+        const parts: ArrayBuffer[] = [];
+        for (let i = 0; i < totalChunks; i++) {
+          const part = await getChunk<ArrayBuffer>(`${storageKey}_chunk_${i}`);
+          if (part) parts.push(part);
+        }
+        if (parts.length === 0) return null;
+        const blob = new Blob(parts, { type: mimeType });
         const url = URL.createObjectURL(blob);
         this.activeBlobUrls.set(storageKey, [url]);
         return url;
@@ -1192,6 +1208,14 @@ export class ClientHlsDownloader {
   public static async deleteOfflineFile(storageKey: string): Promise<void> {
     this.abortDownload(storageKey);
 
+    const directLocal = this.localDirectUrls.get(storageKey);
+    if (directLocal) {
+      try {
+        URL.revokeObjectURL(directLocal);
+      } catch {}
+      this.localDirectUrls.delete(storageKey);
+    }
+
     const oldUrls = this.activeBlobUrls.get(storageKey);
     if (oldUrls) {
       oldUrls.forEach((u) => {
@@ -1214,19 +1238,43 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Exports a downloaded MaxPlay item into a proprietary `.maxplay` binary container Blob
+   * Exports a downloaded MaxPlay item into a proprietary `.maxplay` binary container
    * that can ONLY be opened & played inside MaxPlay's Downloads > Received tab.
    */
   public static async exportToMaxPlayContainer(
-    storageKey: string,
-    metadata: Record<string, any>,
-    onProgress?: (pct: number, statusText: string) => void
-  ): Promise<Blob | null> {
+    storageKeyOrMeta: string | Record<string, any>,
+    metadataOrProgress?: Record<string, any> | ((pct: number, statusText: string) => void),
+    maybeOnProgress?: (pct: number, statusText: string) => void
+  ): Promise<{ blob: Blob; fileName: string } | null> {
     try {
+      let storageKey = '';
+      let metadata: Record<string, any> = {};
+      let onProgress: ((pct: number, statusText: string) => void) | undefined = maybeOnProgress;
+
+      if (typeof storageKeyOrMeta === 'string') {
+        storageKey = storageKeyOrMeta;
+        if (typeof metadataOrProgress === 'object' && metadataOrProgress !== null) {
+          metadata = metadataOrProgress;
+        }
+      } else if (typeof storageKeyOrMeta === 'object' && storageKeyOrMeta !== null) {
+        metadata = storageKeyOrMeta;
+        storageKey = String(
+          storageKeyOrMeta.storageKey ||
+            storageKeyOrMeta.id ||
+            `dl_${storageKeyOrMeta.contentId || 'item'}`
+        );
+        if (typeof metadataOrProgress === 'function') {
+          onProgress = metadataOrProgress as (pct: number, statusText: string) => void;
+        }
+      }
+
+      if (!storageKey) return null;
+
       onProgress?.(5, 'Preparing MaxPlay container header...');
       const videoBuffers: ArrayBuffer[] = [];
       const audioBuffers: ArrayBuffer[] = [];
-      let totalDurationSec = 1440;
+      let totalDurationSec = Number(metadata.duration || 1440);
+      let isSingleFile = false;
 
       // 1. Check Native Android Disk Vault first
       if (
@@ -1235,38 +1283,55 @@ export class ClientHlsDownloader {
       ) {
         const safeKey = storageKey.replace(/[^a-zA-Z0-9._-]/g, '_');
         const checkpoint = NativeBridgeService.getOfflineCheckpointInfoNative(storageKey);
-        const totalSegs = checkpoint?.completedIndices?.length || 0;
-        const totalAudSegs = checkpoint?.completedAudioIndices?.length || 0;
+        const sortedVideoIndices = [...(checkpoint?.completedIndices || [])].sort((a, b) => a - b);
+        const sortedAudioIndices = [...(checkpoint?.completedAudioIndices || [])].sort(
+          (a, b) => a - b
+        );
+        const totalSegs = sortedVideoIndices.length;
+        const totalAudSegs = sortedAudioIndices.length;
 
-        for (let i = 0; i < totalSegs; i++) {
-          const segUrl = `https://maxplay.local/offline-vault/${safeKey}/seg_${i}.ts`;
+        for (let idx = 0; idx < totalSegs; idx++) {
+          const segNum = sortedVideoIndices[idx];
+          const segUrl = `https://maxplay.local/offline-vault/${safeKey}/seg_${segNum}.ts`;
           const resp = await fetch(segUrl);
           if (resp.ok) {
             videoBuffers.push(await resp.arrayBuffer());
           }
-          if (i % 8 === 0 && totalSegs > 0) {
-            const pct = Math.min(85, 10 + Math.round(((i + 1) / (totalSegs + totalAudSegs)) * 75));
-            onProgress?.(pct, `Packing video segment ${i + 1} / ${totalSegs}...`);
+          if (idx % 6 === 0 && totalSegs > 0) {
+            const pct = Math.min(
+              85,
+              10 + Math.round(((idx + 1) / (totalSegs + totalAudSegs)) * 75)
+            );
+            onProgress?.(pct, `Packing video segment ${idx + 1} / ${totalSegs}...`);
           }
         }
-        for (let i = 0; i < totalAudSegs; i++) {
-          const audUrl = `https://maxplay.local/offline-vault/${safeKey}/aud_${i}.ts`;
+        for (let idx = 0; idx < totalAudSegs; idx++) {
+          const audNum = sortedAudioIndices[idx];
+          const audUrl = `https://maxplay.local/offline-vault/${safeKey}/aud_${audNum}.ts`;
           const resp = await fetch(audUrl);
           if (resp.ok) {
             audioBuffers.push(await resp.arrayBuffer());
           }
         }
-      } else {
-        // 2. Read from IndexedDB
+      }
+
+      // 2. Fallback to IndexedDB chunks if not in Native Vault or if item was imported into IndexedDB
+      if (videoBuffers.length === 0) {
         const totalChunks = (await getChunk<number>(`${storageKey}_totalChunks`)) || 0;
         const totalAudioChunks = (await getChunk<number>(`${storageKey}_totalAudioChunks`)) || 0;
-        totalDurationSec = (await getChunk<number>(`${storageKey}_durationSec`)) || totalChunks * 4;
+        const singleFlag = await getChunk<number>(`${storageKey}_isSingleFile`);
+        isSingleFile = singleFlag === 1 || totalChunks === 1;
+        totalDurationSec =
+          (await getChunk<number>(`${storageKey}_durationSec`)) || totalChunks * 4 || 1440;
 
         for (let i = 0; i < totalChunks; i++) {
           const buf = await getChunk<ArrayBuffer>(`${storageKey}_chunk_${i}`);
           if (buf) videoBuffers.push(buf);
-          if (i % 8 === 0 && totalChunks > 0) {
-            const pct = Math.min(85, 10 + Math.round(((i + 1) / (totalChunks + totalAudioChunks)) * 75));
+          if (i % 6 === 0 && totalChunks > 0) {
+            const pct = Math.min(
+              85,
+              10 + Math.round(((i + 1) / (totalChunks + totalAudioChunks)) * 75)
+            );
             onProgress?.(pct, `Packing segment ${i + 1} / ${totalChunks}...`);
           }
         }
@@ -1276,17 +1341,42 @@ export class ClientHlsDownloader {
         }
       }
 
+      // 3. Final fallback: if item is an active local object URL in memory
+      if (videoBuffers.length === 0 && this.localDirectUrls.has(storageKey)) {
+        try {
+          const resp = await fetch(this.localDirectUrls.get(storageKey)!);
+          if (resp.ok) {
+            videoBuffers.push(await resp.arrayBuffer());
+            isSingleFile = true;
+          }
+        } catch {}
+      }
+
       if (videoBuffers.length === 0) return null;
 
       onProgress?.(92, 'Sealing encrypted .maxplay package...');
+      const totalBytes =
+        videoBuffers.reduce((acc, b) => acc + b.byteLength, 0) +
+        audioBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+      const computedSizeMb = Math.max(1, Math.round((totalBytes / (1024 * 1024)) * 10) / 10);
+
+      const enrichedMeta = {
+        ...metadata,
+        title: metadata.title || 'MaxPlay Video',
+        fileSizeMb: metadata.fileSizeMb || metadata.sizeMb || computedSizeMb,
+        language: metadata.language || metadata.audioLang || 'Default',
+        quality: metadata.quality || '720p',
+      };
+
       const headerObj = {
         magic: 'MAXPLAY_CONTAINER_V1',
         exportedAt: Date.now(),
         storageKey,
         totalDurationSec,
+        isSingleFile,
         videoSegmentLengths: videoBuffers.map((b) => b.byteLength),
         audioSegmentLengths: audioBuffers.map((b) => b.byteLength),
-        metadata,
+        metadata: enrichedMeta,
       };
 
       const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
@@ -1298,8 +1388,21 @@ export class ClientHlsDownloader {
         [magicBytes, lenBuf, headerBytes, ...videoBuffers, ...audioBuffers],
         { type: 'application/octet-stream' }
       );
+
+      const cleanTitle = String(enrichedMeta.title || 'MaxPlay_Video')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 45);
+      const epSuffix =
+        enrichedMeta.episodeNumber !== undefined
+          ? `_Ep${enrichedMeta.episodeNumber}`
+          : enrichedMeta.episodeIndex !== undefined
+          ? `_Ep${Number(enrichedMeta.episodeIndex) + 1}`
+          : '';
+      const fileName = `${cleanTitle}${epSuffix}.maxplay`;
+
       onProgress?.(100, 'Ready to send!');
-      return finalBlob;
+      return { blob: finalBlob, fileName };
     } catch (err) {
       console.error('[ClientHlsDownloader] exportToMaxPlayContainer error:', err);
       return null;
@@ -1338,6 +1441,7 @@ export class ClientHlsDownloader {
         ? headerObj.audioSegmentLengths
         : [];
       const totalDurationSec = Number(headerObj.totalDurationSec || videoLengths.length * 4 || 1440);
+      const isSingleFile = Boolean(headerObj.isSingleFile || videoLengths.length === 1);
       const storageKey = `dl_recv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
       let offset = 12 + headerLen;
@@ -1367,11 +1471,22 @@ export class ClientHlsDownloader {
       await putChunk(`${storageKey}_totalChunks`, videoLengths.length);
       await putChunk(`${storageKey}_totalAudioChunks`, audioLengths.length);
       await putChunk(`${storageKey}_durationSec`, totalDurationSec);
+      await putChunk(`${storageKey}_isSingleFile`, isSingleFile ? 1 : 0);
+
+      const fileSizeMb = Math.max(1, Math.round((totalBytes / (1024 * 1024)) * 10) / 10);
+      const rawMeta = headerObj.metadata || {};
+      const cleanFallbackTitle = file.name.replace(/\.maxplay$/i, '').replace(/_/g, ' ') || 'Received Video';
 
       onProgress?.(100, 'Transfer complete!');
       return {
         storageKey,
-        metadata: headerObj.metadata || {},
+        metadata: {
+          ...rawMeta,
+          title: rawMeta.title || cleanFallbackTitle,
+          fileSizeMb: rawMeta.fileSizeMb || rawMeta.sizeMb || fileSizeMb,
+          language: rawMeta.language || rawMeta.audioLang || 'Default',
+          quality: rawMeta.quality || '720p',
+        },
         totalBytes,
       };
     } catch (err) {
@@ -1381,22 +1496,64 @@ export class ClientHlsDownloader {
   }
 
   /**
-   * Imports a local video file (.mp4 / .mkv / .webm) from the user's phone storage into MaxPlay Local Files.
+   * Imports a local video file (.mp4 / .mkv / .webm / .mov) from the user's phone storage into MaxPlay Local Files.
+   * Uses 4 MB chunked slicing so even large movie files never run out of WebView RAM.
    */
   public static async importLocalVideoFile(
     file: File,
     onProgress?: (pct: number, statusText: string) => void
-  ): Promise<{ storageKey: string; totalBytes: number } | null> {
+  ): Promise<{
+    storageKey: string;
+    totalBytes: number;
+    fileSizeMb: number;
+    title: string;
+    quality: string;
+    language: string;
+  } | null> {
     try {
-      onProgress?.(15, 'Reading local video file...');
+      onProgress?.(5, 'Opening local video file...');
       const storageKey = `dl_local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const buf = await file.arrayBuffer();
-      onProgress?.(70, 'Indexing in MaxPlay Local Vault...');
-      await putChunk(`${storageKey}_chunk_0`, buf);
-      await putChunk(`${storageKey}_totalChunks`, 1);
-      await putChunk(`${storageKey}_durationSec`, 1440);
+      const cleanTitle =
+        file.name.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim() || 'Local Video';
+      const totalBytes = file.size || 0;
+      const fileSizeMb = Math.max(0.5, Math.round((totalBytes / (1024 * 1024)) * 10) / 10);
+
+      // Register instant direct object URL so playback works immediately with 0 delay
+      try {
+        const directUrl = URL.createObjectURL(file);
+        this.localDirectUrls.set(storageKey, directUrl);
+      } catch {}
+
+      // Persist in 4 MB chunks into IndexedDB so it stays available across sessions without OOM
+      const CHUNK_SIZE = 4 * 1024 * 1024;
+      const totalChunks = Math.max(1, Math.ceil(totalBytes / CHUNK_SIZE));
+
+      // Cap persistent IndexedDB copy at 350 MB to avoid browser quota errors while keeping directUrl playable for any size
+      if (totalBytes > 0 && totalBytes <= 350 * 1024 * 1024) {
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(totalBytes, start + CHUNK_SIZE);
+          const sliceBuf = await file.slice(start, end).arrayBuffer();
+          await putChunk(`${storageKey}_chunk_${i}`, sliceBuf);
+          const pct = Math.min(95, 10 + Math.round(((i + 1) / totalChunks) * 85));
+          onProgress?.(pct, `Saving local video chunk ${i + 1} / ${totalChunks}...`);
+        }
+        await putChunk(`${storageKey}_totalChunks`, totalChunks);
+        await putChunk(`${storageKey}_isSingleFile`, 1);
+        await putChunk(`${storageKey}_durationSec`, 1440);
+      } else {
+        onProgress?.(85, 'Indexing large local video for direct hardware playback...');
+      }
+
       onProgress?.(100, 'Local video ready!');
-      return { storageKey, totalBytes: buf.byteLength };
+      return {
+        storageKey,
+        totalBytes,
+        fileSizeMb,
+        title: cleanTitle,
+        quality: 'Local HD',
+        language: 'Original',
+      };
     } catch (err) {
       console.error('[ClientHlsDownloader] importLocalVideoFile error:', err);
       return null;

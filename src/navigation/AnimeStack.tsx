@@ -66,7 +66,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
   return (
     <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
       {/* Base AnimeScreen - Permanently Mounted */}
-      <div className={`h-full w-full ${current.name !== 'anime' ? 'pointer-events-none invisible' : 'visible'}`}>
+      <div className={`h-full w-full ${current.name !== 'anime' ? 'pointer-events-none' : ''}`}>
         <AnimeScreen
           onSelectContent={handleSelect}
           onOpenSearch={onOpenSearch}

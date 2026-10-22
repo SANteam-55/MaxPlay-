@@ -1884,11 +1884,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             onTouchStart={(e) => {
               e.stopPropagation();
             }}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onBack();
-            }}
             className="absolute top-3 left-3 sm:top-4 sm:left-4 z-40 flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/80 hover:bg-black text-white border border-white/35 hover:border-white/70 shadow-2xl cursor-pointer pointer-events-auto transition-all hover:scale-105 active:scale-90 backdrop-blur-md"
             title="Exit details screen"
             aria-label="Go Back"

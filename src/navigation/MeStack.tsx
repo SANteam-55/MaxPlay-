@@ -56,9 +56,17 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
     const handlePopStack = () => {
       pop();
     };
+    const handleOpenMessages = () => {
+      setStack((prev) => {
+        if (prev[prev.length - 1]?.name === 'messages') return prev;
+        return [...prev, { name: 'messages' }];
+      });
+    };
     window.addEventListener('MAXPLAY_POP_STACK_ME', handlePopStack);
+    window.addEventListener('MAXPLAY_OPEN_ME_MESSAGES', handleOpenMessages);
     return () => {
       window.removeEventListener('MAXPLAY_POP_STACK_ME', handlePopStack);
+      window.removeEventListener('MAXPLAY_OPEN_ME_MESSAGES', handleOpenMessages);
     };
   }, []);
 

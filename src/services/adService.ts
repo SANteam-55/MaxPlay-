@@ -130,8 +130,19 @@ class AdService {
    * Called when entering a Details Screen.
    * Resets the per-Details-Screen counter (0/2) and starts the 10-minute ad-free timer.
    */
-  enterDetailsScreen() {
+  enterDetailsScreen(_contentId?: string) {
     this.detailsScreenEnteredAt = Date.now();
+    this.detailsScreenAdCount = 0;
+    this.lastDetailsScreenAdShownAt = 0;
+  }
+
+  /**
+   * Called when leaving a Details Screen.
+   * Safely cleans up any open popunder overlay and resets timers without throwing.
+   */
+  exitDetailsScreen() {
+    this.closeAdOverlay();
+    this.detailsScreenEnteredAt = 0;
     this.detailsScreenAdCount = 0;
     this.lastDetailsScreenAdShownAt = 0;
   }

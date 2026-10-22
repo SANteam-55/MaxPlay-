@@ -44,7 +44,14 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     message: string;
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [refreshSeed, setRefreshSeed] = useState<number>(() => {
+    try {
+      const saved = parseInt(sessionStorage.getItem('maxplay_dl_rec_seed') || '1', 10);
+      return isNaN(saved) || saved < 1 ? 1 : saved;
+    } catch {
+      return 1;
+    }
+  });
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState<{
     totalGb: number;
@@ -198,32 +205,48 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     downloadManager.removeCompletedFile(id);
   };
 
-  // Real Recommendations from catalog with shuffle support on Refresh
+  // Real Recommendations from catalog — strictly excluding sample/mock placeholder items and persisting across tab switches
   const recommendedContent = useMemo(() => {
     if (!contentList || contentList.length === 0) return [];
-    const pool = [...contentList];
-    if (refreshSeed > 0) {
-      // Deterministic Fisher-Yates shuffle based on refreshSeed
-      let seed = refreshSeed * 9301 + 49297;
-      for (let i = pool.length - 1; i > 0; i--) {
-        seed = (seed * 9301 + 49297) % 233280;
-        const j = Math.floor((seed / 233280) * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
-      }
-      return pool.slice(0, 12);
+    const mockIds = new Set([
+      'one-piece-egghead',
+      'naruto-shippuden-classic',
+      'avatar-way-of-water',
+      'dune-part-two',
+      'stranger-things-s5',
+      'breaking-bad-remastered',
+      'solo-leveling-arise',
+    ]);
+    const realItems = contentList.filter(
+      (c) =>
+        !mockIds.has(c.id) &&
+        !(c.posterUrl && c.posterUrl.includes('images.unsplash.com'))
+    );
+    const pool = realItems.length > 0 ? [...realItems] : [...contentList];
+
+    // Deterministic Fisher-Yates shuffle based on persisted refreshSeed (always >= 1)
+    let seed = Math.max(1, refreshSeed) * 9301 + 49297;
+    for (let i = pool.length - 1; i > 0; i--) {
+      seed = (seed * 9301 + 49297) % 233280;
+      const j = Math.floor((seed / 233280) * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    const trendingFirst = pool.filter((c) => c.trending);
-    const others = pool.filter((c) => !c.trending);
-    return [...trendingFirst, ...others].slice(0, 12);
+    return pool.slice(0, 12);
   }, [contentList, refreshSeed]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
     setTimeout(() => {
-      setRefreshSeed((prev) => prev + 1);
+      setRefreshSeed((prev) => {
+        const next = prev + 1;
+        try {
+          sessionStorage.setItem('maxplay_dl_rec_seed', String(next));
+        } catch {}
+        return next;
+      });
       setIsRefreshing(false);
       triggerToast('Refreshed recommendations with new content!');
-    }, 550);
+    }, 450);
   };
 
   // Export & Send a downloaded item as a protected .maxplay container (only visible in MaxPlay Downloads tab)
@@ -232,31 +255,67 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       setTransferStatus({
         active: true,
         mode: 'send',
-        progress: 5,
+        progress: 10,
         message: `Packaging "${file.title}" into encrypted .maxplay container...`,
       });
 
+      const metadataPayload = {
+        id: file.id,
+        storageKey: file.storageKey,
+        contentId: file.contentId,
+        title: file.title,
+        subtitle: file.subtitle,
+        posterUrl: file.posterUrl,
+        quality: file.quality,
+        language: file.language || 'Default',
+        fileSizeMb: file.fileSizeMb || 50,
+        episodeId: file.episodeId,
+        seasonIndex: file.seasonIndex,
+        episodeIndex: file.episodeIndex,
+      };
+
+      const cleanTitle = String(file.title || 'MaxPlay_Video')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 45);
+      const epSuffix =
+        file.episodeIndex !== undefined ? `_Ep${Number(file.episodeIndex) + 1}` : '';
+      const nativeFileName = `${cleanTitle}${epSuffix}.maxplay`;
+
+      // Priority 1: In Native Android APK, package directly on disk & launch native Android Share Sheet (Quick Share / Bluetooth / WhatsApp)
+      if (
+        NativeBridgeService.isRunningInKotlinApp() &&
+        NativeBridgeService.hasOfflineItemNative(file.storageKey)
+      ) {
+        setTransferStatus({
+          active: true,
+          mode: 'send',
+          progress: 65,
+          message: `Packing native segments for "${file.title}"...`,
+        });
+        const nativeRes = NativeBridgeService.exportAndShareMaxPlayNative(
+          file.storageKey,
+          nativeFileName,
+          metadataPayload
+        );
+        if (nativeRes && nativeRes.ok) {
+          setTransferStatus(null);
+          setShowTransferModal(false);
+          triggerToast(`Sharing "${nativeFileName}" via Android Share!`);
+          return;
+        }
+      }
+
+      // Priority 2: Universal Container Export (Native Vault fetch or IndexedDB chunks)
       const exported = await ClientHlsDownloader.exportToMaxPlayContainer(
-        {
-          id: file.id,
-          contentId: file.contentId,
-          title: file.title,
-          posterUrl: file.posterUrl,
-          quality: file.quality,
-          audioLang: file.audioLang,
-          sizeMb: file.sizeMb,
-          duration: file.duration,
-          episodeId: file.episodeId,
-          episodeNumber: file.episodeNumber,
-          episodeTitle: file.episodeTitle,
-          episodeIndex: file.episodeIndex,
-        },
-        (pct) => {
+        file.storageKey,
+        metadataPayload,
+        (pct, statusText) => {
           setTransferStatus({
             active: true,
             mode: 'send',
             progress: pct,
-            message: `Packaging .maxplay transfer file (${pct}%)...`,
+            message: statusText || `Packaging .maxplay transfer file (${pct}%)...`,
           });
         }
       );
@@ -330,14 +389,17 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         message: `Verifying MaxPlay container "${file.name}"...`,
       });
 
-      const imported = await ClientHlsDownloader.importFromMaxPlayContainer(file, (pct) => {
-        setTransferStatus({
-          active: true,
-          mode: 'receive',
-          progress: pct,
-          message: `Unpacking offline segments into MaxPlay Vault (${pct}%)...`,
-        });
-      });
+      const imported = await ClientHlsDownloader.importFromMaxPlayContainer(
+        file,
+        (pct, statusText) => {
+          setTransferStatus({
+            active: true,
+            mode: 'receive',
+            progress: pct,
+            message: statusText || `Unpacking offline segments into MaxPlay Vault (${pct}%)...`,
+          });
+        }
+      );
 
       if (!imported) {
         setTransferStatus(null);
@@ -345,9 +407,24 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         return;
       }
 
+      const fileSizeMb =
+        imported.metadata.fileSizeMb ||
+        imported.metadata.sizeMb ||
+        Math.max(1, Math.round((imported.totalBytes / (1024 * 1024)) * 10) / 10);
+
       downloadManager.addImportedCompletedFile({
-        ...imported.metadata,
+        contentId: imported.metadata.contentId,
+        episodeId: imported.metadata.episodeId,
+        seasonIndex: imported.metadata.seasonIndex,
+        episodeIndex: imported.metadata.episodeIndex,
+        title: imported.metadata.title || file.name.replace(/\.maxplay$/i, ''),
+        subtitle: imported.metadata.subtitle,
+        posterUrl: imported.metadata.posterUrl,
+        quality: imported.metadata.quality || '720p',
+        language: imported.metadata.language || imported.metadata.audioLang || 'Default',
+        fileSizeMb,
         category: 'received',
+        storageKey: imported.storageKey,
       });
 
       setTransferStatus(null);
@@ -375,12 +452,12 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         message: `Importing local video "${file.name}"...`,
       });
 
-      const imported = await ClientHlsDownloader.importLocalVideoFile(file, (pct) => {
+      const imported = await ClientHlsDownloader.importLocalVideoFile(file, (pct, statusText) => {
         setTransferStatus({
           active: true,
           mode: 'local',
           progress: pct,
-          message: `Saving local video to MaxPlay Offline Player (${pct}%)...`,
+          message: statusText || `Saving local video to MaxPlay Offline Player (${pct}%)...`,
         });
       });
 
@@ -391,8 +468,12 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       }
 
       downloadManager.addImportedCompletedFile({
-        ...imported,
+        title: imported.title,
+        quality: imported.quality,
+        language: imported.language,
+        fileSizeMb: imported.fileSizeMb,
         category: 'local',
+        storageKey: imported.storageKey,
       });
 
       setTransferStatus(null);

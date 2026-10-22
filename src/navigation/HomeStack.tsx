@@ -87,7 +87,7 @@ export const HomeStack: React.FC<HomeStackProps> = ({
   return (
     <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
       {/* Base HomeScreen - Permanently Mounted to preserve exact scroll position */}
-      <div className={`h-full w-full ${current.name !== 'home' ? 'pointer-events-none invisible' : 'visible'}`}>
+      <div className={`h-full w-full ${current.name !== 'home' ? 'pointer-events-none' : ''}`}>
         <HomeScreen
           onSelectContent={handleSelect}
           onSelectNetwork={handleSelectNetwork}

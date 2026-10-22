@@ -63,9 +63,30 @@ export const RootNavigator: React.FC = () => {
     };
   }, []);
 
-  // Real Phone Status-Bar Notifications for Me > Messages (Announcements)
+  // Request Web Notification permission upfront and handle tapping native status-bar notifications
   useEffect(() => {
-    if (!isAuthenticated) return;
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch {}
+
+    const handleOpenMessagesFromNotification = () => {
+      setActiveTabState('me');
+      localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'me');
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_ME_MESSAGES'));
+      }, 120);
+    };
+
+    window.addEventListener('MAXPLAY_OPEN_MESSAGES_SCREEN', handleOpenMessagesFromNotification);
+    return () => {
+      window.removeEventListener('MAXPLAY_OPEN_MESSAGES_SCREEN', handleOpenMessagesFromNotification);
+    };
+  }, []);
+
+  // Real Phone Status-Bar Notifications for Me > Messages (Announcements) — works for all users immediately
+  useEffect(() => {
     let isFirstSnapshot = true;
 
     const unsub = subscribeToAnnouncements(user?.uid, (msgs) => {
@@ -86,9 +107,17 @@ export const RootNavigator: React.FC = () => {
           const toNotify = isFirstSnapshot ? [newMessages[0]] : newMessages;
           toNotify.forEach((m) => {
             if (m && m.title) {
+              const attachedImg =
+                m.bannerUrl ||
+                (m as any).imageUrl ||
+                (m as any).image ||
+                m.attachedContent?.backdropUrl ||
+                m.attachedContent?.posterUrl ||
+                '';
               NativeBridgeService.showNativeNotification(
                 m.title,
-                m.body || 'New update in MaxPlay Messages'
+                m.body || 'New update in MaxPlay Messages',
+                attachedImg
               );
             }
           });
@@ -101,7 +130,7 @@ export const RootNavigator: React.FC = () => {
     });
 
     return () => unsub();
-  }, [isAuthenticated, user?.uid]);
+  }, [user?.uid]);
 
   // PWA State Lock - Check if user is resuming an existing session or standalone mode
   const isPwaStandalone = typeof window !== 'undefined' && 

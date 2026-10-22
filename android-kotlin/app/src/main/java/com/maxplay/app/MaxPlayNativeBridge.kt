@@ -195,12 +195,43 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
-    fun showNativeNotification(title: String, body: String): Boolean {
+    fun showNativeNotification(title: String, body: String, imageUrl: String? = ""): Boolean {
         return try {
-            activity.showNativeStatusNotification(title, body)
+            activity.showNativeStatusNotification(title, body, imageUrl ?: "")
             true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    @JavascriptInterface
+    fun exportAndShareMaxPlayFile(
+        storageKey: String,
+        fileName: String,
+        metadataJson: String
+    ): String {
+        val out = JSONObject()
+        return try {
+            val exportedFile = MaxPlayOfflineVault.exportOfflineItemToMaxPlayFile(
+                context = activity.applicationContext,
+                storageKey = storageKey,
+                fileName = fileName,
+                metadataJson = metadataJson
+            )
+            if (exportedFile != null && exportedFile.exists()) {
+                val shared = activity.shareMaxPlayFile(exportedFile)
+                out.put("ok", true)
+                out.put("shared", shared)
+                out.put("path", exportedFile.absolutePath)
+            } else {
+                out.put("ok", false)
+                out.put("error", "No segments found on native disk")
+            }
+            out.toString()
+        } catch (e: Exception) {
+            out.put("ok", false)
+            out.put("error", e.message ?: "Export failed")
+            out.toString()
         }
     }
 

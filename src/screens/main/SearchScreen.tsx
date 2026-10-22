@@ -118,10 +118,33 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
       return;
     }
 
+    const handleSpokenResult = (spokenText: string) => {
+      setIsListening(false);
+      const cleaned = (spokenText || '').trim();
+      if (cleaned) {
+        setQuery(cleaned);
+        saveRecentSearch(cleaned);
+        setVoiceStatusText(null);
+      } else {
+        setVoiceStatusText('Could not hear clearly. Tap mic to try again.');
+        setTimeout(() => setVoiceStatusText(null), 2500);
+      }
+    };
+
+    // 1. Priority #1 in Android APK: Launch Native Android Speech Recognizer immediately
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      const started = NativeBridgeService.startNativeVoiceRecognition(handleSpokenResult);
+      if (started) {
+        setIsListening(true);
+        setVoiceStatusText('Listening... Speak now');
+        return;
+      }
+    }
+
     const SpeechRecognitionAPI =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    // 1. Prefer Web Speech API when available in browser/WebView for instant live transcription
+    // 2. Web Browser Speech Recognition API
     if (SpeechRecognitionAPI) {
       try {
         const recognition = new SpeechRecognitionAPI();
@@ -151,9 +174,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
 
         recognition.onerror = () => {
           setIsListening(false);
-          // Fallback to Native Android RecognizerIntent if WebView speech recognition errors
-          if (NativeBridgeService.isAndroidWebView()) {
-            const started = NativeBridgeService.startNativeVoiceRecognition();
+          if (NativeBridgeService.isRunningInKotlinApp()) {
+            const started = NativeBridgeService.startNativeVoiceRecognition(handleSpokenResult);
             if (started) {
               setIsListening(true);
               setVoiceStatusText('Listening... Speak now');
@@ -172,16 +194,6 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
         recognition.start();
         return;
       } catch {}
-    }
-
-    // 2. Fallback to Android Native Speech RecognizerIntent
-    if (NativeBridgeService.isAndroidWebView()) {
-      const started = NativeBridgeService.startNativeVoiceRecognition();
-      if (started) {
-        setIsListening(true);
-        setVoiceStatusText('Listening... Speak now');
-        return;
-      }
     }
 
     setVoiceStatusText('Voice search is not supported on this browser');

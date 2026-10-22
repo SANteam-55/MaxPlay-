@@ -79,8 +79,9 @@ interface MaxPlayKotlinBridge {
   deleteOfflineItem?: (storageKey: string) => boolean;
   clearImageDiskCache?: () => boolean;
   getImageDiskCacheBytes?: () => number;
-  showNativeNotification?: (title: string, body: string) => boolean;
+  showNativeNotification?: (title: string, body: string, imageUrl?: string) => boolean;
   startVoiceRecognition?: () => boolean;
+  exportAndShareMaxPlayFile?: (storageKey: string, fileName: string, metadataJson: string) => string;
 }
 
 declare global {
@@ -131,6 +132,13 @@ export class NativeBridgeService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Alias for isRunningInKotlinApp() for backward compatibility.
+   */
+  public static isAndroidWebView(): boolean {
+    return this.isRunningInKotlinApp();
   }
 
   /**
@@ -900,21 +908,29 @@ export class NativeBridgeService {
   }
 
   /**
-   * Triggers a real phone status-bar notification on Android APK (with Web Notification fallback).
+   * Triggers a real phone status-bar notification on Android APK (with Web Notification fallback),
+   * including an optional rich attached banner/poster image.
    */
-  public static showNativeNotification(title: string, body: string): boolean {
+  public static showNativeNotification(title: string, body: string, imageUrl?: string): boolean {
     try {
       if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.showNativeNotification === 'function') {
-        return Boolean(window.MaxPlayNative.showNativeNotification(title, body));
+        return Boolean(window.MaxPlayNative.showNativeNotification(title, body, imageUrl || ''));
       }
       if (typeof window !== 'undefined' && 'Notification' in window) {
+        const notifOpts: any = {
+          body,
+          icon: imageUrl || '/favicon.png',
+        };
+        if (imageUrl) {
+          notifOpts.image = imageUrl;
+        }
         if (Notification.permission === 'granted') {
-          new Notification(title, { body, icon: '/favicon.png' });
+          new Notification(title, notifOpts);
           return true;
         } else if (Notification.permission !== 'denied') {
           Notification.requestPermission().then((perm) => {
             if (perm === 'granted') {
-              new Notification(title, { body, icon: '/favicon.png' });
+              new Notification(title, notifOpts);
             }
           });
         }
@@ -926,15 +942,43 @@ export class NativeBridgeService {
   /**
    * Starts Native Android Speech Recognizer dialog and invokes `onResult` with the recognized text.
    */
-  public static startNativeVoiceRecognition(onResult: (text: string) => void): boolean {
+  public static startNativeVoiceRecognition(onResult?: (text: string) => void): boolean {
     try {
       if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.startVoiceRecognition === 'function') {
-        window.__onMaxPlayVoiceResult = (spokenText: string) => {
-          onResult(spokenText || '');
-        };
+        if (typeof onResult === 'function') {
+          window.__onMaxPlayVoiceResult = (spokenText: string) => {
+            onResult(spokenText || '');
+          };
+        }
         return Boolean(window.MaxPlayNative.startVoiceRecognition());
       }
     } catch {}
     return false;
+  }
+
+  /**
+   * Packages an offline vault item directly on Android disk into a `.maxplay` file and launches Android's Native Share Sheet.
+   */
+  public static exportAndShareMaxPlayNative(
+    storageKey: string,
+    fileName: string,
+    metadata: Record<string, any>
+  ): { ok: boolean; shared?: boolean; path?: string; error?: string } | null {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.exportAndShareMaxPlayFile === 'function'
+      ) {
+        const raw = window.MaxPlayNative.exportAndShareMaxPlayFile(
+          storageKey,
+          fileName,
+          JSON.stringify(metadata)
+        );
+        if (raw) {
+          return JSON.parse(raw);
+        }
+      }
+    } catch {}
+    return null;
   }
 }

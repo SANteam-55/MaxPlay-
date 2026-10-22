@@ -295,21 +295,28 @@ object MaxPlayOfflineVault {
 
             var count = 0
             var bytes = 0L
-            val completedIndices = JSONArray()
-            val completedAudioIndices = JSONArray()
+            val videoIdxList = mutableListOf<Int>()
+            val audioIdxList = mutableListOf<Int>()
             val files = itemDir.listFiles() ?: emptyArray()
             for (f in files) {
                 if (f.name.startsWith("seg_") && f.name.endsWith(".ts") && f.length() > 512L) {
                     count++
                     bytes += f.length()
                     val idxStr = f.name.removePrefix("seg_").removeSuffix(".ts")
-                    idxStr.toIntOrNull()?.let { completedIndices.put(it) }
+                    idxStr.toIntOrNull()?.let { videoIdxList.add(it) }
                 } else if (f.name.startsWith("aud_") && f.name.endsWith(".ts") && f.length() > 512L) {
                     bytes += f.length()
                     val idxStr = f.name.removePrefix("aud_").removeSuffix(".ts")
-                    idxStr.toIntOrNull()?.let { completedAudioIndices.put(it) }
+                    idxStr.toIntOrNull()?.let { audioIdxList.add(it) }
                 }
             }
+
+            videoIdxList.sort()
+            audioIdxList.sort()
+            val completedIndices = JSONArray()
+            videoIdxList.forEach { completedIndices.put(it) }
+            val completedAudioIndices = JSONArray()
+            audioIdxList.forEach { completedAudioIndices.put(it) }
 
             json.put("exists", count > 0)
             json.put("downloadedSegments", count)
@@ -322,6 +329,103 @@ object MaxPlayOfflineVault {
             json.put("error", e.message ?: "Error")
         }
         return json
+    }
+
+    /**
+     * Packages an offline item's segments directly on disk into a `.maxplay` container file with zero RAM overhead.
+     */
+    fun exportOfflineItemToMaxPlayFile(
+        context: Context,
+        storageKey: String,
+        fileName: String,
+        metadataJson: String
+    ): File? {
+        return try {
+            val safe = sanitizeKey(storageKey)
+            val itemDir = File(getVaultRoot(context), safe)
+            if (!itemDir.exists()) return null
+
+            val segFiles = (itemDir.listFiles { _, name ->
+                name.startsWith("seg_") && name.endsWith(".ts")
+            } ?: emptyArray()).filter { it.length() > 512L }.sortedBy {
+                it.name.removePrefix("seg_").removeSuffix(".ts").toIntOrNull() ?: 0
+            }
+
+            if (segFiles.isEmpty()) return null
+
+            val audFiles = (itemDir.listFiles { _, name ->
+                name.startsWith("aud_") && name.endsWith(".ts")
+            } ?: emptyArray()).filter { it.length() > 512L }.sortedBy {
+                it.name.removePrefix("aud_").removeSuffix(".ts").toIntOrNull() ?: 0
+            }
+
+            val videoLengths = JSONArray()
+            segFiles.forEach { videoLengths.put(it.length()) }
+            val audioLengths = JSONArray()
+            audFiles.forEach { audioLengths.put(it.length()) }
+
+            val metadataObj = try {
+                JSONObject(metadataJson)
+            } catch (_: Exception) {
+                JSONObject()
+            }
+
+            val headerObj = JSONObject().apply {
+                put("magic", "MAXPLAY_CONTAINER_V1")
+                put("exportedAt", System.currentTimeMillis())
+                put("storageKey", storageKey)
+                put("totalDurationSec", segFiles.size * 4)
+                put("isSingleFile", segFiles.size == 1)
+                put("videoSegmentLengths", videoLengths)
+                put("audioSegmentLengths", audioLengths)
+                put("metadata", metadataObj)
+            }
+
+            val headerBytes = headerObj.toString().toByteArray(Charsets.UTF_8)
+            val magicBytes = "MAXPLAY1".toByteArray(Charsets.UTF_8)
+            val hLen = headerBytes.size
+            val lenBytes = byteArrayOf(
+                ((hLen ushr 24) and 0xFF).toByte(),
+                ((hLen ushr 16) and 0xFF).toByte(),
+                ((hLen ushr 8) and 0xFF).toByte(),
+                (hLen and 0xFF).toByte()
+            )
+
+            val cleanName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").let {
+                if (it.endsWith(".maxplay")) it else "$it.maxplay"
+            }
+            val outDir = context.externalCacheDir ?: context.cacheDir
+            val outFile = File(outDir, cleanName)
+            if (outFile.exists()) outFile.delete()
+
+            FileOutputStream(outFile).use { out ->
+                out.write(magicBytes)
+                out.write(lenBytes)
+                out.write(headerBytes)
+                val buf = ByteArray(64 * 1024)
+                for (seg in segFiles) {
+                    FileInputStream(seg).use { input ->
+                        var r: Int
+                        while (input.read(buf).also { r = it } != -1) {
+                            out.write(buf, 0, r)
+                        }
+                    }
+                }
+                for (aud in audFiles) {
+                    FileInputStream(aud).use { input ->
+                        var r: Int
+                        while (input.read(buf).also { r = it } != -1) {
+                            out.write(buf, 0, r)
+                        }
+                    }
+                }
+                out.flush()
+            }
+
+            if (outFile.exists() && outFile.length() > 12L) outFile else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

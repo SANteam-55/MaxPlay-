@@ -33,6 +33,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var customFullscreenView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var fileUploadCallback: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
+    private val bgNotificationScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
 
     fun getScraperContainer(): ViewGroup = rootContainer
 
@@ -40,6 +42,8 @@ class MainActivity : AppCompatActivity() {
         // Primary entry: HTTPS virtual origin mapped to assets/webapp/ inside APK (avoids file:// ES module & path block!)
         const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"
         const val LIVE_APP_URL = "https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app"
+        const val FIRESTORE_MESSAGES_REST_URL =
+            "https://firestore.googleapis.com/v1/projects/gen-lang-client-0291911037/databases/ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d/documents/messages?pageSize=12"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -85,8 +89,15 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl(LIVE_APP_URL)
         }
 
-        // Create notification channel for real phone status-bar inbox alerts
+        // Create notification channel & request notification + microphone permissions upfront
         createNotificationChannel()
+        requestStartupPermissions()
+
+        // Start native background poller for Firestore Admin messages so notifications arrive even when minimized
+        startBackgroundAnnouncementMonitor()
+
+        // Check if launched from tapping a status-bar notification
+        handleNotificationIntent(intent)
 
         // Handle Android hardware Back button (Triangle button) smoothly via React SPA handler first
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -113,6 +124,26 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: android.content.Intent?) {
+        if (intent?.getBooleanExtra("open_messages", false) == true) {
+            intent.removeExtra("open_messages")
+            webView.postDelayed({
+                try {
+                    webView.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_MESSAGES_SCREEN'));",
+                        null
+                    )
+                } catch (_: Exception) {}
+            }, 900)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -146,13 +177,41 @@ class MainActivity : AppCompatActivity() {
         // Attach CORS-Free OkHttp Interceptor & HTTPS Local Asset Client
         webView.webViewClient = CorsFreeWebViewClient(this)
 
-        // Fullscreen HTML5 Video, Microphone Permission & Orientation Handler
+        // Fullscreen HTML5 Video, File Chooser (Local Video & .maxplay Receive), Microphone Permission & Orientation Handler
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
                 runOnUiThread {
                     try {
                         request?.grant(request.resources)
                     } catch (_: Exception) {}
+                }
+            }
+
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                try {
+                    fileUploadCallback?.onReceiveValue(null)
+                    fileUploadCallback = filePathCallback
+
+                    val acceptTypes = fileChooserParams?.acceptTypes ?: emptyArray()
+                    val wantsVideo = acceptTypes.any { it.contains("video", ignoreCase = true) }
+
+                    val pickerIntent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                        type = if (wantsVideo) "video/*" else "*/*"
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(
+                        android.content.Intent.createChooser(pickerIntent, "Select File for MaxPlay"),
+                        3002
+                    )
+                    return true
+                } catch (_: Exception) {
+                    fileUploadCallback = null
+                    return false
                 }
             }
 
@@ -318,47 +377,195 @@ class MainActivity : AppCompatActivity() {
                 val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager
                 nm?.createNotificationChannel(channel)
             }
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
+        } catch (_: Exception) {}
+    }
+
+    private fun requestStartupPermissions() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val needed = mutableListOf<String>()
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        needed.add("android.permission.POST_NOTIFICATIONS")
+                    }
+                }
+                if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    needed.add(android.Manifest.permission.RECORD_AUDIO)
+                }
+                if (needed.isNotEmpty()) {
+                    requestPermissions(needed.toTypedArray(), 1001)
                 }
             }
         } catch (_: Exception) {}
     }
 
     /**
-     * Triggers a real native Android status-bar notification with sound & tap-to-open intent.
+     * Triggers a real native Android status-bar notification with optional BigPictureStyle attached image & tap-to-open intent.
      */
-    fun showNativeStatusNotification(title: String, body: String) {
-        runOnUiThread {
+    fun showNativeStatusNotification(title: String, body: String, imageUrl: String = "") {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val bitmap: android.graphics.Bitmap? = if (imageUrl.startsWith("http", ignoreCase = true)) {
+                try {
+                    val req = okhttp3.Request.Builder()
+                        .url(imageUrl)
+                        .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                        .build()
+                    InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            val bytes = resp.body?.bytes()
+                            if (bytes != null && bytes.isNotEmpty()) {
+                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            } else null
+                        } else null
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            } else null
+
+            runOnUiThread {
+                try {
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return@runOnUiThread
+                    val intent = android.content.Intent(this, MainActivity::class.java).apply {
+                        flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("open_messages", true)
+                    }
+                    val pendingFlags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    } else {
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val pendingIntent = android.app.PendingIntent.getActivity(this, 2001, intent, pendingFlags)
+
+                    val builder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        android.app.Notification.Builder(this, "maxplay_inbox_alerts")
+                    } else {
+                        @Suppress("DEPRECATION")
+                        android.app.Notification.Builder(this)
+                    }
+
+                    builder.setSmallIcon(R.drawable.ic_launcher)
+                        .setContentTitle(title.ifBlank { "MaxPlay" })
+                        .setContentText(body)
+                        .setAutoCancel(true)
+                        .setContentIntent(pendingIntent)
+
+                    if (bitmap != null) {
+                        builder.setLargeIcon(bitmap)
+                        builder.setStyle(
+                            android.app.Notification.BigPictureStyle()
+                                .bigPicture(bitmap)
+                                .setBigContentTitle(title.ifBlank { "MaxPlay" })
+                                .setSummaryText(body)
+                        )
+                    } else {
+                        builder.setStyle(
+                            android.app.Notification.BigTextStyle()
+                                .setBigContentTitle(title.ifBlank { "MaxPlay" })
+                                .bigText(body)
+                        )
+                    }
+
+                    val notifId = ((title + "|" + body).hashCode() and 0x7FFFFFFF).coerceAtLeast(1000)
+                    nm.notify(notifId, builder.build())
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /**
+     * Background poller that checks Firestore `messages` collection every 25 seconds so users receive
+     * instant status-bar notifications (with attached image!) even when the app is minimized in background.
+     */
+    private fun startBackgroundAnnouncementMonitor() {
+        bgNotificationScheduler.scheduleWithFixedDelay({
             try {
-                val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return@runOnUiThread
-                val intent = android.content.Intent(this, MainActivity::class.java).apply {
-                    flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra("open_messages", true)
-                }
-                val pendingFlags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                } else {
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                }
-                val pendingIntent = android.app.PendingIntent.getActivity(this, 2001, intent, pendingFlags)
+                val prefs = getSharedPreferences("maxplay_native_notifs", MODE_PRIVATE)
+                val isInitialized = prefs.getBoolean("initialized", false)
+                val seenSet = (prefs.getStringSet("seen_doc_ids", emptySet()) ?: emptySet()).toMutableSet()
 
-                val builder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    android.app.Notification.Builder(this, "maxplay_inbox_alerts")
-                } else {
-                    @Suppress("DEPRECATION")
-                    android.app.Notification.Builder(this)
+                val req = okhttp3.Request.Builder()
+                    .url(FIRESTORE_MESSAGES_REST_URL)
+                    .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                    .build()
+
+                InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use
+                    val bodyStr = resp.body?.string() ?: return@use
+                    val root = org.json.JSONObject(bodyStr)
+                    val docs = root.optJSONArray("documents") ?: return@use
+
+                    var newestNewTitle = ""
+                    var newestNewBody = ""
+                    var newestNewImg = ""
+
+                    for (i in 0 until docs.length()) {
+                        val doc = docs.optJSONObject(i) ?: continue
+                        val fullName = doc.optString("name", "")
+                        val docId = fullName.substringAfterLast("/")
+                        if (docId.isBlank()) continue
+
+                        val fields = doc.optJSONObject("fields") ?: continue
+                        val targetType = fields.optJSONObject("targetType")?.optString("stringValue", "all") ?: "all"
+                        if (targetType == "user") continue
+
+                        if (!seenSet.contains(docId)) {
+                            seenSet.add(docId)
+                            if (newestNewTitle.isBlank()) {
+                                newestNewTitle = fields.optJSONObject("title")?.optString("stringValue", "") ?: ""
+                                newestNewBody = fields.optJSONObject("body")?.optString("stringValue", "") ?: "New update in MaxPlay"
+                                val bannerUrl = fields.optJSONObject("bannerUrl")?.optString("stringValue", "") ?: ""
+                                val imageUrl = fields.optJSONObject("imageUrl")?.optString("stringValue", "") ?: ""
+                                val attachedFields = fields.optJSONObject("attachedContent")
+                                    ?.optJSONObject("mapValue")
+                                    ?.optJSONObject("fields")
+                                val backdropUrl = attachedFields?.optJSONObject("backdropUrl")?.optString("stringValue", "") ?: ""
+                                val posterUrl = attachedFields?.optJSONObject("posterUrl")?.optString("stringValue", "") ?: ""
+                                newestNewImg = listOf(bannerUrl, imageUrl, backdropUrl, posterUrl).firstOrNull { it.isNotBlank() } ?: ""
+                            }
+                        }
+                    }
+
+                    prefs.edit()
+                        .putBoolean("initialized", true)
+                        .putStringSet("seen_doc_ids", seenSet)
+                        .apply()
+
+                    // Notify immediately when a new announcement is published after initial seed
+                    if (isInitialized && newestNewTitle.isNotBlank()) {
+                        showNativeStatusNotification(newestNewTitle, newestNewBody, newestNewImg)
+                    }
                 }
-
-                builder.setSmallIcon(R.drawable.ic_launcher)
-                    .setContentTitle(title.ifBlank { "MaxPlay" })
-                    .setContentText(body)
-                    .setAutoCancel(true)
-                    .setContentIntent(pendingIntent)
-
-                nm.notify((System.currentTimeMillis() % 100000).toInt(), builder.build())
             } catch (_: Exception) {}
+        }, 12, 25, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    /**
+     * Shares an exported `.maxplay` container file using Android's native Share Sheet (Quick Share / Bluetooth / WhatsApp / Save).
+     */
+    fun shareMaxPlayFile(file: java.io.File): Boolean {
+        return try {
+            runOnUiThread {
+                try {
+                    val builder = android.os.StrictMode.VmPolicy.Builder()
+                    android.os.StrictMode.setVmPolicy(builder.build())
+                    val uri = android.net.Uri.fromFile(file)
+                    val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "application/octet-stream"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        putExtra(android.content.Intent.EXTRA_TITLE, file.name)
+                        putExtra(
+                            android.content.Intent.EXTRA_TEXT,
+                            "Open this .maxplay file in MaxPlay > Downloads > Transfer > Receive Files."
+                        )
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(android.content.Intent.createChooser(sendIntent, "Send ${file.name} via"))
+                } catch (_: Exception) {}
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -397,6 +604,23 @@ class MainActivity : AppCompatActivity() {
                 "window.__onMaxPlayVoiceResult && window.__onMaxPlayVoiceResult($escaped);",
                 null
             )
+        } else if (requestCode == 3002) {
+            val callback = fileUploadCallback
+            fileUploadCallback = null
+            if (resultCode == RESULT_OK && data != null) {
+                val results = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                    ?: data.data?.let { arrayOf(it) }
+                callback?.onReceiveValue(results)
+            } else {
+                callback?.onReceiveValue(null)
+            }
         }
+    }
+
+    override fun onDestroy() {
+        try {
+            bgNotificationScheduler.shutdownNow()
+        } catch (_: Exception) {}
+        super.onDestroy()
     }
 }

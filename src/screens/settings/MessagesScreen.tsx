@@ -326,13 +326,13 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
                     </p>
                   </div>
 
-                  {/* ATTACHED PROMOTIONAL BANNER */}
-                  {msg.bannerUrl && !attached && (
-                    <div className="relative w-full rounded-xl overflow-hidden border border-white/10 max-h-48 bg-black/40">
+                  {/* ATTACHED PROMOTIONAL BANNER / ADMIN IMAGE */}
+                  {(msg.bannerUrl || (msg as any).imageUrl || (msg as any).image) && (
+                    <div className="relative w-full rounded-xl overflow-hidden border border-white/10 max-h-56 bg-black/40">
                       <img 
-                        src={msg.bannerUrl || undefined} 
-                        alt="Promo"
-                        className="w-full h-full object-cover"
+                        src={msg.bannerUrl || (msg as any).imageUrl || (msg as any).image || undefined} 
+                        alt={msg.title || 'Attached Image'}
+                        className="w-full max-h-56 object-cover"
                         onError={(e) => {
                           (e.target as HTMLElement).style.display = 'none';
                         }}
