@@ -31,10 +31,10 @@ export const NEUTRAL_AMBIENT_PALETTE: AmbientColorPalette = {
 // In-memory cache for fast instant lookups
 const colorCache = new Map<string, AmbientColorPalette>();
 
-export function rgbToStatusBarHex(rgb: [number, number, number], intensity = 0.62): string {
-  const r = Math.max(10, Math.min(255, Math.round(rgb[0] * intensity)));
-  const g = Math.max(10, Math.min(255, Math.round(rgb[1] * intensity)));
-  const b = Math.max(10, Math.min(255, Math.round(rgb[2] * intensity)));
+export function rgbToStatusBarHex(rgb: [number, number, number], intensity = 1.0): string {
+  const r = Math.max(0, Math.min(255, Math.round(rgb[0] * intensity)));
+  const g = Math.max(0, Math.min(255, Math.round(rgb[1] * intensity)));
+  const b = Math.max(0, Math.min(255, Math.round(rgb[2] * intensity)));
   const toHex = (n: number) => n.toString(16).padStart(2, '0');
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }

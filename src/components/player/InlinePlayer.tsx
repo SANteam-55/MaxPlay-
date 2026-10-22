@@ -506,30 +506,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     };
   }, [showControls, isPlaying, activeMenu, isLocked, resetControlsTimeout]);
 
-  // Sync active video playing state with Native Android PiP Bridge and In-App Miniplayer state
-  useEffect(() => {
-    const autoPipEnabled = localStorage.getItem('maxplay_auto_miniplayer') !== 'false';
-    NativeBridgeService.setAutoPipEnabled(autoPipEnabled);
-    NativeBridgeService.setVideoPlayingState(Boolean(isPlaying && resolvedStreamUrl));
-  }, [isPlaying, resolvedStreamUrl]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      (window as any).__maxplayActivePlaybackState = {
-        streamUrl: resolvedStreamUrl,
-        currentTime: videoRef.current?.currentTime || currentTime || 0,
-        isPlaying: Boolean(isPlaying || (videoRef.current && !videoRef.current.paused)),
-        isIframe: Boolean(isIframe),
-      };
-    }
-  }, [resolvedStreamUrl, currentTime, isPlaying, isIframe]);
-
-  useEffect(() => {
-    return () => {
-      NativeBridgeService.setVideoPlayingState(false);
-    };
-  }, []);
-
   // Prevent default browser context menu (Back, Forward, Reload, Print, Share, etc.) during player interactions
   useEffect(() => {
     const handlePreventContextMenu = (e: Event) => {
@@ -903,6 +879,30 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
     return { isIframe: false, iframeUrl: '' };
   }, [activeVideoUrl, embedFallbackUrl]);
+
+  // Sync active video playing state with Native Android PiP Bridge and In-App Miniplayer state
+  useEffect(() => {
+    const autoPipEnabled = localStorage.getItem('maxplay_auto_miniplayer') !== 'false';
+    NativeBridgeService.setAutoPipEnabled(autoPipEnabled);
+    NativeBridgeService.setVideoPlayingState(Boolean(isPlaying && resolvedStreamUrl));
+  }, [isPlaying, resolvedStreamUrl]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__maxplayActivePlaybackState = {
+        streamUrl: resolvedStreamUrl,
+        currentTime: videoRef.current?.currentTime || currentTime || 0,
+        isPlaying: Boolean(isPlaying || (videoRef.current && !videoRef.current.paused)),
+        isIframe: Boolean(isIframe),
+      };
+    }
+  }, [resolvedStreamUrl, currentTime, isPlaying, isIframe]);
+
+  useEffect(() => {
+    return () => {
+      NativeBridgeService.setVideoPlayingState(false);
+    };
+  }, []);
 
   const lastActiveUrlRef = useRef<string>('');
   const isSwitchingSourceRef = useRef<boolean>(false);

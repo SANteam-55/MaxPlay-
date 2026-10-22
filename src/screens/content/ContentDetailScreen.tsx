@@ -1586,41 +1586,47 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     return merged;
   }, [discoveredAudioTracks, selectedServer, primaryServerUrl, secondaryServerUrl, playerVideoSources, activeMoviePart, currentEpisode, content.videoSources, content.availableLanguages, content.languages, (content as any)?.audioLanguages]);
 
-  // Proactively probe Server 2 / active stream master playlist so multi-language audio tracks and qualities appear immediately on Server 2
+  // Proactively probe both Server 1 and Server 2 master playlists so multi-language audio tracks and cross-server qualities (S1 / S2) appear immediately
   useEffect(() => {
-    const activeTargetUrl = selectedServer === 'server2' && secondaryServerUrl ? secondaryServerUrl : primaryServerUrl;
-    if (!activeTargetUrl) return;
     let cancelled = false;
 
-    const probeServerTracks = async () => {
+    const probeUrlForServer = async (targetUrl: string, srv: 'server1' | 'server2') => {
+      if (!targetUrl) return;
       try {
-        let m3u8Url = activeTargetUrl;
-        let refererUrl = SmartStreamService.resolveEmbedReferer(activeTargetUrl);
-        if (SmartStreamService.isExtractableSource(activeTargetUrl, true)) {
-          const res = await SmartStreamService.resolvePlaybackUrl(activeTargetUrl, true);
+        let m3u8Url = targetUrl;
+        const setSrvQualities = srv === 'server2' ? setS2DiscoveredQualities : setS1DiscoveredQualities;
+
+        if (SmartStreamService.isExtractableSource(targetUrl, true)) {
+          const res = await SmartStreamService.resolveStream(targetUrl, { forceRefresh: false });
           if (cancelled) return;
-          if (res?.ok && res.streamUrl) {
+          if (res?.streamUrl) {
             m3u8Url = res.streamUrl;
-            refererUrl = res.headers?.Referer || res.headers?.referer || res.referer || refererUrl;
-            if (Array.isArray(res.audioTracks) && res.audioTracks.length > 0) {
+            const meta = SmartStreamService.getCachedStreamMeta(targetUrl);
+            if (srv === selectedServer && meta && Array.isArray(meta.audioTracks) && meta.audioTracks.length > 0) {
               setDiscoveredAudioTracks((prev) => {
-                const next = Array.from(new Set([...prev, ...res.audioTracks!]));
+                const next = Array.from(new Set([...prev, ...meta.audioTracks!]));
                 return next.length !== prev.length ? next : prev;
               });
             }
-            if (Array.isArray(res.qualities) && res.qualities.length > 0) {
-              setDiscoveredQualities((prev) => {
-                const next = Array.from(new Set([...prev, ...res.qualities!]));
+            if (meta && Array.isArray(meta.qualities) && meta.qualities.length > 0) {
+              setSrvQualities((prev) => {
+                const next = Array.from(new Set([...prev, ...meta.qualities!]));
                 return next.length !== prev.length ? next : prev;
               });
+              if (srv === selectedServer) {
+                setDiscoveredQualities((prev) => {
+                  const next = Array.from(new Set([...prev, ...meta.qualities!]));
+                  return next.length !== prev.length ? next : prev;
+                });
+              }
             }
           }
         }
         if (m3u8Url && (m3u8Url.includes('.m3u8') || m3u8Url.includes('m3u8') || m3u8Url.includes('master.txt'))) {
-          const parsed = await ClientHlsDownloader.probeMasterPlaylist(m3u8Url, refererUrl);
+          const parsed = await ClientHlsDownloader.probeMasterPlaylist(m3u8Url);
           if (cancelled || !parsed) return;
-          if (parsed.audioTracks && parsed.audioTracks.length > 0) {
-            const labels = parsed.audioTracks.map((a) => a.label).filter(Boolean);
+          if (srv === selectedServer && parsed.audioTracks && parsed.audioTracks.length > 0) {
+            const labels = parsed.audioTracks.map((a: any) => (typeof a === 'string' ? a : a?.label || a?.name || '')).filter(Boolean);
             if (labels.length > 0) {
               setDiscoveredAudioTracks((prev) => {
                 const next = Array.from(new Set([...prev, ...labels]));
@@ -1629,25 +1635,112 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             }
           }
           if (parsed.qualities && parsed.qualities.length > 0) {
-            const qLabels = parsed.qualities.map((q) => q.label).filter(Boolean);
+            const qLabels = parsed.qualities.map((q: any) => (typeof q === 'string' ? q : q?.label || '')).filter(Boolean);
             if (qLabels.length > 0) {
-              setDiscoveredQualities((prev) => {
+              setSrvQualities((prev) => {
                 const next = Array.from(new Set([...prev, ...qLabels]));
                 return next.length !== prev.length ? next : prev;
               });
+              if (srv === selectedServer) {
+                setDiscoveredQualities((prev) => {
+                  const next = Array.from(new Set([...prev, ...qLabels]));
+                  return next.length !== prev.length ? next : prev;
+                });
+              }
             }
           }
         }
       } catch {}
     };
 
-    probeServerTracks();
+    if (primaryServerUrl) {
+      probeUrlForServer(primaryServerUrl, 'server1');
+    }
+    if (secondaryServerUrl) {
+      probeUrlForServer(secondaryServerUrl, 'server2');
+    }
+
     return () => {
       cancelled = true;
     };
   }, [selectedServer, primaryServerUrl, secondaryServerUrl]);
 
-  // Derive available qualities strictly for the active server (Server 1 vs Server 2), never mixing language names into qualities!
+  // Compute cross-server qualities with [S1] / [S2] badges so both servers' qualities appear in the unified Quality drawer & selector
+  const crossServerQualities = useMemo(() => {
+    const otherSet = new Set<string>();
+    const addOtherQual = (q?: string) => {
+      if (!q || typeof q !== 'string') return;
+      const clean = q.trim();
+      if (!clean || clean.toLowerCase() === 'auto' || clean.toLowerCase() === 'default') return;
+      if (isQualityKeyString(clean)) {
+        otherSet.add(clean);
+      }
+    };
+
+    if (selectedServer === 'server1') {
+      // Currently on Server 1 -> gather Server 2 qualities with [S2] badge
+      const hasS2 = Boolean(secondaryServerUrl || (secondaryServerQualityLinks && Object.keys(secondaryServerQualityLinks).length > 0));
+      if (!hasS2) return [];
+
+      if (secondaryServerQualityLinks && typeof secondaryServerQualityLinks === 'object') {
+        Object.entries(secondaryServerQualityLinks).forEach(([k, v]) => {
+          if (v && typeof v === 'string' && v.trim().length > 0) addOtherQual(k);
+        });
+      }
+      s2DiscoveredQualities.forEach(addOtherQual);
+      if (secondaryServerUrl) {
+        const cachedS2 = SmartStreamService.getCachedStreamMeta(secondaryServerUrl);
+        if (cachedS2 && Array.isArray((cachedS2 as any).qualities)) {
+          (cachedS2 as any).qualities.forEach(addOtherQual);
+        }
+      }
+      if (otherSet.size === 0 && secondaryServerUrl) {
+        ['1080p', '720p', '480p', '360p'].forEach(addOtherQual);
+      }
+      const sortedOther = Array.from(otherSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
+      return sortedOther.map((q) => `${q} [S2]`);
+    } else {
+      // Currently on Server 2 -> gather Server 1 qualities with [S1] badge
+      const s1Links =
+        (isSeries && !isMovie ? currentEpisode?.qualityLinks : (activeMoviePart as any)?.qualityLinks) ||
+        content.qualityLinks ||
+        {};
+      const hasS1 = Boolean(primaryServerUrl || (s1Links && Object.keys(s1Links).length > 0));
+      if (!hasS1) return [];
+
+      if (s1Links && typeof s1Links === 'object') {
+        Object.entries(s1Links).forEach(([k, v]) => {
+          if (v && typeof v === 'string' && v.trim().length > 0) addOtherQual(k);
+        });
+      }
+      s1DiscoveredQualities.forEach(addOtherQual);
+      if (primaryServerUrl) {
+        const cachedS1 = SmartStreamService.getCachedStreamMeta(primaryServerUrl);
+        if (cachedS1 && Array.isArray((cachedS1 as any).qualities)) {
+          (cachedS1 as any).qualities.forEach(addOtherQual);
+        }
+      }
+      if (otherSet.size === 0 && primaryServerUrl) {
+        ['1080p', '720p', '480p', '360p'].forEach(addOtherQual);
+      }
+      const sortedOther = Array.from(otherSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
+      return sortedOther.map((q) => `${q} [S1]`);
+    }
+  }, [
+    selectedServer,
+    primaryServerUrl,
+    secondaryServerUrl,
+    secondaryServerQualityLinks,
+    s1DiscoveredQualities,
+    s2DiscoveredQualities,
+    isSeries,
+    isMovie,
+    currentEpisode,
+    activeMoviePart,
+    content.qualityLinks,
+  ]);
+
+  // Derive available qualities for the active server + cross-server qualities ([S1] / [S2]), never mixing language names into qualities!
   const availableDetailQualities = useMemo(() => {
     const qSet = new Set<string>();
     const addQual = (q?: string) => {
@@ -1688,8 +1781,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
 
     const sorted = Array.from(qSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
-    return ['auto', ...sorted];
-  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl]);
+    return ['auto', ...sorted, ...crossServerQualities];
+  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl, crossServerQualities]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -2528,7 +2621,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 } catch {}
               }}
               onDiscoveredAudioTracks={setDiscoveredAudioTracks}
-              onDiscoveredQualities={setDiscoveredQualities}
+              onDiscoveredQualities={(quals) => {
+                setDiscoveredQualities(quals);
+                if (selectedServer === 'server2') {
+                  setS2DiscoveredQualities(quals);
+                } else {
+                  setS1DiscoveredQualities(quals);
+                }
+              }}
               onProgress={handleProgress}
               onDuration={handleDurationUpdate}
               onPause={(time, totalDuration) => {
@@ -2919,11 +3019,23 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       qualities={availableDetailQualities}
                       activeQuality={activeQuality}
                       onSelectQuality={(newQual) => {
+                        const s2Match = /\[S2\]/i.test(newQual);
+                        const s1Match = /\[S1\]/i.test(newQual);
+                        const cleanQ = newQual.replace(/\s*\[(S1|S2)\]/i, '').trim();
                         saveProgressNow(playbackPosition, false, true);
-                        setActiveQuality(newQual);
+                        if (s2Match && selectedServer !== 'server2') {
+                          handleSelectServer('server2');
+                          setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
+                          setTimeout(() => setToastMessage(null), 2800);
+                        } else if (s1Match && selectedServer !== 'server1') {
+                          handleSelectServer('server1');
+                          setToastMessage(`Switched to Server 1 • ${cleanQ.toUpperCase()}`);
+                          setTimeout(() => setToastMessage(null), 2800);
+                        }
+                        setActiveQuality(cleanQ);
                         try {
-                          localStorage.setItem('maxplay_preferred_quality', newQual);
-                          localStorage.setItem('maxplay_video_quality', newQual);
+                          localStorage.setItem('maxplay_preferred_quality', cleanQ);
+                          localStorage.setItem('maxplay_video_quality', cleanQ);
                         } catch {}
                       }}
                     />

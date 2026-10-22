@@ -1394,10 +1394,10 @@ export class ClientHlsDownloader {
         .replace(/_+/g, '_')
         .slice(0, 45);
       const epSuffix =
-        enrichedMeta.episodeNumber !== undefined
-          ? `_Ep${enrichedMeta.episodeNumber}`
-          : enrichedMeta.episodeIndex !== undefined
-          ? `_Ep${Number(enrichedMeta.episodeIndex) + 1}`
+        (enrichedMeta as any).episodeNumber !== undefined
+          ? `_Ep${(enrichedMeta as any).episodeNumber}`
+          : (enrichedMeta as any).episodeIndex !== undefined
+          ? `_Ep${Number((enrichedMeta as any).episodeIndex) + 1}`
           : '';
       const fileName = `${cleanTitle}${epSuffix}.maxplay`;
 

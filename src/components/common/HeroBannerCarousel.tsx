@@ -248,15 +248,11 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
             className="absolute inset-0 h-full w-full object-cover object-center transition-transform duration-1000 group-hover:scale-105"
           />
           
-          {/* Smooth Multi-Stop Bottom Cinema Gradient + Ambient Color Side-Effect Fade */}
+          {/* Smooth Multi-Stop Bottom Cinema Gradient */}
           <div 
-            className="absolute inset-x-0 bottom-0 h-44 sm:h-52 pointer-events-none z-10 transition-all duration-700"
+            className="absolute inset-x-0 bottom-0 h-40 sm:h-48 pointer-events-none z-10"
             style={{
-              background: `
-                radial-gradient(ellipse 90% 80% at 15% 100%, rgba(${palette.topLeftRgb.join(',')}, 0.42) 0%, transparent 70%),
-                radial-gradient(ellipse 90% 80% at 85% 100%, rgba(${palette.topRightRgb.join(',')}, 0.42) 0%, transparent 70%),
-                linear-gradient(to top, #0A0A0A 0%, rgba(${palette.primaryRgb.join(',')}, 0.30) 24%, rgba(10, 10, 10, 0.62) 48%, rgba(10, 10, 10, 0.18) 75%, transparent 100%)
-              `
+              background: 'linear-gradient(to top, #0A0A0A 0%, rgba(10, 10, 10, 0.72) 38%, rgba(10, 10, 10, 0.22) 72%, transparent 100%)'
             }}
           />
 

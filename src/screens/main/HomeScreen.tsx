@@ -153,7 +153,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     try {
       sessionStorage.setItem('MAXPLAY_HOME_SCROLL_TOP', String(top));
     } catch (_) {}
-    const nextScrolled = top > 80;
+    const nextScrolled = top > 8;
     setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
   }, []);
 
@@ -244,23 +244,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const filteredCinema = useMemo(() => getFilteredContent(cinema as ContentItem[]), [getFilteredContent, cinema]);
   const filteredForYou = useMemo(() => getFilteredContent(forYou as ContentItem[]), [getFilteredContent, forYou]);
 
-  // Only activate banner color fade when data is loaded, hero banner exists, and page is not scrolled
+  // Only activate banner color fade when data is loaded, hero banner exists, and Hero Banner is aligned at the top (!isScrolled)
   const hasBannerData = !loading && filteredHeroBanner.length > 0;
 
-  // Sync phone top Status Bar color (time, network, battery bar) with Hero Banner top glow color
+  const topGlowRgb = useMemo<[number, number, number]>(() => {
+    const raw = bannerPalette.primaryRgb || bannerPalette.topCenterRgb || [18, 18, 24];
+    const isNeutral = raw[0] === 18 && raw[1] === 18 && raw[2] === 24;
+    if (isNeutral) return [10, 10, 10];
+    return [raw[0], raw[1], raw[2]];
+  }, [bannerPalette]);
+
+  // Sync phone top Status Bar color with the EXACT Hero Banner fade color ONLY when on Home at top position; otherwise simple black (#0A0A0A)
   useEffect(() => {
-    if (hasBannerData && !isScrolled) {
-      const topRgb = bannerPalette.topCenterRgb || bannerPalette.primaryRgb || [18, 18, 24];
-      const isNeutral = topRgb[0] === 18 && topRgb[1] === 18 && topRgb[2] === 24;
-      const statusHex = isNeutral ? '#0A0A0A' : rgbToStatusBarHex(topRgb, 0.62);
-      NativeBridgeService.setNativeStatusBarColor(statusHex);
-    } else {
-      NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
-    }
+    const applyStatusBar = () => {
+      const isHomeVisible = (window as any).__maxplayIsHomeTopVisible !== false;
+      const isNeutral = topGlowRgb[0] === 10 && topGlowRgb[1] === 10 && topGlowRgb[2] === 10;
+      if (isHomeVisible && hasBannerData && !isScrolled && !isNeutral) {
+        const exactHex = rgbToStatusBarHex(topGlowRgb, 1.0);
+        NativeBridgeService.setNativeStatusBarColor(exactHex);
+      } else {
+        NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
+      }
+    };
+
+    applyStatusBar();
+    window.addEventListener('MAXPLAY_STATUSBAR_RECHECK', applyStatusBar);
     return () => {
+      window.removeEventListener('MAXPLAY_STATUSBAR_RECHECK', applyStatusBar);
       NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
     };
-  }, [hasBannerData, isScrolled, bannerPalette]);
+  }, [hasBannerData, isScrolled, topGlowRgb]);
 
   return (
     <div 
@@ -268,65 +281,31 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       onScroll={handleScroll}
       className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] pb-24 md:pb-8 text-left select-none scrollbar-none relative"
     >
-      {/* Dynamic OTT Atmospheric Top Ambient Glow: Flows from the very top status bar edge (0px), wraps the search bar and hot tabs, and merges seamlessly into the hero banner */}
-      <div 
-        className={`absolute top-0 left-0 right-0 h-[230px] pointer-events-none z-20 transition-opacity duration-700 ease-in-out ${
-          hasBannerData && !isScrolled ? 'opacity-100' : 'opacity-0'
-        }`} 
-        style={{
-          background: `
-            radial-gradient(ellipse 130% 100% at 0% 0%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.82) 0%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.48) 48%, 
-              rgba(${bannerPalette.topLeftRgb.join(',')}, 0.16) 78%, 
-              transparent 100%),
-            radial-gradient(ellipse 130% 100% at 100% 0%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.82) 0%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.48) 48%, 
-              rgba(${bannerPalette.topRightRgb.join(',')}, 0.16) 78%, 
-              transparent 100%),
-            linear-gradient(to bottom, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.72) 0%, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.36) 48%, 
-              rgba(${bannerPalette.topCenterRgb.join(',')}, 0.10) 82%, 
-              transparent 100%),
-            linear-gradient(to bottom, 
-              rgba(10, 10, 10, 0.45) 0%, 
-              rgba(10, 10, 10, 0.25) 50%, 
-              transparent 100%)
-          `
-        }}
-      />
-
-      {/* Deep Hero Banner Lower Side-Effect Ambient Halo: Extends the Hero Banner's color glow down below the banner into Categories & Top 10 */}
-      <div
-        className={`absolute top-[180px] left-0 right-0 h-[420px] pointer-events-none z-[1] transition-all duration-700 ease-in-out ${
-          hasBannerData ? 'opacity-100' : 'opacity-0'
-        }`}
-        style={{
-          background: `
-            radial-gradient(ellipse 110% 70% at 20% 35%, rgba(${bannerPalette.topLeftRgb.join(',')}, 0.34) 0%, transparent 75%),
-            radial-gradient(ellipse 110% 70% at 80% 35%, rgba(${bannerPalette.topRightRgb.join(',')}, 0.34) 0%, transparent 75%),
-            radial-gradient(ellipse 120% 80% at 50% 45%, rgba(${bannerPalette.primaryRgb.join(',')}, 0.28) 0%, rgba(${bannerPalette.primaryRgb.join(',')}, 0.10) 55%, transparent 100%)
-          `
-        }}
-      />
-
-      {/* Default Clean Dark Top Vignette: Active when loading or before data is ready */}
-      <div 
-        className={`absolute top-0 left-0 right-0 h-[180px] pointer-events-none z-20 transition-opacity duration-500 ease-in-out ${
-          !isScrolled && !hasBannerData ? 'opacity-100' : 'opacity-0'
-        }`}
-        style={{
-          background: 'linear-gradient(to bottom, rgba(10, 10, 10, 0.85) 0%, rgba(10, 10, 10, 0.45) 50%, rgba(10, 10, 10, 0.10) 80%, transparent 100%)'
-        }}
-      />
-
-      {/* Sticky Header Box (Header + Category Tabs) */}
+      {/* Sticky Header Box (Header + Category Tabs: Search Bar + Trending, LIVE, Movies, TV, Anime) */}
       <div className="sticky top-0 left-0 right-0 z-50 pt-3 pb-3 px-4">
-        {/* Solid Black Header Box Background (Smoothly fades in on scroll, fades out at top) */}
+        {/* Hero Banner Top Color Fade: Matches the exact Sticky Header Box height (from 0px Status Bar down to the bottom of Trending/LIVE/Movies tabs where it becomes 100% invisible) */}
+        <div
+          className={`absolute inset-0 pointer-events-none transition-opacity duration-300 ease-in-out ${
+            hasBannerData && !isScrolled ? 'opacity-100' : 'opacity-0'
+          }`}
+          style={{
+            background: `linear-gradient(to bottom, rgb(${topGlowRgb.join(',')}) 0%, rgba(${topGlowRgb.join(',')}, 0.85) 28%, rgba(${topGlowRgb.join(',')}, 0.48) 62%, rgba(${topGlowRgb.join(',')}, 0.14) 86%, rgba(${topGlowRgb.join(',')}, 0) 100%)`
+          }}
+        />
+
+        {/* Default Clean Dark Top Vignette when loading */}
+        <div
+          className={`absolute inset-0 pointer-events-none transition-opacity duration-300 ease-in-out ${
+            !isScrolled && !hasBannerData ? 'opacity-100' : 'opacity-0'
+          }`}
+          style={{
+            background: 'linear-gradient(to bottom, rgba(10, 10, 10, 0.88) 0%, rgba(10, 10, 10, 0.45) 55%, rgba(10, 10, 10, 0) 100%)'
+          }}
+        />
+
+        {/* Solid Black Header Box Background (Smoothly appears on scroll, hidden when Hero Banner is aligned at top) */}
         <div 
-          className={`absolute inset-0 bg-[#0A0A0A] border-b border-white/10 shadow-2xl pointer-events-none transition-opacity duration-400 ease-in-out ${
+          className={`absolute inset-0 bg-[#0A0A0A] border-b border-white/10 shadow-2xl pointer-events-none transition-opacity duration-300 ease-in-out ${
             isScrolled ? 'opacity-100' : 'opacity-0'
           }`} 
         />

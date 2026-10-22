@@ -22,7 +22,7 @@ import { NativeBridgeService } from '../services/nativeBridgeService';
 import { adManager } from '../services/adService';
 import Hls from 'hls.js';
 import { motion, AnimatePresence } from 'motion/react';
-import { WifiOff, X, Download, ShieldAlert, ArrowUp, Maximize2, Play, Pause } from 'lucide-react';
+import { WifiOff, X, Download, ShieldAlert, ArrowUp, Maximize2, Play, Pause, Bell } from 'lucide-react';
 
 export const RootNavigator: React.FC = () => {
   const { user, isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
@@ -86,53 +86,6 @@ export const RootNavigator: React.FC = () => {
     };
   }, []);
 
-  // Real Phone Status-Bar Notifications for Me > Messages (Announcements) — works for all users immediately
-  useEffect(() => {
-    let isFirstSnapshot = true;
-
-    const unsub = subscribeToAnnouncements(user?.uid, (msgs) => {
-      if (!msgs || msgs.length === 0) {
-        isFirstSnapshot = false;
-        return;
-      }
-      try {
-        const rawSeen = localStorage.getItem('maxplay_notified_msg_ids');
-        const seenIds: string[] = rawSeen ? JSON.parse(rawSeen) : [];
-        const seenSet = new Set(seenIds);
-
-        // Find unread messages that haven't been pushed to the phone's notification shade yet
-        const newMessages = msgs.filter((m) => m.id && !seenSet.has(m.id) && m.isUnread !== false);
-
-        if (newMessages.length > 0) {
-          // On first load, notify at most the single newest unread announcement so we don't spam old history
-          const toNotify = isFirstSnapshot ? [newMessages[0]] : newMessages;
-          toNotify.forEach((m) => {
-            if (m && m.title) {
-              const attachedImg =
-                m.bannerUrl ||
-                (m as any).imageUrl ||
-                (m as any).image ||
-                m.attachedContent?.backdropUrl ||
-                m.attachedContent?.posterUrl ||
-                '';
-              NativeBridgeService.showNativeNotification(
-                m.title,
-                m.body || 'New update in MaxPlay Messages',
-                attachedImg
-              );
-            }
-          });
-
-          const updatedSeen = Array.from(new Set([...seenIds, ...msgs.map((m) => m.id).filter(Boolean)])).slice(-200);
-          localStorage.setItem('maxplay_notified_msg_ids', JSON.stringify(updatedSeen));
-        }
-      } catch {}
-      isFirstSnapshot = false;
-    });
-
-    return () => unsub();
-  }, [user?.uid]);
-
   // PWA State Lock - Check if user is resuming an existing session or standalone mode
   const isPwaStandalone = typeof window !== 'undefined' && 
     (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true);
@@ -148,6 +101,114 @@ export const RootNavigator: React.FC = () => {
   
   const { contentList } = useContent();
   const [downloadBadgeCount, setDownloadBadgeCount] = useState<number>(0);
+
+  // In-App Push Notification Banner state (appears alongside native Android Status-Bar Notification)
+  const [inAppNotif, setInAppNotif] = useState<{
+    id: string;
+    title: string;
+    body: string;
+    imageUrl?: string;
+  } | null>(null);
+  const latestAnnouncementsRef = useRef<any[]>([]);
+
+  // Real Phone Status-Bar + In-App Push Notifications for Me > Messages (Announcements)
+  useEffect(() => {
+    if (showSplash) return;
+    let isFirstSnapshot = true;
+
+    const processAnnouncements = (rawMsgs: any[], forceNotifyLatest = false) => {
+      if (!rawMsgs || rawMsgs.length === 0) {
+        isFirstSnapshot = false;
+        return;
+      }
+      latestAnnouncementsRef.current = rawMsgs;
+
+      try {
+        // Always sort newest-first by createdAt / date so index 0 is guaranteed to be the latest Admin message!
+        const sortedMsgs = [...rawMsgs].sort((a, b) => {
+          const tA = new Date(a.createdAt || a.date || 0).getTime() || 0;
+          const tB = new Date(b.createdAt || b.date || 0).getTime() || 0;
+          return tB - tA;
+        });
+
+        const rawSeen = localStorage.getItem('maxplay_notified_msg_ids_v2');
+        const seenIds: string[] = rawSeen ? JSON.parse(rawSeen) : [];
+        const seenSet = new Set(seenIds);
+
+        const rawRead = localStorage.getItem('maxplay_read_msgs');
+        const readIds: string[] = rawRead ? JSON.parse(rawRead) : [];
+        const readSet = new Set(readIds);
+
+        const newMessages = sortedMsgs.filter(
+          (m) => m.id && !seenSet.has(m.id) && !readSet.has(m.id) && m.isUnread !== false
+        );
+
+        const listToNotify =
+          newMessages.length > 0
+            ? isFirstSnapshot
+              ? [newMessages[0]]
+              : newMessages
+            : forceNotifyLatest && sortedMsgs[0] && !readSet.has(sortedMsgs[0].id)
+            ? [sortedMsgs[0]]
+            : [];
+
+        if (listToNotify.length > 0) {
+          listToNotify.forEach((m) => {
+            if (m && m.title) {
+              const attachedImg =
+                m.bannerUrl ||
+                (m as any).imageUrl ||
+                (m as any).image ||
+                m.attachedContent?.backdropUrl ||
+                m.attachedContent?.posterUrl ||
+                '';
+              const bodyText = m.body || 'New update in MaxPlay Messages';
+
+              NativeBridgeService.showNativeNotification(m.title, bodyText, attachedImg);
+
+              setInAppNotif({
+                id: m.id,
+                title: m.title,
+                body: bodyText,
+                imageUrl: attachedImg,
+              });
+            }
+          });
+
+          const updatedSeen = Array.from(
+            new Set([...seenIds, ...sortedMsgs.map((m) => m.id).filter(Boolean)])
+          ).slice(-200);
+          localStorage.setItem('maxplay_notified_msg_ids_v2', JSON.stringify(updatedSeen));
+        }
+      } catch {}
+      isFirstSnapshot = false;
+    };
+
+    const unsub = subscribeToAnnouncements(user?.uid, (msgs) => {
+      processAnnouncements(msgs, false);
+    });
+
+    const handlePermissionGranted = () => {
+      if (latestAnnouncementsRef.current.length > 0) {
+        processAnnouncements(latestAnnouncementsRef.current, true);
+      }
+    };
+    window.addEventListener('MAXPLAY_NOTIFICATION_PERMISSION_GRANTED', handlePermissionGranted);
+
+    return () => {
+      unsub();
+      window.removeEventListener('MAXPLAY_NOTIFICATION_PERMISSION_GRANTED', handlePermissionGranted);
+    };
+  }, [user?.uid, showSplash]);
+
+  // Auto-dismiss in-app push notification banner after 7 seconds
+  useEffect(() => {
+    if (!inAppNotif) return;
+    const timer = setTimeout(() => {
+      setInAppNotif(null);
+    }, 7000);
+    return () => clearTimeout(timer);
+  }, [inAppNotif]);
 
   // Subscribe to real-time active downloads for badge
   useEffect(() => {
@@ -180,6 +241,17 @@ export const RootNavigator: React.FC = () => {
   const lastBackPressTime = useRef<number>(0);
 
   const isCurrentDetailOpen = Boolean(detailOpenByTab[activeTab]);
+
+  // Keep phone Status Bar simple black (#0A0A0A) on all non-Home tabs or when any Detail/Filter screen is open
+  useEffect(() => {
+    const isHomeTopScreen = activeTab === 'home' && !isCurrentDetailOpen && !showSplash && isAuthenticated;
+    (window as any).__maxplayIsHomeTopVisible = isHomeTopScreen;
+    if (!isHomeTopScreen) {
+      NativeBridgeService.setNativeStatusBarColor('#0A0A0A');
+    } else {
+      window.dispatchEvent(new CustomEvent('MAXPLAY_STATUSBAR_RECHECK'));
+    }
+  }, [activeTab, isCurrentDetailOpen, showSplash, isAuthenticated]);
 
   // Sync PWA active tab state without triggering hash-anchor scroll-to-top
   const setActiveTab = (tab: TabType) => {
@@ -683,6 +755,62 @@ export const RootNavigator: React.FC = () => {
               <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
                 PiP
               </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Real-Time In-App Push Notification Banner for Admin Announcements (with Attached Image) */}
+      <AnimatePresence>
+        {inAppNotif && (
+          <motion.div
+            initial={{ opacity: 0, y: -32, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -32, scale: 0.96 }}
+            transition={{ duration: 0.25 }}
+            className="fixed top-3 left-3 right-3 sm:left-auto sm:right-4 sm:w-96 z-[99998]"
+          >
+            <div
+              onClick={() => {
+                setInAppNotif(null);
+                setActiveTabState('me');
+                localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'me');
+                setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_ME_MESSAGES'));
+                }, 120);
+              }}
+              className="flex flex-col gap-2.5 bg-[#14141D]/95 backdrop-blur-xl p-3.5 rounded-2xl border border-purple-500/40 shadow-[0_12px_40px_rgba(0,0,0,0.85)] cursor-pointer hover:border-purple-400/70 transition"
+            >
+              <div className="flex items-start justify-between gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-[#8B5CF6] to-[#06B6D4] text-white shrink-0 shadow-md">
+                    <Bell className="h-4 w-4" />
+                  </div>
+                  <div className="flex flex-col text-left min-w-0">
+                    <span className="text-xs font-extrabold text-white truncate">{inAppNotif.title}</span>
+                    <span className="text-[11px] text-[#D4D4D8] line-clamp-2 leading-snug">{inAppNotif.body}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setInAppNotif(null);
+                  }}
+                  className="p-1 rounded-lg text-[#71717A] hover:text-white cursor-pointer shrink-0"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {inAppNotif.imageUrl && (
+                <div className="w-full h-28 rounded-xl overflow-hidden bg-black/50 border border-white/10">
+                  <img
+                    src={inAppNotif.imageUrl}
+                    alt={inAppNotif.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
             </div>
           </motion.div>
         )}

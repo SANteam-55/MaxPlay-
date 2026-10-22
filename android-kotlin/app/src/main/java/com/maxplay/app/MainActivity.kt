@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
         const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"
         const val LIVE_APP_URL = "https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app"
         const val FIRESTORE_MESSAGES_REST_URL =
-            "https://firestore.googleapis.com/v1/projects/gen-lang-client-0291911037/databases/ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d/documents/messages?pageSize=12"
+            "https://firestore.googleapis.com/v1/projects/gen-lang-client-0291911037/databases/ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d/documents/messages?pageSize=60"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -487,7 +487,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 try {
                     webView.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('MAXPLAY_LOCAL_VIDEOS_PERMISSION_GRANTED'));",
+                        "window.dispatchEvent(new CustomEvent('MAXPLAY_LOCAL_VIDEOS_PERMISSION_GRANTED')); window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATION_PERMISSION_GRANTED'));",
                         null
                     )
                 } catch (_: Exception) {}
@@ -519,6 +519,12 @@ class MainActivity : AppCompatActivity() {
                 }
             } else null
 
+            val appLogoBitmap: android.graphics.Bitmap? = try {
+                android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+            } catch (_: Exception) {
+                null
+            }
+
             runOnUiThread {
                 try {
                     val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return@runOnUiThread
@@ -540,7 +546,7 @@ class MainActivity : AppCompatActivity() {
                         android.app.Notification.Builder(this)
                     }
 
-                    builder.setSmallIcon(R.drawable.ic_launcher)
+                    builder.setSmallIcon(R.drawable.ic_stat_maxplay)
                         .setContentTitle(title.ifBlank { "MaxPlay" })
                         .setContentText(body)
                         .setAutoCancel(true)
@@ -555,6 +561,9 @@ class MainActivity : AppCompatActivity() {
                                 .setSummaryText(body)
                         )
                     } else {
+                        if (appLogoBitmap != null) {
+                            builder.setLargeIcon(appLogoBitmap)
+                        }
                         builder.setStyle(
                             android.app.Notification.BigTextStyle()
                                 .setBigContentTitle(title.ifBlank { "MaxPlay" })
@@ -570,15 +579,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Background poller that checks Firestore `messages` collection every 25 seconds so users receive
+     * Background poller that checks Firestore `messages` collection every 15 seconds so users receive
      * instant status-bar notifications (with attached image!) even when the app is minimized in background.
      */
     private fun startBackgroundAnnouncementMonitor() {
         bgNotificationScheduler.scheduleWithFixedDelay({
             try {
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        return@scheduleWithFixedDelay
+                    }
+                }
+
                 val prefs = getSharedPreferences("maxplay_native_notifs", MODE_PRIVATE)
                 val isInitialized = prefs.getBoolean("initialized", false)
-                val seenSet = (prefs.getStringSet("seen_doc_ids", emptySet()) ?: emptySet()).toMutableSet()
+                val seenSet = HashSet(prefs.getStringSet("seen_doc_ids", emptySet()) ?: emptySet())
 
                 val req = okhttp3.Request.Builder()
                     .url(FIRESTORE_MESSAGES_REST_URL)
@@ -594,6 +609,7 @@ class MainActivity : AppCompatActivity() {
                     var newestNewTitle = ""
                     var newestNewBody = ""
                     var newestNewImg = ""
+                    var newestTimestamp = ""
 
                     for (i in 0 until docs.length()) {
                         val doc = docs.optJSONObject(i) ?: continue
@@ -607,7 +623,10 @@ class MainActivity : AppCompatActivity() {
 
                         if (!seenSet.contains(docId)) {
                             seenSet.add(docId)
-                            if (newestNewTitle.isBlank()) {
+                            val createdAt = fields.optJSONObject("createdAt")?.optString("stringValue", "")
+                                ?: doc.optString("createTime", "")
+                            if (newestNewTitle.isBlank() || createdAt >= newestTimestamp) {
+                                newestTimestamp = createdAt
                                 newestNewTitle = fields.optJSONObject("title")?.optString("stringValue", "") ?: ""
                                 newestNewBody = fields.optJSONObject("body")?.optString("stringValue", "") ?: "New update in MaxPlay"
                                 val bannerUrl = fields.optJSONObject("bannerUrl")?.optString("stringValue", "") ?: ""
@@ -627,13 +646,13 @@ class MainActivity : AppCompatActivity() {
                         .putStringSet("seen_doc_ids", seenSet)
                         .apply()
 
-                    // Notify immediately when a new announcement is published after initial seed
+                    // Notify immediately when a new announcement is published
                     if (isInitialized && newestNewTitle.isNotBlank()) {
                         showNativeStatusNotification(newestNewTitle, newestNewBody, newestNewImg)
                     }
                 }
             } catch (_: Exception) {}
-        }, 12, 25, java.util.concurrent.TimeUnit.SECONDS)
+        }, 6, 15, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     /**
