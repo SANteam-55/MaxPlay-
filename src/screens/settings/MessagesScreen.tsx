@@ -15,11 +15,22 @@ import {
   ExternalLink,
   Volume2,
   Calendar,
-  Layers
+  Layers,
+  Download,
+  ArrowUp,
 } from 'lucide-react';
 import { useAuthContext } from '../../context/AuthContext';
 import { subscribeToAnnouncements } from '../../services/contentService';
 import { AnnouncementMessage } from '../../types';
+import {
+  useGeneralSettings,
+  extractVersionFromAdminMessage,
+  extractApkUrlFromMessage,
+  isAdminMessageForceUpdate,
+  isVersionNewer,
+  formatVersionTag,
+} from '../../hooks/useGeneralSettings';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 
 interface MessagesScreenProps {
   onBack: () => void;
@@ -28,10 +39,12 @@ interface MessagesScreenProps {
 
 export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayContent }) => {
   const { user } = useAuthContext();
+  const { currentApkVersion, formattedCurrentVersion, apkDownloadUrl } = useGeneralSettings();
   const [messages, setMessages] = useState<AnnouncementMessage[]>([]);
   const [filterType, setFilterType] = useState<'all' | 'releases' | 'notices' | 'promos' | 'unread'>('all');
   const [dismissedIds, setDismissedIds] = useState<string[]>([]);
   const [readIds, setReadIds] = useState<string[]>([]);
+  const [msgApkProgress, setMsgApkProgress] = useState<Record<string, { status: string; progress: number; message: string }>>({});
 
   useEffect(() => {
     // Load local read/dismissed state from localStorage
@@ -238,19 +251,32 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
             const isEpisodeUpdate = msg.type === 'episode_update';
             const isUrgent = msg.priority === 'urgent';
             const isImportant = msg.priority === 'important';
+            const detectedUpdateVer = extractVersionFromAdminMessage(msg);
+            const isNewerApkUpdate =
+              Boolean(detectedUpdateVer) &&
+              isVersionNewer(detectedUpdateVer!, currentApkVersion);
+            const isForceApkMsg = Boolean(detectedUpdateVer) && isAdminMessageForceUpdate(msg);
+            const msgApkUrl =
+              extractApkUrlFromMessage(msg) || apkDownloadUrl || msg.actionUrl || '';
 
             return (
               <div
                 key={msg.id}
                 className={`group relative flex flex-col rounded-2xl bg-[#131316] border transition-all duration-200 overflow-hidden ${
-                  isUnread
+                  isNewerApkUpdate
+                    ? 'border-red-500/60 shadow-lg shadow-red-600/15'
+                    : isUnread
                     ? 'border-[#06B6D4]/40 shadow-lg shadow-[#06B6D4]/5'
                     : 'border-white/5 hover:border-white/15'
                 }`}
               >
                 {/* Glowing Active Border Stripe */}
-                {isUnread && (
-                  <div className="absolute top-0 left-0 bottom-0 w-1 bg-gradient-to-b from-[#06B6D4] to-[#8B5CF6]" />
+                {isNewerApkUpdate ? (
+                  <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-gradient-to-b from-red-500 via-rose-500 to-orange-500 animate-pulse" />
+                ) : (
+                  isUnread && (
+                    <div className="absolute top-0 left-0 bottom-0 w-1 bg-gradient-to-b from-[#06B6D4] to-[#8B5CF6]" />
+                  )
                 )}
 
                 <div className="p-4 flex flex-col gap-3">
@@ -275,12 +301,29 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
 
                       {/* Name & Handle */}
                       <div className="flex flex-col min-w-0">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-xs font-black text-white truncate">{sender.name || 'MaxPlay Official'}</span>
                           {sender.isVerified !== false && (
                             <CheckCircle2 className="h-3.5 w-3.5 text-[#06B6D4] fill-[#06B6D4]/20 flex-shrink-0" />
                           )}
-                          {isUrgent && (
+                          {detectedUpdateVer && (
+                            <span
+                              className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase flex items-center gap-1 ${
+                                isNewerApkUpdate
+                                  ? 'bg-red-600 text-white shadow-sm shadow-red-600/50 animate-pulse'
+                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              }`}
+                            >
+                              <ArrowUp className="h-2.5 w-2.5 stroke-[3]" />
+                              <span>APK {formatVersionTag(detectedUpdateVer)}</span>
+                            </span>
+                          )}
+                          {isForceApkMsg && (
+                            <span className="bg-red-500/20 text-red-300 border border-red-500/40 text-[9px] font-black px-1.5 py-0.5 rounded uppercase">
+                              Force Update
+                            </span>
+                          )}
+                          {isUrgent && !isForceApkMsg && (
                             <span className="bg-red-500/20 text-red-400 border border-red-500/30 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">
                               Urgent
                             </span>
@@ -337,6 +380,85 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
                           (e.target as HTMLElement).style.display = 'none';
                         }}
                       />
+                    </div>
+                  )}
+
+                  {/* ADMIN APK UPDATE ACTION CARD */}
+                  {detectedUpdateVer && (
+                    <div
+                      className={`mt-1 flex flex-col gap-2.5 rounded-xl p-3 border ${
+                        isNewerApkUpdate
+                          ? 'bg-red-950/30 border-red-500/40'
+                          : 'bg-emerald-950/20 border-emerald-500/30'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex flex-col">
+                          <span
+                            className={`text-[10px] font-black uppercase tracking-wider ${
+                              isNewerApkUpdate ? 'text-red-400' : 'text-emerald-400'
+                            }`}
+                          >
+                            {isNewerApkUpdate
+                              ? `Newer than your Settings > Check update (${formattedCurrentVersion})`
+                              : `Matches/Older than your Check update (${formattedCurrentVersion})`}
+                          </span>
+                          <span className="text-xs font-extrabold text-white mt-0.5">
+                            Official MaxPlay APK {formatVersionTag(detectedUpdateVer)}
+                          </span>
+                        </div>
+                        {msgApkUrl && (
+                          <button
+                            type="button"
+                            disabled={msgApkProgress[msg.id]?.status === 'downloading'}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              NativeBridgeService.triggerApkUpdate(
+                                msgApkUrl,
+                                formatVersionTag(detectedUpdateVer),
+                                msg.title || `MaxPlay ${formatVersionTag(detectedUpdateVer)} Update`,
+                                (state) =>
+                                  setMsgApkProgress((prev) => ({
+                                    ...prev,
+                                    [msg.id]: state,
+                                  }))
+                              );
+                            }}
+                            className={`inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-black uppercase tracking-wider shadow-md transition active:scale-95 cursor-pointer shrink-0 disabled:opacity-75 ${
+                              isNewerApkUpdate
+                                ? 'bg-gradient-to-r from-red-600 to-rose-500 text-white shadow-red-600/30'
+                                : 'bg-emerald-500 text-black'
+                            }`}
+                          >
+                            <Download className="h-3.5 w-3.5 stroke-[2.5]" />
+                            <span>
+                              {msgApkProgress[msg.id]?.status === 'downloading'
+                                ? `Downloading (${msgApkProgress[msg.id].progress}%)...`
+                                : msgApkProgress[msg.id]?.status === 'installing'
+                                ? 'Installing APK...'
+                                : `Update App (${formatVersionTag(detectedUpdateVer)})`}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                      {msgApkProgress[msg.id] && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px] font-bold">
+                            <span className="text-zinc-300 truncate pr-2">
+                              {msgApkProgress[msg.id].message}
+                            </span>
+                            <span className="text-emerald-400 font-black tabular-nums">
+                              {msgApkProgress[msg.id].progress}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-red-500 to-emerald-400 transition-all duration-200"
+                              style={{ width: `${Math.max(4, msgApkProgress[msg.id].progress)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -425,7 +547,7 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
                   )}
 
                   {/* CUSTOM ACTION URL LINK (If specified) */}
-                  {msg.actionUrl && !attached && (
+                  {msg.actionUrl && !attached && !detectedUpdateVer && (
                     <a
                       href={msg.actionUrl}
                       target="_blank"

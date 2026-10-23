@@ -1185,6 +1185,11 @@
           <i class="fa-solid fa-bullhorn" style="color:#F59E0B;"></i>
           <span>Announcements</span>
         </div>
+        <div class="nav-item" onclick="switchTab('appupdates')">
+          <i class="fa-solid fa-cloud-arrow-down" style="color:#EF4444;"></i>
+          <span>App Updates</span>
+          <span id="appupdates-nav-badge" style="margin-left:auto; font-size:9px; font-weight:800; padding:2px 6px; border-radius:8px; background:rgba(239,68,68,0.2); color:#F87171; border:1px solid rgba(239,68,68,0.4);">APK OTA</span>
+        </div>
         <div class="nav-item" onclick="switchTab('comments')">
           <i class="fa-solid fa-comments" style="color:#22D3EE;"></i>
           <span>Content Comments</span>
@@ -1384,8 +1389,11 @@
                   <button class="btn-primary" onclick="switchTab('users')" style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.1); color:#FFF; justify-content:flex-start; height:38px; font-size:12px;">
                      <i class="fa-solid fa-users" style="color:var(--accent-cyan); width:18px;"></i> User Accounts Hub
                   </button>
+                  <button class="btn-primary" onclick="switchTab('appupdates')" style="background:linear-gradient(135deg, rgba(239,68,68,0.18), rgba(249,115,22,0.12)); border:1px solid rgba(239,68,68,0.4); color:#FFF; justify-content:flex-start; height:38px; font-size:12px;">
+                     <i class="fa-solid fa-cloud-arrow-down" style="color:#EF4444; width:18px;"></i> App Updates &amp; APK OTA
+                  </button>
                   <button class="btn-primary" onclick="switchTab('feedback')" style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.1); color:#FFF; justify-content:flex-start; height:38px; font-size:12px;">
-                     <i class="fa-solid fa-headset" style="color:var(--accent-cyan); width:18px;"></i> User Feedback & Support
+                     <i class="fa-solid fa-headset" style="color:var(--accent-cyan); width:18px;"></i> User Feedback &amp; Support
                   </button>
                   <button class="btn-primary" onclick="switchTab('analytics')" style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.1); color:#FFF; justify-content:flex-start; height:38px; font-size:12px;">
                      <i class="fa-solid fa-chart-line" style="color:#EC4899; width:18px;"></i> Performance Analytics
@@ -3672,6 +3680,346 @@
           </div>
         </section>
 
+        <!-- APP UPDATES & NATIVE APK OTA MANAGEMENT CENTER -->
+        <section id="screen-appupdates" class="screen-view">
+          <div class="upload-card" style="width:100%; max-width:100%; margin:0; background:var(--bg-secondary); border:1px solid rgba(255,255,255,0.08);">
+            
+            <!-- Top Header -->
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:22px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:16px;">
+              <div>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                  <h2 style="font-size:20px; font-weight:800; color:#FFF; display:flex; align-items:center; gap:10px; margin:0;">
+                    <i class="fa-solid fa-cloud-arrow-down" style="color:#EF4444;"></i> App Updates &amp; Native APK Release Center
+                  </h2>
+                  <span id="au-header-live-badge" style="font-size:10px; font-weight:800; padding:4px 10px; border-radius:20px; background:rgba(16,185,129,0.15); color:#34D399; border:1px solid rgba(16,185,129,0.35);">
+                    <i class="fa-solid fa-circle-check"></i> REALTIME OTA SYNCED
+                  </span>
+                </div>
+                <p style="font-size:12px; color:var(--text-tertiary); margin:4px 0 0 0;">
+                  Track active vs pushed APK versions, configure the hidden APK download link behind the app's Update button, control Force Update locks, and view full release delivery reports.
+                </p>
+              </div>
+              <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button type="button" class="btn-secondary" onclick="loadAppUpdatesManager()" style="height:38px; padding:0 16px; font-size:12px;">
+                  <i class="fa-solid fa-rotate"></i> Refresh Status
+                </button>
+                <button type="button" class="btn-primary" onclick="pushAppUpdateLive()" style="height:38px; padding:0 20px; font-size:12px; background:linear-gradient(135deg, #EF4444, #F97316); box-shadow:0 4px 16px rgba(239,68,68,0.35);">
+                  <i class="fa-solid fa-rocket"></i> Push APK Update Live
+                </button>
+              </div>
+            </div>
+
+            <!-- 4 TELEMETRY & VERSION TRACKING CARDS -->
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap:16px; margin-bottom:24px;">
+              
+              <!-- Card 1: Currently Running App Baseline Version -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(16,185,129,0.25); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; gap:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <span style="font-size:10px; font-weight:800; color:#34D399; text-transform:uppercase; letter-spacing:0.5px;">Running in App (Check Update)</span>
+                    <div id="au-stat-baseline" style="font-size:22px; font-weight:900; color:#FFF; margin-top:4px; font-family:monospace;">v2.5.0</div>
+                  </div>
+                  <div style="width:38px; height:38px; border-radius:10px; background:rgba(16,185,129,0.15); color:#34D399; display:flex; align-items:center; justify-content:center; font-size:16px;">
+                    <i class="fa-solid fa-mobile-screen-button"></i>
+                  </div>
+                </div>
+                <div style="font-size:11px; color:var(--text-tertiary); line-height:1.4;">
+                  Baseline version shown inside <strong style="color:#E4E4E7;">Me &gt; Settings &gt; Check update</strong>.
+                </div>
+              </div>
+
+              <!-- Card 2: Latest Admin Pushed Update & Red Blink Trigger -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(239,68,68,0.3); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; gap:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <span style="font-size:10px; font-weight:800; color:#F87171; text-transform:uppercase; letter-spacing:0.5px;">Latest Admin Pushed APK</span>
+                    <div id="au-stat-pushed" style="font-size:22px; font-weight:900; color:#F87171; margin-top:4px; font-family:monospace;">v2.5.0</div>
+                  </div>
+                  <div style="width:38px; height:38px; border-radius:10px; background:rgba(239,68,68,0.15); color:#EF4444; display:flex; align-items:center; justify-content:center; font-size:16px;">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                  </div>
+                </div>
+                <div id="au-stat-blink-indicator" style="font-size:11px; font-weight:700; color:#34D399; display:flex; align-items:center; gap:6px;">
+                  <i class="fa-solid fa-circle-check"></i> Matches Baseline (Red Icon Idle)
+                </div>
+              </div>
+
+              <!-- Card 3: Force Update Gate Controller -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(245,158,11,0.3); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; gap:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <span style="font-size:10px; font-weight:800; color:#FBBF24; text-transform:uppercase; letter-spacing:0.5px;">Force Update Enforcement</span>
+                    <div id="au-stat-force" style="font-size:17px; font-weight:900; color:#FFF; margin-top:6px;">OPTIONAL UPDATE</div>
+                  </div>
+                  <label class="switch" style="position:relative; display:inline-block; width:46px; height:24px;" title="Toggle Force Update Lock Instantly">
+                    <input type="checkbox" id="au-quick-force-toggle" onchange="toggleForceUpdateQuick(this.checked)" style="opacity:0; width:0; height:0;">
+                    <span style="position:absolute; cursor:pointer; inset:0; background:rgba(255,255,255,0.15); border-radius:24px; transition:0.3s;" id="au-quick-force-slider"></span>
+                  </label>
+                </div>
+                <div id="au-stat-force-sub" style="font-size:11px; color:var(--text-tertiary); line-height:1.4;">
+                  Users can dismiss modal while red upload icon keeps blinking.
+                </div>
+              </div>
+
+              <!-- Card 4: Delivery Mechanism & Release Report -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(6,182,212,0.3); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; gap:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <span style="font-size:10px; font-weight:800; color:#22D3EE; text-transform:uppercase; letter-spacing:0.5px;">Release Delivery Report</span>
+                    <div id="au-stat-releases-count" style="font-size:18px; font-weight:900; color:#FFF; margin-top:5px;">0 Releases Logged</div>
+                  </div>
+                  <div style="width:38px; height:38px; border-radius:10px; background:rgba(6,182,212,0.15); color:#22D3EE; display:flex; align-items:center; justify-content:center; font-size:16px;">
+                    <i class="fa-brands fa-android"></i>
+                  </div>
+                </div>
+                <div id="au-stat-apk-link-badge" style="font-size:11px; color:#22D3EE; font-weight:700; display:flex; align-items:center; gap:6px;">
+                  <i class="fa-solid fa-lock"></i> Hidden Link + Native APK Installer Ready
+                </div>
+              </div>
+
+            </div>
+
+            <!-- MAIN 2-COLUMN UPDATE STUDIO & LIVE PREVIEW -->
+            <div style="display:grid; grid-template-columns: 1.35fr 1fr; gap:22px; align-items:start; margin-bottom:26px;">
+              
+              <!-- LEFT: PUSH NEW APK UPDATE & CONFIGURE HIDDEN BUTTON LINK -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.07); padding-bottom:12px;">
+                  <div>
+                    <h3 style="font-size:16px; font-weight:800; color:#FFF; margin:0; display:flex; align-items:center; gap:8px;">
+                      <i class="fa-solid fa-sliders" style="color:#EF4444;"></i> Configure &amp; Push New APK Release
+                    </h3>
+                    <span style="font-size:11px; color:var(--text-tertiary);">When Target Version &gt; Running Baseline Version, all user apps blink red &amp; prompt to update</span>
+                  </div>
+                  <button type="button" class="btn-secondary" onclick="bumpTargetVersionAuto()" style="height:30px; padding:0 10px; font-size:11px; font-weight:700;">
+                    <i class="fa-solid fa-plus"></i> Auto-Bump Version
+                  </button>
+                </div>
+
+                <!-- Version Matrix Row -->
+                <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
+                  <div>
+                    <label class="form-label" style="font-size:11px; color:#34D399; font-weight:800;">
+                      1. Running Baseline (Check Update)
+                    </label>
+                    <div style="display:flex; gap:6px;">
+                      <input type="text" id="au-current-baseline" class="input-control" value="v2.5.0" placeholder="e.g. v2.5.0" oninput="onAppUpdateFormChange()" style="font-family:monospace; font-weight:800;">
+                      <button type="button" class="btn-secondary" onclick="saveBaselineVersionQuick()" title="Save Baseline Version to Settings > Check update" style="height:38px; padding:0 10px; font-size:11px;">
+                        <i class="fa-solid fa-check"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="form-label" style="font-size:11px; color:#F87171; font-weight:800;">
+                      2. New Target APK Version (Push)
+                    </label>
+                    <input type="text" id="au-target-version" class="input-control" value="v2.6.0" placeholder="e.g. v2.6.0" oninput="onAppUpdateFormChange()" style="font-family:monospace; font-weight:800; border-color:rgba(239,68,68,0.5); background:rgba(239,68,68,0.06);">
+                  </div>
+
+                  <div>
+                    <label class="form-label" style="font-size:11px; color:#FBBF24; font-weight:800;">
+                      3. Min Supported Version
+                    </label>
+                    <input type="text" id="au-min-version" class="input-control" value="v2.5.0" placeholder="e.g. v2.5.0" oninput="onAppUpdateFormChange()" style="font-family:monospace; font-weight:800;">
+                  </div>
+                </div>
+
+                <!-- Real-Time Version Comparison & Trigger Feedback Banner -->
+                <div id="au-version-compare-banner" style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.35); border-radius:12px; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <i class="fa-solid fa-bell" style="color:#EF4444; font-size:15px;"></i>
+                    <div style="font-size:12px; color:#FCA5A5; font-weight:700;">
+                      Target <strong id="au-cmp-target">v2.6.0</strong> is higher than Baseline <strong id="au-cmp-base">v2.5.0</strong> — Home Upload Icon will <strong style="color:#FFF; text-decoration:underline;">BLINK RED</strong> on all user devices!
+                    </div>
+                  </div>
+                  <span style="font-size:10px; font-weight:900; padding:3px 8px; border-radius:6px; background:#EF4444; color:#FFF;">TRIGGER READY</span>
+                </div>
+
+                <!-- Hidden Button APK Download Link -->
+                <div style="background:rgba(6,182,212,0.06); border:1px solid rgba(6,182,212,0.28); border-radius:12px; padding:14px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
+                    <label class="form-label" style="font-size:12px; font-weight:800; color:#22D3EE; margin:0; display:flex; align-items:center; gap:6px;">
+                      <i class="fa-solid fa-link"></i> Hidden APK Download Link (Attached Behind Update Button)
+                    </label>
+                    <span style="font-size:10px; font-weight:800; padding:2px 8px; border-radius:6px; background:rgba(16,185,129,0.18); color:#34D399; border:1px solid rgba(16,185,129,0.35);">
+                      <i class="fa-brands fa-android"></i> Native Android Self-Updater Enabled
+                    </span>
+                  </div>
+                  <input type="text" id="au-apk-url" class="input-control" placeholder="https://your-server.com/releases/MaxPlay-v2.6.0.apk" oninput="onAppUpdateFormChange()" style="margin-bottom:6px;">
+                  <div style="font-size:11px; color:#A1A1AA; line-height:1.45;">
+                    <i class="fa-solid fa-shield-check" style="color:#22D3EE;"></i> <strong>How it works on User Phones:</strong> Yeh APK link user ko raw text me nahi dikhegi, balki <strong>"Update App Now"</strong> button ke piche chhupi rahegi. Button dabate hi app background me APK download karega (0%–100% live progress ke sath) aur <strong>Android Native App Installer</strong> open karke app ko update kar dega!
+                  </div>
+                </div>
+
+                <!-- Release Title & Optional Banner -->
+                <div style="display:grid; grid-template-columns: 1.2fr 1fr; gap:12px;">
+                  <div>
+                    <label class="form-label" style="font-size:11px;">Update Release Title</label>
+                    <input type="text" id="au-title" class="input-control" value="MaxPlay v2.6.0 Official APK Update" placeholder="e.g. MaxPlay v2.6.0 Official APK Update" oninput="onAppUpdateFormChange()">
+                  </div>
+                  <div>
+                    <label class="form-label" style="font-size:11px;">Update Banner Image URL (Optional)</label>
+                    <input type="text" id="au-banner-url" class="input-control" placeholder="https://... (Shown inside Update Modal)" oninput="onAppUpdateFormChange()">
+                  </div>
+                </div>
+
+                <!-- Detailed Release Notes / Changelog / Report -->
+                <div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
+                    <label class="form-label" style="font-size:11px; margin:0;">Release Notes / Update Report &amp; What's New</label>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                      <button type="button" onclick="insertUpdateNotePreset('performance')" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#D4D4D8; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700; cursor:pointer;">+ Speed &amp; Player Boost</button>
+                      <button type="button" onclick="insertUpdateNotePreset('transfer')" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#D4D4D8; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700; cursor:pointer;">+ App-to-App P2P Transfer</button>
+                      <button type="button" onclick="insertUpdateNotePreset('security')" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#D4D4D8; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700; cursor:pointer;">+ Critical Force Update</button>
+                    </div>
+                  </div>
+                  <textarea id="au-notes" class="input-control" style="height:105px; font-size:12px; line-height:1.5;" placeholder="Write detailed changelog and update report for users..." oninput="onAppUpdateFormChange()">• Faster 1080p/4K HLS streaming with zero buffering
+• Upgraded App-to-App Direct Wi-Fi Transfer with live 0%–100% progress on both phones
+• Native Android in-app APK updater &amp; real-time push notifications</textarea>
+                </div>
+
+                <!-- Enforcement & Broadcast Options -->
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                  <label style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.28); border-radius:12px; padding:12px; display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
+                    <input type="checkbox" id="au-force-toggle" onchange="onAppUpdateFormChange()" style="margin-top:3px; width:16px; height:16px; accent-color:#EF4444;">
+                    <div>
+                      <div style="font-size:12px; font-weight:800; color:#FCA5A5;">Enable Force Update Lock</div>
+                      <div style="font-size:10px; color:var(--text-tertiary); line-height:1.35; margin-top:2px;">
+                        Blocks older app versions with a non-dismissible full-screen update gate until the user installs this APK.
+                      </div>
+                    </div>
+                  </label>
+
+                  <label style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.28); border-radius:12px; padding:12px; display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
+                    <input type="checkbox" id="au-broadcast-toggle" checked style="margin-top:3px; width:16px; height:16px; accent-color:#F59E0B;">
+                    <div>
+                      <div style="font-size:12px; font-weight:800; color:#FDE68A;">Broadcast to Announcements Inbox</div>
+                      <div style="font-size:10px; color:var(--text-tertiary); line-height:1.35; margin-top:2px;">
+                        Automatically sends an official APK Update card &amp; phone status-bar notification to all users.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                <!-- Submit & Reset Actions -->
+                <div style="display:flex; gap:12px; flex-wrap:wrap; padding-top:6px;">
+                  <button type="button" id="btn-push-app-update" class="btn-primary" onclick="pushAppUpdateLive()" style="flex:1; height:44px; font-size:13px; font-weight:800; background:linear-gradient(135deg, #EF4444, #F97316); box-shadow:0 8px 20px rgba(239,68,68,0.35);">
+                    <i class="fa-solid fa-rocket"></i> Push APK Update Live &amp; Save Report
+                  </button>
+                  <button type="button" class="btn-secondary" onclick="clearActiveAppUpdate()" style="height:44px; padding:0 16px; font-size:12px; font-weight:700; color:#FCA5A5; border-color:rgba(239,68,68,0.3);" title="Stop Red Blinking Icon &amp; Match Baseline">
+                    <i class="fa-solid fa-circle-stop"></i> Stop Active Update Trigger
+                  </button>
+                </div>
+
+              </div>
+
+              <!-- RIGHT: LIVE INTERACTIVE USER APP SIMULATOR PREVIEW -->
+              <div style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="font-size:12px; font-weight:800; color:#FFF; text-transform:uppercase; letter-spacing:0.5px;">
+                    <i class="fa-solid fa-eye" style="color:#22D3EE; margin-right:6px;"></i> Live Client App Update Experience Preview
+                  </span>
+                  <span id="au-sim-mode-badge" style="font-size:10px; font-weight:800; padding:3px 8px; border-radius:6px; background:rgba(239,68,68,0.2); color:#FCA5A5;">
+                    OTA UPDATE TRIGGERED
+                  </span>
+                </div>
+
+                <!-- Simulated Phone Screen -->
+                <div style="background:#09090B; border:2px solid #27272A; border-radius:24px; padding:14px; box-shadow:0 20px 45px rgba(0,0,0,0.65);">
+                  <!-- Simulated Top Search Bar + Right Upload Icon -->
+                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:6px 8px; background:#121216; border-radius:14px; border:1px solid rgba(255,255,255,0.06);">
+                    <div style="font-weight:900; font-size:11px; color:#FFF; padding:0 4px;">MAX<span style="color:#06B6D4;">PLAY</span></div>
+                    <div style="flex:1; height:28px; background:rgba(255,255,255,0.07); border-radius:14px; display:flex; align-items:center; padding:0 10px; font-size:10px; color:#A1A1AA;">
+                      <i class="fa-solid fa-magnifying-glass" style="margin-right:6px; font-size:9px;"></i> Search movies, anime...
+                    </div>
+                    <!-- Right Upload Icon (Blinks Red when Update Active) -->
+                    <div id="au-sim-upload-icon" style="position:relative; width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg, #DC2626, #E11D48); color:#FFF; display:flex; align-items:center; justify-content:center; box-shadow:0 0 14px rgba(239,68,68,0.9); border:1px solid #FCA5A5;">
+                      <i class="fa-solid fa-arrow-up" style="font-size:12px;"></i>
+                      <span style="position:absolute; top:-3px; right:-3px; background:#FFF; color:#DC2626; font-size:7px; font-weight:900; padding:1px 3px; border-radius:4px;">NEW</span>
+                    </div>
+                  </div>
+
+                  <!-- Simulated In-App Update Modal Card -->
+                  <div style="background:linear-gradient(180deg, #240d12 0%, #141418 45%, #0c0c10 100%); border:1px solid rgba(239,68,68,0.45); border-radius:18px; padding:14px; display:flex; flex-direction:column; gap:10px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                      <div style="width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg, #DC2626, #F43F5E); color:#FFF; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;">
+                        <i class="fa-solid fa-arrow-up"></i>
+                      </div>
+                      <div style="min-width:0;">
+                        <span id="au-sim-pill" style="font-size:9px; font-weight:900; padding:2px 6px; border-radius:4px; background:#DC2626; color:#FFF; text-transform:uppercase;">NEW APK UPDATE AVAILABLE</span>
+                        <div id="au-sim-title" style="font-size:13px; font-weight:900; color:#FFF; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">MaxPlay v2.6.0 Official APK Update</div>
+                      </div>
+                    </div>
+
+                    <!-- Version Strip -->
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; background:rgba(0,0,0,0.45); padding:8px; border-radius:12px; border:1px solid rgba(239,68,68,0.2);">
+                      <div style="background:rgba(255,255,255,0.03); padding:6px 8px; border-radius:8px;">
+                        <div style="font-size:8px; color:#A1A1AA; font-weight:700; text-transform:uppercase;">Settings &gt; Check Update</div>
+                        <div id="au-sim-cur-ver" style="font-size:11px; font-weight:900; color:#E4E4E7; font-family:monospace;">v2.5.0 (Current)</div>
+                      </div>
+                      <div style="background:rgba(239,68,68,0.12); padding:6px 8px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">
+                        <div style="font-size:8px; color:#FCA5A5; font-weight:700; text-transform:uppercase;">Admin Latest Release</div>
+                        <div id="au-sim-new-ver" style="font-size:11px; font-weight:900; color:#34D399; font-family:monospace;">v2.6.0 (New APK)</div>
+                      </div>
+                    </div>
+
+                    <!-- Notes -->
+                    <div id="au-sim-notes" style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:8px 10px; font-size:10px; color:#D4D4D8; line-height:1.45; white-space:pre-line; max-height:85px; overflow-y:auto;"></div>
+
+                    <!-- Hidden Link Native Update CTA Button -->
+                    <div style="background:linear-gradient(90deg, #DC2626, #F43F5E, #F97316); border-radius:12px; padding:10px; text-align:center; color:#FFF; font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:0.5px; box-shadow:0 4px 14px rgba(239,68,68,0.4);">
+                      <i class="fa-solid fa-download" style="margin-right:6px;"></i>
+                      <span id="au-sim-btn-text">Update App Now (v2.6.0)</span>
+                    </div>
+                    <div id="au-sim-hidden-link-info" style="font-size:9px; color:#34D399; text-align:center; font-family:monospace;">
+                      🔒 Hidden APK Link Ready • Native Android PackageInstaller
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- UPDATE RELEASE HISTORY & DELIVERY REPORT TABLE -->
+            <div style="background:var(--bg-tertiary); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:22px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                <div>
+                  <h3 style="font-size:16px; font-weight:800; color:#FFF; margin:0; display:flex; align-items:center; gap:8px;">
+                    <i class="fa-solid fa-clipboard-list" style="color:var(--accent-cyan);"></i> Update Release History &amp; Delivery Reports
+                  </h3>
+                  <p style="font-size:12px; color:var(--text-tertiary); margin:3px 0 0 0;">
+                    Complete log of every update pushed by Admin: tracks previous running version, pushed version, Force/Optional mode, report notes, and hidden APK installer link.
+                  </p>
+                </div>
+              </div>
+
+              <div style="overflow-x:auto;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Version Transition (Running ➔ Pushed)</th>
+                      <th>Release Title &amp; Report Notes</th>
+                      <th>Mode &amp; Delivery</th>
+                      <th>Hidden APK Link</th>
+                      <th>Pushed Timestamp</th>
+                      <th style="text-align:right;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="au-history-table-body">
+                    <tr>
+                      <td colspan="6" style="text-align:center; padding:30px; color:var(--text-tertiary);">
+                        Loading update release history...
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
       </main>
     </div>
   </div>
@@ -4673,6 +5021,7 @@
         'comments': 'Content Comments Manager',
         'analytics': 'Performance Analytics',
         'messages': 'Broadcast Announcements',
+        'appupdates': 'App Updates & Native APK Release Center',
         'settings': 'General & System Settings',
         'legal': 'App Information & Legal Content'
       };
@@ -4686,6 +5035,7 @@
       if (tabId === 'reports' && window.renderReportsTable) window.renderReportsTable();
       if (tabId === 'comments' && window.loadCommentsManager) window.loadCommentsManager();
       if (tabId === 'messages' && window.loadMessagesHistory) window.loadMessagesHistory();
+      if (tabId === 'appupdates' && window.loadAppUpdatesManager) window.loadAppUpdatesManager();
       if (tabId === 'analytics' && window.loadAnalytics) window.loadAnalytics();
       if (tabId === 'legal' && window.loadLegalContent) window.loadLegalContent();
       
@@ -10850,6 +11200,617 @@
       }
     };
 
+    // 11.5 APP UPDATES & NATIVE APK RELEASE CENTER (OTA + HIDDEN LINK + RELEASE HISTORY)
+    window.appUpdateHistoryList = [];
+
+    window.parseSemVerParts = function(verStr) {
+      const cleaned = String(verStr || '').trim().replace(/^[vV]+\s*/, '');
+      const match = cleaned.match(/(\d+(?:\.\d+)*)/);
+      if (!match) return [0, 0, 0];
+      return match[1].split('.').map(n => parseInt(n, 10) || 0);
+    };
+
+    window.isSemVerHigher = function(candidate, baseline) {
+      const c = window.parseSemVerParts(candidate);
+      const b = window.parseSemVerParts(baseline);
+      const len = Math.max(c.length, b.length, 3);
+      for (let i = 0; i < len; i++) {
+        const cv = c[i] || 0;
+        const bv = b[i] || 0;
+        if (cv > bv) return true;
+        if (cv < bv) return false;
+      }
+      return false;
+    };
+
+    window.formatSemVerTag = function(verStr) {
+      const cleaned = String(verStr || '').trim().replace(/^[vV]+\s*/, '') || '2.5.0';
+      return 'v' + cleaned;
+    };
+
+    window.bumpTargetVersionAuto = function() {
+      const curEl = document.getElementById('au-target-version') || document.getElementById('au-current-baseline');
+      const parts = window.parseSemVerParts(curEl ? curEl.value : '2.5.0');
+      const major = parts[0] || 2;
+      const minor = (parts[1] || 5) + 1;
+      const nextVer = `v${major}.${minor}.0`;
+      const targetEl = document.getElementById('au-target-version');
+      if (targetEl) targetEl.value = nextVer;
+      const titleEl = document.getElementById('au-title');
+      if (titleEl) titleEl.value = `MaxPlay ${nextVer} Official APK Update`;
+      window.onAppUpdateFormChange();
+      showToast(`Auto-bumped target version to ${nextVer}`);
+    };
+
+    window.insertUpdateNotePreset = function(type) {
+      const notesEl = document.getElementById('au-notes');
+      if (!notesEl) return;
+      let text = '';
+      if (type === 'performance') {
+        text = '• Upgraded 1080p/4K HLS streaming engine for instant zero-buffer playback\n• Fixed UI glitches & optimized Hero Banner ambient scroll transition';
+      } else if (type === 'transfer') {
+        text = '• Enhanced App-to-App Direct Wi-Fi Transfer with live 0%–100% progress on both Sender & Receiver phones\n• Fixed deleted files appearing in Send Direct queue';
+      } else if (type === 'security') {
+        text = '• Mandatory APK security & stability upgrade\n• Added native Android 1-click self-updating APK installer & real-time push notifications';
+      }
+      const cur = notesEl.value.trim();
+      notesEl.value = cur ? (cur + '\n' + text) : text;
+      window.onAppUpdateFormChange();
+    };
+
+    window.onAppUpdateFormChange = function() {
+      const baseRaw = document.getElementById('au-current-baseline')?.value || 'v2.5.0';
+      const targetRaw = document.getElementById('au-target-version')?.value || 'v2.6.0';
+      const minRaw = document.getElementById('au-min-version')?.value || 'v2.5.0';
+      const apkUrl = (document.getElementById('au-apk-url')?.value || '').trim();
+      const title = document.getElementById('au-title')?.value || `MaxPlay ${window.formatSemVerTag(targetRaw)} Official APK Update`;
+      const notes = document.getElementById('au-notes')?.value || '';
+      const isForce = !!document.getElementById('au-force-toggle')?.checked;
+
+      const baseTag = window.formatSemVerTag(baseRaw);
+      const targetTag = window.formatSemVerTag(targetRaw);
+      const minTag = window.formatSemVerTag(minRaw);
+      const isHigher = window.isSemVerHigher(targetTag, baseTag) || (isForce && window.isSemVerHigher(minTag, baseTag));
+
+      // Update comparison banner
+      const bannerEl = document.getElementById('au-version-compare-banner');
+      if (bannerEl) {
+        if (isHigher) {
+          bannerEl.style.background = 'rgba(239,68,68,0.12)';
+          bannerEl.style.borderColor = 'rgba(239,68,68,0.4)';
+          bannerEl.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+              <i class="fa-solid fa-bell" style="color:#EF4444; font-size:15px;"></i>
+              <div style="font-size:12px; color:#FCA5A5; font-weight:700;">
+                Target <strong>${targetTag}</strong> is higher than Running Baseline <strong>${baseTag}</strong> — Home Upload Icon will <strong style="color:#FFF; text-decoration:underline;">BLINK RED</strong> on all user apps!
+              </div>
+            </div>
+            <span style="font-size:10px; font-weight:900; padding:3px 8px; border-radius:6px; background:#EF4444; color:#FFF;">${isForce ? 'FORCE LOCK + RED BLINK' : 'RED BLINK TRIGGER'}</span>
+          `;
+        } else {
+          bannerEl.style.background = 'rgba(16,185,129,0.12)';
+          bannerEl.style.borderColor = 'rgba(16,185,129,0.35)';
+          bannerEl.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+              <i class="fa-solid fa-circle-check" style="color:#34D399; font-size:15px;"></i>
+              <div style="font-size:12px; color:#A7F3D0; font-weight:700;">
+                Target <strong>${targetTag}</strong> matches/is not above Running Baseline <strong>${baseTag}</strong> — App will show Up-to-Date (No Red Blink).
+              </div>
+            </div>
+            <span style="font-size:10px; font-weight:900; padding:3px 8px; border-radius:6px; background:rgba(16,185,129,0.25); color:#34D399;">UP TO DATE</span>
+          `;
+        }
+      }
+
+      // Update simulator preview
+      const simModeBadge = document.getElementById('au-sim-mode-badge');
+      if (simModeBadge) {
+        simModeBadge.innerText = isForce ? 'MANDATORY FORCE UPDATE' : (isHigher ? 'OTA UPDATE TRIGGERED' : 'UP TO DATE');
+        simModeBadge.style.background = isForce ? '#DC2626' : (isHigher ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)');
+        simModeBadge.style.color = isForce ? '#FFF' : (isHigher ? '#FCA5A5' : '#34D399');
+      }
+
+      const simPill = document.getElementById('au-sim-pill');
+      if (simPill) {
+        simPill.innerText = isForce ? 'MANDATORY FORCE UPDATE REQUIRED' : 'NEW APK UPDATE AVAILABLE';
+      }
+
+      const simTitle = document.getElementById('au-sim-title');
+      if (simTitle) simTitle.innerText = title;
+
+      const simCurVer = document.getElementById('au-sim-cur-ver');
+      if (simCurVer) simCurVer.innerText = `${baseTag} (Current)`;
+
+      const simNewVer = document.getElementById('au-sim-new-ver');
+      if (simNewVer) simNewVer.innerText = `${targetTag} (New APK)`;
+
+      const simNotes = document.getElementById('au-sim-notes');
+      if (simNotes) simNotes.innerText = notes || `Admin released ${targetTag} above ${baseTag}. Tap Update App Now to install.`;
+
+      const simBtnText = document.getElementById('au-sim-btn-text');
+      if (simBtnText) simBtnText.innerText = `Update App Now (${targetTag})`;
+
+      const simLinkInfo = document.getElementById('au-sim-hidden-link-info');
+      if (simLinkInfo) {
+        if (apkUrl) {
+          simLinkInfo.innerHTML = `<i class="fa-solid fa-lock"></i> Hidden APK Link Attached Behind Button • Native Android Installer`;
+          simLinkInfo.style.color = '#34D399';
+        } else {
+          simLinkInfo.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Paste APK Download Link above so Update Button can install it`;
+          simLinkInfo.style.color = '#FBBF24';
+        }
+      }
+    };
+
+    window.loadAppUpdatesManager = async function() {
+      try {
+        const [genSnap, updSnap, histSnap] = await Promise.all([
+          getDoc(doc(db, 'settings', 'general')),
+          getDoc(doc(db, 'settings', 'update')),
+          getDoc(doc(db, 'settings', 'update_history'))
+        ]);
+
+        const gen = genSnap.exists() ? genSnap.data() : {};
+        const upd = updSnap.exists() ? updSnap.data() : {};
+        const hist = (histSnap.exists() && Array.isArray(histSnap.data().list)) ? histSnap.data().list : [];
+        window.appUpdateHistoryList = hist;
+
+        const runningBaseline = window.formatSemVerTag(gen.appVersion || 'v2.5.0');
+        const pushedLatest = window.formatSemVerTag(upd.latestVersion || gen.latestUpdateVersion || gen.appVersion || 'v2.5.0');
+        const minVer = window.formatSemVerTag(upd.minRequiredVersion || gen.minVersion || 'v2.0.0');
+        const isForce = !!(upd.forceUpdate || gen.forceUpdate);
+        const apkUrl = upd.apkUrl || upd.downloadUrl || gen.downloadUrl || '';
+        const title = upd.title || gen.updateTitle || `MaxPlay ${pushedLatest} Official APK Update`;
+        const notes = upd.releaseNotes || upd.changelog || gen.updateReleaseNotes || '';
+        const bannerUrl = upd.bannerUrl || gen.updateBannerUrl || '';
+
+        const isRedBlinkActive = window.isSemVerHigher(pushedLatest, runningBaseline) || (isForce && window.isSemVerHigher(minVer, runningBaseline));
+
+        // Populate top 4 telemetry cards
+        const statBaseEl = document.getElementById('au-stat-baseline');
+        if (statBaseEl) statBaseEl.innerText = runningBaseline;
+
+        const statPushedEl = document.getElementById('au-stat-pushed');
+        if (statPushedEl) {
+          statPushedEl.innerText = pushedLatest;
+          statPushedEl.style.color = isRedBlinkActive ? '#F87171' : '#34D399';
+        }
+
+        const blinkIndEl = document.getElementById('au-stat-blink-indicator');
+        if (blinkIndEl) {
+          if (isRedBlinkActive) {
+            blinkIndEl.innerHTML = `<i class="fa-solid fa-bell" style="color:#EF4444;"></i> <span style="color:#FCA5A5;">ACTIVE: Red Upload Icon Blinking in App!</span>`;
+          } else {
+            blinkIndEl.innerHTML = `<i class="fa-solid fa-circle-check" style="color:#34D399;"></i> <span style="color:#34D399;">Matches Baseline (Red Icon Idle)</span>`;
+          }
+        }
+
+        const navBadge = document.getElementById('appupdates-nav-badge');
+        if (navBadge) {
+          navBadge.innerText = isRedBlinkActive ? `LIVE ${pushedLatest}` : 'APK OTA';
+          navBadge.style.background = isRedBlinkActive ? '#EF4444' : 'rgba(239,68,68,0.2)';
+          navBadge.style.color = isRedBlinkActive ? '#FFF' : '#F87171';
+        }
+
+        const statForceEl = document.getElementById('au-stat-force');
+        if (statForceEl) {
+          statForceEl.innerText = isForce ? 'FORCE UPDATE LOCKED' : 'OPTIONAL UPDATE';
+          statForceEl.style.color = isForce ? '#EF4444' : '#34D399';
+        }
+        const statForceSub = document.getElementById('au-stat-force-sub');
+        if (statForceSub) {
+          statForceSub.innerText = isForce
+            ? `Mandatory full-screen lock active for versions below ${pushedLatest}.`
+            : 'Users can dismiss popup while red upload icon keeps blinking.';
+        }
+        const quickForceToggle = document.getElementById('au-quick-force-toggle');
+        if (quickForceToggle) quickForceToggle.checked = isForce;
+        const quickForceSlider = document.getElementById('au-quick-force-slider');
+        if (quickForceSlider) {
+          quickForceSlider.style.background = isForce ? '#EF4444' : 'rgba(255,255,255,0.15)';
+        }
+
+        const statRelCount = document.getElementById('au-stat-releases-count');
+        if (statRelCount) statRelCount.innerText = `${hist.length} Release${hist.length === 1 ? '' : 's'} Logged`;
+
+        const statLinkBadge = document.getElementById('au-stat-apk-link-badge');
+        if (statLinkBadge) {
+          if (apkUrl) {
+            statLinkBadge.innerHTML = `<i class="fa-solid fa-lock"></i> Hidden APK Link Configured &amp; Active`;
+            statLinkBadge.style.color = '#34D399';
+          } else {
+            statLinkBadge.innerHTML = `<i class="fa-solid fa-circle-info"></i> No APK URL Attached Yet`;
+            statLinkBadge.style.color = '#FBBF24';
+          }
+        }
+
+        // Populate Studio Form
+        const baseInput = document.getElementById('au-current-baseline');
+        if (baseInput) baseInput.value = runningBaseline;
+
+        const targetInput = document.getElementById('au-target-version');
+        if (targetInput) {
+          // If pushedLatest is higher than runningBaseline, show pushedLatest; otherwise suggest next version
+          if (window.isSemVerHigher(pushedLatest, runningBaseline)) {
+            targetInput.value = pushedLatest;
+          } else {
+            const p = window.parseSemVerParts(runningBaseline);
+            targetInput.value = `v${p[0] || 2}.${(p[1] || 5) + 1}.0`;
+          }
+        }
+
+        const minInput = document.getElementById('au-min-version');
+        if (minInput) minInput.value = minVer;
+
+        const apkInput = document.getElementById('au-apk-url');
+        if (apkInput) apkInput.value = apkUrl;
+
+        const titleInput = document.getElementById('au-title');
+        if (titleInput && title) titleInput.value = title;
+
+        const notesInput = document.getElementById('au-notes');
+        if (notesInput && notes) notesInput.value = notes;
+
+        const bannerInput = document.getElementById('au-banner-url');
+        if (bannerInput) bannerInput.value = bannerUrl;
+
+        const forceCheck = document.getElementById('au-force-toggle');
+        if (forceCheck) forceCheck.checked = isForce;
+
+        window.onAppUpdateFormChange();
+        window.renderUpdateHistoryTable();
+      } catch (e) {
+        console.error('Error loading App Updates manager:', e);
+      }
+    };
+
+    window.saveBaselineVersionQuick = async function() {
+      const baseVal = window.formatSemVerTag(document.getElementById('au-current-baseline')?.value || 'v2.5.0');
+      try {
+        await setDoc(doc(db, 'settings', 'general'), {
+          appVersion: baseVal,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        const settingVerEl = document.getElementById('setting-app-version');
+        if (settingVerEl) settingVerEl.value = baseVal;
+        showToast(`✅ Baseline Check-Update version updated to ${baseVal}!`);
+        await window.loadAppUpdatesManager();
+      } catch (e) {
+        showToast('Error saving baseline version: ' + e.message);
+      }
+    };
+
+    window.toggleForceUpdateQuick = async function(isForce) {
+      try {
+        const forceCheck = document.getElementById('au-force-toggle');
+        if (forceCheck) forceCheck.checked = isForce;
+
+        await setDoc(doc(db, 'settings', 'update'), {
+          forceUpdate: isForce,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        await setDoc(doc(db, 'settings', 'general'), {
+          forceUpdate: isForce,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        showToast(isForce ? '🚨 Force Update ENABLED! Users must update APK to use the app.' : '✅ Force Update set to Optional.');
+        await window.loadAppUpdatesManager();
+      } catch (e) {
+        showToast('Error toggling Force Update: ' + e.message);
+      }
+    };
+
+    window.pushAppUpdateLive = async function() {
+      const btn = document.getElementById('btn-push-app-update');
+      const runningBaseline = window.formatSemVerTag(document.getElementById('au-current-baseline')?.value || 'v2.5.0');
+      const targetVersion = window.formatSemVerTag(document.getElementById('au-target-version')?.value || 'v2.6.0');
+      const minVersion = window.formatSemVerTag(document.getElementById('au-min-version')?.value || runningBaseline);
+      const apkUrl = (document.getElementById('au-apk-url')?.value || '').trim();
+      const title = (document.getElementById('au-title')?.value || '').trim() || `MaxPlay ${targetVersion} Official APK Update`;
+      const releaseNotes = (document.getElementById('au-notes')?.value || '').trim() || `New MaxPlay ${targetVersion} update is now available.`;
+      const bannerUrl = (document.getElementById('au-banner-url')?.value || '').trim();
+      const forceUpdate = !!document.getElementById('au-force-toggle')?.checked;
+      const shouldBroadcast = !!document.getElementById('au-broadcast-toggle')?.checked;
+
+      if (!apkUrl) {
+        const proceedNoUrl = await window.showCustomConfirm(
+          'No APK Download Link Provided',
+          'You have not entered a Hidden APK Download Link yet. Users will see the update alert, but the Update button needs a valid .apk URL to download the update. Push anyway?',
+          { okText: 'Push Update Anyway', cancelText: 'Add APK Link First' }
+        );
+        if (!proceedNoUrl) return;
+      }
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Pushing Update Live to All Apps...';
+      }
+
+      try {
+        const nowIso = new Date().toISOString();
+        const readableDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const readableTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        // 1. Save to settings/update (Primary OTA Update Document)
+        await setDoc(doc(db, 'settings', 'update'), {
+          previousBaselineVersion: runningBaseline,
+          latestVersion: targetVersion,
+          minRequiredVersion: forceUpdate ? targetVersion : minVersion,
+          forceUpdate: forceUpdate,
+          apkUrl: apkUrl,
+          downloadUrl: apkUrl,
+          title: title,
+          releaseNotes: releaseNotes,
+          changelog: releaseNotes,
+          bannerUrl: bannerUrl,
+          updatedAt: nowIso
+        }, { merge: true });
+
+        // 2. Sync to settings/general (keeps baseline appVersion intact so latestVersion > appVersion triggers Red Blink!)
+        await setDoc(doc(db, 'settings', 'general'), {
+          appVersion: runningBaseline,
+          latestUpdateVersion: targetVersion,
+          minVersion: forceUpdate ? targetVersion : minVersion,
+          forceUpdate: forceUpdate,
+          downloadUrl: apkUrl,
+          apkUrl: apkUrl,
+          updateTitle: title,
+          updateReleaseNotes: releaseNotes,
+          updateBannerUrl: bannerUrl,
+          updatedAt: nowIso
+        }, { merge: true });
+
+        // 3. Optional Broadcast to User Announcements Inbox (messages collection)
+        if (shouldBroadcast) {
+          const msgId = 'apk-update-' + Date.now();
+          await setDoc(doc(db, 'messages', msgId), {
+            id: msgId,
+            title: `${forceUpdate ? '[FORCE UPDATE] ' : '[APP UPDATE] '}${title} (${targetVersion})`,
+            body: releaseNotes,
+            type: 'notice',
+            priority: forceUpdate ? 'urgent' : 'important',
+            targetType: 'all',
+            appVersion: targetVersion,
+            latestVersion: targetVersion,
+            forceUpdate: forceUpdate,
+            apkUrl: apkUrl,
+            downloadUrl: apkUrl,
+            bannerUrl: bannerUrl || '',
+            date: readableDate,
+            timestamp: readableTime,
+            createdAt: nowIso,
+            isUnread: true,
+            sender: {
+              name: 'MaxPlay Official Update',
+              handle: '@MaxPlayOTA',
+              avatar: '',
+              isVerified: true
+            }
+          });
+        }
+
+        // 4. Record in Update Release History & Delivery Report (settings/update_history)
+        const existingHist = Array.isArray(window.appUpdateHistoryList) ? window.appUpdateHistoryList : [];
+        existingHist.forEach(item => {
+          if (item.status === 'ACTIVE') item.status = 'SUPERSEDED';
+        });
+
+        const newRecord = {
+          id: 'rel-' + Date.now(),
+          previousVersion: runningBaseline,
+          pushedVersion: targetVersion,
+          minRequiredVersion: forceUpdate ? targetVersion : minVersion,
+          forceUpdate: forceUpdate,
+          apkUrl: apkUrl,
+          title: title,
+          releaseNotes: releaseNotes,
+          bannerUrl: bannerUrl,
+          broadcastedToInbox: shouldBroadcast,
+          deliveryReport: `Pushed ${targetVersion} over running ${runningBaseline} (${forceUpdate ? 'Mandatory Force Lock' : 'Red Blinking OTA'})${shouldBroadcast ? ' + Inbox Push Sent' : ''}`,
+          status: 'ACTIVE',
+          pushedAt: nowIso,
+          pushedDateLabel: `${readableDate} • ${readableTime}`
+        };
+
+        const updatedHist = [newRecord, ...existingHist].slice(0, 35);
+        window.appUpdateHistoryList = updatedHist;
+
+        await setDoc(doc(db, 'settings', 'update_history'), {
+          list: updatedHist,
+          updatedAt: nowIso
+        }, { merge: true });
+
+        showToast(`🚀 APK Update ${targetVersion} pushed live! All client apps on ${runningBaseline} are now blinking red.`);
+        await window.loadAppUpdatesManager();
+      } catch (e) {
+        console.error('Error pushing APK update:', e);
+        showToast('Error pushing APK update: ' + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Push APK Update Live &amp; Save Report';
+        }
+      }
+    };
+
+    window.clearActiveAppUpdate = async function() {
+      const confirmed = await window.showCustomConfirm(
+        'Stop Active Update Trigger',
+        'This will sync the Running Baseline Version with the Latest Pushed Version and disable Force Update so the red blinking upload icon stops across all user devices. Continue?',
+        { okText: 'Stop Red Blink & Sync', cancelText: 'Cancel' }
+      );
+      if (!confirmed) return;
+
+      try {
+        const pushedEl = document.getElementById('au-stat-pushed');
+        const currentPushed = window.formatSemVerTag(pushedEl ? pushedEl.innerText : 'v2.5.0');
+        const nowIso = new Date().toISOString();
+
+        await setDoc(doc(db, 'settings', 'general'), {
+          appVersion: currentPushed,
+          latestUpdateVersion: currentPushed,
+          forceUpdate: false,
+          updatedAt: nowIso
+        }, { merge: true });
+
+        await setDoc(doc(db, 'settings', 'update'), {
+          previousBaselineVersion: currentPushed,
+          latestVersion: currentPushed,
+          forceUpdate: false,
+          updatedAt: nowIso
+        }, { merge: true });
+
+        if (Array.isArray(window.appUpdateHistoryList) && window.appUpdateHistoryList.length > 0) {
+          window.appUpdateHistoryList[0].status = 'COMPLETED (BASELINE)';
+          await setDoc(doc(db, 'settings', 'update_history'), {
+            list: window.appUpdateHistoryList,
+            updatedAt: nowIso
+          }, { merge: true });
+        }
+
+        showToast(`✅ Update trigger cleared! Baseline is now ${currentPushed} (No Red Blink).`);
+        await window.loadAppUpdatesManager();
+      } catch (e) {
+        showToast('Error clearing update trigger: ' + e.message);
+      }
+    };
+
+    window.renderUpdateHistoryTable = function() {
+      const tbody = document.getElementById('au-history-table-body');
+      if (!tbody) return;
+      const list = window.appUpdateHistoryList || [];
+
+      if (list.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" style="text-align:center; padding:32px; color:var(--text-tertiary);">
+              No APK updates pushed yet. Use the studio above to push your first official APK update!
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      let html = '';
+      list.forEach((item, idx) => {
+        const isAct = item.status === 'ACTIVE';
+        const modeBadge = item.forceUpdate
+          ? `<span style="background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.45); color:#FCA5A5; font-size:10px; font-weight:900; padding:2px 8px; border-radius:6px; display:inline-block;">🚨 FORCE UPDATE</span>`
+          : `<span style="background:rgba(6,182,212,0.18); border:1px solid rgba(6,182,212,0.4); color:#22D3EE; font-size:10px; font-weight:800; padding:2px 8px; border-radius:6px; display:inline-block;">🔔 RED BLINK OTA</span>`;
+
+        const statusBadge = isAct
+          ? `<span style="background:#10B981; color:#000; font-size:9px; font-weight:900; padding:2px 6px; border-radius:4px; margin-left:6px;">ACTIVE NOW</span>`
+          : `<span style="background:rgba(255,255,255,0.08); color:#A1A1AA; font-size:9px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:6px;">${escapeHtml(item.status || 'LOGGED')}</span>`;
+
+        const linkStatus = item.apkUrl
+          ? `<div style="display:flex; flex-direction:column; gap:3px;">
+               <span style="font-size:11px; font-weight:800; color:#34D399;"><i class="fa-solid fa-lock"></i> Hidden Behind Button</span>
+               <span style="font-size:10px; color:var(--text-tertiary); font-family:monospace; max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(item.apkUrl)}">${escapeHtml(item.apkUrl)}</span>
+             </div>`
+          : `<span style="font-size:11px; color:#FBBF24;"><i class="fa-solid fa-triangle-exclamation"></i> No APK Link</span>`;
+
+        html += `
+          <tr>
+            <td>
+              <div style="display:flex; align-items:center; gap:8px; font-family:monospace; font-size:13px; font-weight:900;">
+                <span style="color:#A1A1AA; background:rgba(255,255,255,0.05); padding:3px 7px; border-radius:6px;">${escapeHtml(item.previousVersion || 'v2.5.0')}</span>
+                <i class="fa-solid fa-arrow-right" style="color:#EF4444; font-size:11px;"></i>
+                <span style="color:#34D399; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); padding:3px 7px; border-radius:6px;">${escapeHtml(item.pushedVersion || 'v2.6.0')}</span>
+              </div>
+              <div style="margin-top:5px;">${statusBadge}</div>
+            </td>
+            <td>
+              <div style="font-weight:800; font-size:13px; color:#FFF;">${escapeHtml(item.title || 'MaxPlay APK Update')}</div>
+              <div style="font-size:11px; color:var(--text-secondary); margin-top:3px; line-height:1.4; max-width:320px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
+                ${escapeHtml(item.releaseNotes || '')}
+              </div>
+              <div style="font-size:10px; color:#22D3EE; margin-top:4px; font-weight:600;">
+                <i class="fa-solid fa-chart-simple"></i> ${escapeHtml(item.deliveryReport || 'Delivered to client apps')}
+              </div>
+            </td>
+            <td>
+              ${modeBadge}
+              <div style="font-size:10px; color:var(--text-tertiary); margin-top:4px;">
+                Min Req: <strong style="color:#E4E4E7;">${escapeHtml(item.minRequiredVersion || item.previousVersion || 'v2.0.0')}</strong>
+              </div>
+            </td>
+            <td>${linkStatus}</td>
+            <td>
+              <div style="font-size:11px; font-weight:700; color:#FFF;">${escapeHtml(item.pushedDateLabel || 'Recent')}</div>
+            </td>
+            <td style="text-align:right;">
+              <div style="display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
+                <button type="button" class="btn-secondary" style="height:30px; padding:0 10px; font-size:11px; font-weight:700;" onclick="reActivateHistoryUpdate(${idx})" title="Load & Re-Push this Update">
+                  <i class="fa-solid fa-rotate-left" style="color:#22D3EE;"></i> Load
+                </button>
+                <button type="button" class="btn-secondary" style="height:30px; padding:0 10px; font-size:11px; font-weight:700;" onclick="promoteHistoryToBaseline(${idx})" title="Set this version as Running Baseline (Check Update)">
+                  <i class="fa-solid fa-check" style="color:#34D399;"></i> Set Baseline
+                </button>
+                <button type="button" class="btn-danger" style="height:30px; width:30px; padding:0; font-size:11px;" onclick="deleteHistoryUpdate(${idx})" title="Delete Record">
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+
+      tbody.innerHTML = html;
+    };
+
+    window.reActivateHistoryUpdate = function(idx) {
+      const item = (window.appUpdateHistoryList || [])[idx];
+      if (!item) return;
+      if (document.getElementById('au-current-baseline')) document.getElementById('au-current-baseline').value = item.previousVersion || 'v2.5.0';
+      if (document.getElementById('au-target-version')) document.getElementById('au-target-version').value = item.pushedVersion || 'v2.6.0';
+      if (document.getElementById('au-min-version')) document.getElementById('au-min-version').value = item.minRequiredVersion || 'v2.5.0';
+      if (document.getElementById('au-apk-url')) document.getElementById('au-apk-url').value = item.apkUrl || '';
+      if (document.getElementById('au-title')) document.getElementById('au-title').value = item.title || '';
+      if (document.getElementById('au-notes')) document.getElementById('au-notes').value = item.releaseNotes || '';
+      if (document.getElementById('au-banner-url')) document.getElementById('au-banner-url').value = item.bannerUrl || '';
+      if (document.getElementById('au-force-toggle')) document.getElementById('au-force-toggle').checked = !!item.forceUpdate;
+      window.onAppUpdateFormChange();
+      showToast(`Loaded ${item.pushedVersion} into Update Studio! Click "Push APK Update Live" to deploy.`);
+    };
+
+    window.promoteHistoryToBaseline = async function(idx) {
+      const item = (window.appUpdateHistoryList || [])[idx];
+      if (!item) return;
+      const ver = window.formatSemVerTag(item.pushedVersion || 'v2.5.0');
+      const confirmed = await window.showCustomConfirm(
+        'Set as Running Baseline Version',
+        `Set ${ver} as the current running baseline version in "Me > Settings > Check update"?`,
+        { okText: 'Set as Baseline', cancelText: 'Cancel' }
+      );
+      if (!confirmed) return;
+      if (document.getElementById('au-current-baseline')) document.getElementById('au-current-baseline').value = ver;
+      await window.saveBaselineVersionQuick();
+    };
+
+    window.deleteHistoryUpdate = async function(idx) {
+      const item = (window.appUpdateHistoryList || [])[idx];
+      if (!item) return;
+      const confirmed = await window.showCustomConfirm(
+        'Delete Release Record',
+        `Delete update log for ${item.pushedVersion}?`,
+        { okText: 'Delete', cancelText: 'Cancel' }
+      );
+      if (!confirmed) return;
+      try {
+        window.appUpdateHistoryList.splice(idx, 1);
+        await setDoc(doc(db, 'settings', 'update_history'), {
+          list: window.appUpdateHistoryList,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        window.renderUpdateHistoryTable();
+        showToast('Release history record deleted.');
+      } catch (e) {
+        showToast('Error deleting record: ' + e.message);
+      }
+    };
+
     // 12. APP INFORMATION & LEGAL CONTENT VISUAL STUDIO
     window.currentLegalTab = 'about';
 
@@ -11843,6 +12804,7 @@ ${agrA4D}`;
     window.loadCategories();
     window.loadUsers();
     window.loadGeneralSettings();
+    window.loadAppUpdatesManager();
     window.loadMessagesHistory();
 
     // HOT SECTION MANAGEMENT

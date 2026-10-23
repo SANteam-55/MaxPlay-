@@ -257,13 +257,15 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
 
     return deviceScannedVideos.map((vid) => {
       const durText = formatDuration(vid.durationSec);
+      const isVert = Boolean(
+        vid.isVertical || (vid.height && vid.width && vid.height > vid.width && vid.width > 0)
+      );
       return {
         id: `dev_vid_${vid.id}`,
         contentId: `dev_vid_${vid.id}`,
         title: vid.title,
         subtitle: `${vid.folderName || 'Phone Storage'}${durText ? ` • ${durText}` : ''} • ${vid.sizeMb} MB`,
-        posterUrl:
-          'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&auto=format&fit=crop&q=80',
+        posterUrl: vid.thumbnailUrl || `https://maxplay.local/device-video-thumb/${vid.id}`,
         quality: vid.resolution || 'HD',
         language: vid.folderName || 'Phone Video',
         fileSizeMb: vid.sizeMb,
@@ -271,6 +273,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         category: 'local',
         storageKey: `dev_vid_${vid.id}`,
         videoUrl: vid.playbackUrl,
+        isVertical: isVert,
         hasError: false,
         completedAt: (vid.dateModified || 0) * 1000,
       };
@@ -365,7 +368,40 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       triggerToast('Removed from MaxPlay local list');
       return;
     }
+
+    const deletedTarget = completedFiles.find(
+      (f) => f.id === id || f.storageKey === id || f.contentId === id
+    );
+
+    // Immediately clean up Send Direct selection and active session if the deleted file was selected or being shared
+    if (
+      selectedSendFileId === id ||
+      (deletedTarget && selectedSendFileId === deletedTarget.id)
+    ) {
+      setSelectedSendFileId(null);
+    }
+
+    if (
+      activeSendSession &&
+      deletedTarget &&
+      (activeSendSession.storageKey === deletedTarget.storageKey ||
+        activeSendSession.title === deletedTarget.title)
+    ) {
+      if (sendSessionUnsubRef.current) {
+        sendSessionUnsubRef.current();
+        sendSessionUnsubRef.current = null;
+      }
+      NativeBridgeService.stopDirectTransferServerNative();
+      deleteDoc(doc(db, 'downloads', 'p2p_sessions', 'tasks', activeSendSession.code)).catch(
+        () => {}
+      );
+      setActiveSendSession(null);
+      setTransferStatus(null);
+    }
+
     downloadManager.removeCompletedFile(id);
+    setCompletedFiles(downloadManager.getCompletedFiles());
+    triggerToast('Deleted file removed from Downloads & Transfer list');
   };
 
   // Real Recommendations from catalog — strictly excluding sample/mock placeholder items and persisting across tab switches
@@ -417,11 +453,23 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   // ============================================================================
   const handleStartDirectSendSession = async (file: DownloadedFile) => {
     try {
+      // Verify file still exists in completedFiles (not deleted)
+      const latestCompleted = downloadManager.getCompletedFiles();
+      const stillExists = latestCompleted.some(
+        (f) => f.id === file.id && f.category !== 'local'
+      );
+      if (!stillExists) {
+        setCompletedFiles(latestCompleted);
+        triggerToast('This file was already deleted and cannot be sent.');
+        return;
+      }
+
       if (sendSessionUnsubRef.current) {
         sendSessionUnsubRef.current();
         sendSessionUnsubRef.current = null;
       }
 
+      setSelectedSendFileId(file.id);
       const code = String(Math.floor(100000 + Math.random() * 900000));
 
       // Resolve catalog source URLs so receiver can also use universal relay fallback if on different networks
@@ -502,25 +550,36 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       const sessionRef = doc(db, 'downloads', 'p2p_sessions', 'tasks', code);
       await setDoc(sessionRef, sessionObj);
 
-      // Listen for live progress updates from the Receiver MaxPlay app
+      // Listen for live progress updates from the Receiver MaxPlay app so SENDER also sees live % and MB!
       sendSessionUnsubRef.current = onSnapshot(sessionRef, (snap) => {
         if (!snap.exists()) return;
         const data = snap.data() as DirectTransferSession;
         setActiveSendSession(data);
         if (data.status === 'transferring') {
+          const pct = Math.min(99, Math.max(1, data.progress || 10));
+          const totalMb = data.fileSizeMb || file.fileSizeMb || 50;
+          const sentMb = Math.round(((totalMb * pct) / 100) * 10) / 10;
           setTransferStatus({
             active: true,
             mode: 'send',
-            progress: data.progress || 25,
-            message: `Sending "${file.title}" directly to receiver MaxPlay app...`,
+            progress: pct,
+            message: `Sending "${file.title}" to Receiver (${sentMb} MB / ${totalMb} MB • ${pct}%)`,
           });
         } else if (data.status === 'completed') {
-          setTransferStatus(null);
-          triggerToast(`Direct Transfer of "${file.title}" completed!`);
+          setTransferStatus({
+            active: true,
+            mode: 'send',
+            progress: 100,
+            message: `100% Sent! "${file.title}" delivered to Receiver MaxPlay.`,
+          });
+          setTimeout(() => {
+            setTransferStatus(null);
+          }, 2200);
+          triggerToast(`100% Sent! Direct Transfer of "${file.title}" completed!`);
         }
       });
 
-      triggerToast(`Direct Transfer ready! Enter code ${code} on the other MaxPlay app.`);
+      triggerToast(`Direct Transfer ready! Enter code ${code} on the Receiver MaxPlay app.`);
     } catch (err) {
       console.error('Failed to start direct transfer session:', err);
       triggerToast('Could not start transfer session. Check connection.');
@@ -532,21 +591,35 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       const cleanCode = session.code.trim();
       const targetStorageKey =
         session.storageKey || `dl_recv_${session.contentId || cleanCode}_${Date.now()}`;
+      const expectedTotalMb = session.fileSizeMb || 50;
 
       setTransferStatus({
         active: true,
         mode: 'receive',
-        progress: 8,
-        message: `Connecting to Sender MaxPlay app for "${session.title}"...`,
+        progress: 6,
+        message: `Connecting to Sender MaxPlay for "${session.title}" (6%)...`,
       });
 
       const sessionRef = doc(db, 'downloads', 'p2p_sessions', 'tasks', cleanCode);
       try {
-        await setDoc(sessionRef, { ...session, status: 'transferring', progress: 12 }, { merge: true });
+        await setDoc(sessionRef, { ...session, status: 'transferring', progress: 8 }, { merge: true });
       } catch {}
 
       let transferredOk = false;
-      let transferredBytes = (session.fileSizeMb || 50) * 1024 * 1024;
+      let transferredBytes = expectedTotalMb * 1024 * 1024;
+      let lastFirestoreSyncTime = 0;
+      let lastFirestorePct = 8;
+
+      const syncLiveProgressToSender = (pct: number) => {
+        const now = Date.now();
+        if (pct >= 98 || (pct - lastFirestorePct >= 4 && now - lastFirestoreSyncTime > 450)) {
+          lastFirestorePct = pct;
+          lastFirestoreSyncTime = now;
+          setDoc(sessionRef, { status: 'transferring', progress: pct }, { merge: true }).catch(
+            () => {}
+          );
+        }
+      };
 
       // Path 1: Direct Phone-to-Phone LAN P2P Socket Stream (Zero Mobile Data!)
       if (
@@ -560,17 +633,17 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           cleanCode,
           targetStorageKey,
           (pct, msg) => {
+            const cleanPct = Math.min(99, Math.max(5, Math.round(pct)));
+            const recvMb = Math.round(((expectedTotalMb * cleanPct) / 100) * 10) / 10;
             setTransferStatus({
               active: true,
               mode: 'receive',
-              progress: pct,
-              message: msg,
+              progress: cleanPct,
+              message:
+                msg ||
+                `Receiving "${session.title}" (${recvMb} MB / ${expectedTotalMb} MB • ${cleanPct}%)`,
             });
-            if (pct % 20 === 0) {
-              setDoc(sessionRef, { status: 'transferring', progress: pct }, { merge: true }).catch(
-                () => {}
-              );
-            }
+            syncLiveProgressToSender(cleanPct);
           }
         );
         if (p2pRes && p2pRes.ok) {
@@ -606,9 +679,10 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           setTransferStatus({
             active: true,
             mode: 'receive',
-            progress: 18,
-            message: `Receiving "${session.title}" via MaxPlay Direct Relay...`,
+            progress: 14,
+            message: `Receiving "${session.title}" via MaxPlay Direct Stream (14%)...`,
           });
+          syncLiveProgressToSender(14);
 
           let playUrl = rawSource;
           let refererUrl = SmartStreamService.resolveEmbedReferer(rawSource);
@@ -625,21 +699,26 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
             session.quality || '720p',
             (info) => {
               const pct = Math.min(
-                98,
+                99,
                 Math.max(
-                  20,
+                  15,
                   Math.round(
                     (info.downloadedBytes / Math.max(1, info.totalEstimatedBytes)) * 100
                   )
                 )
               );
               const mbNow = Math.round((info.downloadedBytes / (1024 * 1024)) * 10) / 10;
+              const mbTotal = Math.max(
+                expectedTotalMb,
+                Math.round((info.totalEstimatedBytes / (1024 * 1024)) * 10) / 10
+              );
               setTransferStatus({
                 active: true,
                 mode: 'receive',
                 progress: pct,
-                message: `Receiving "${session.title}" into MaxPlay (${mbNow} MB)...`,
+                message: `Receiving "${session.title}" (${mbNow} MB / ${mbTotal} MB • ${pct}%)`,
               });
+              syncLiveProgressToSender(pct);
             },
             session.language || 'Hindi',
             transferredBytes,
@@ -681,6 +760,13 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         storageKey: targetStorageKey,
       });
 
+      setTransferStatus({
+        active: true,
+        mode: 'receive',
+        progress: 100,
+        message: `100% Received! "${session.title}" saved in Received tab.`,
+      });
+
       try {
         await setDoc(
           sessionRef,
@@ -692,11 +778,13 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         }, 5000);
       } catch {}
 
-      setTransferStatus(null);
+      setTimeout(() => {
+        setTransferStatus(null);
+      }, 1500);
       setShowTransferModal(false);
       setReceiveCodeInput('');
       setActiveFilter('received');
-      triggerToast(`Received "${session.title}" directly into Received tab!`);
+      triggerToast(`100% Received "${session.title}" directly into Received tab!`);
     } catch (err) {
       console.error('Direct App-to-App receive failed:', err);
       setTransferStatus(null);
@@ -825,11 +913,13 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
 
       downloadManager.addImportedCompletedFile({
         title: imported.title,
+        posterUrl: imported.posterUrl,
         quality: imported.quality,
         language: imported.language,
         fileSizeMb: imported.fileSizeMb,
         category: 'local',
         storageKey: imported.storageKey,
+        isVertical: imported.isVertical,
       });
 
       setTransferStatus(null);
@@ -888,7 +978,11 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           <button
             type="button"
             onClick={() => {
-              setSelectedSendFileId(completedFiles[0]?.id || null);
+              const freshFiles = downloadManager
+                .getCompletedFiles()
+                .filter((f) => f.category !== 'local');
+              setCompletedFiles(downloadManager.getCompletedFiles());
+              setSelectedSendFileId(freshFiles[0]?.id || null);
               setShowTransferModal(true);
             }}
             className="flex items-center gap-1.5 rounded-xl bg-[#121212] px-3 py-2 text-xs font-bold text-[#10B981] border border-[#10B981]/30 hover:bg-[#10B981]/10 transition cursor-pointer active:scale-95"
@@ -901,18 +995,20 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
 
       {/* LIVE TRANSFER / IMPORT PROGRESS INDICATOR BAR */}
       {transferStatus && transferStatus.active && (
-        <div className="mt-3 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-[#121820] to-[#121216] p-3.5 border border-emerald-500/40 shadow-lg">
+        <div className="mt-3 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-[#111922] to-[#121218] p-3.5 border border-emerald-500/40 shadow-lg">
           <div className="flex items-center justify-between gap-2 mb-2">
             <div className="flex items-center gap-2 min-w-0">
               <Loader2 className="h-4 w-4 text-emerald-400 animate-spin shrink-0" />
               <span className="text-xs font-bold text-white truncate">{transferStatus.message}</span>
             </div>
-            <span className="text-xs font-black text-emerald-400 shrink-0">{transferStatus.progress}%</span>
+            <span className="rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-xs font-black text-emerald-300 shrink-0">
+              {transferStatus.progress}%
+            </span>
           </div>
-          <div className="h-2 w-full rounded-full bg-black/60 overflow-hidden">
+          <div className="h-2.5 w-full rounded-full bg-black/70 overflow-hidden border border-white/5">
             <div
-              className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-all duration-200 rounded-full"
-              style={{ width: `${Math.min(100, Math.max(5, transferStatus.progress))}%` }}
+              className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 transition-all duration-200 rounded-full"
+              style={{ width: `${Math.min(100, Math.max(4, transferStatus.progress))}%` }}
             />
           </div>
         </div>
@@ -1058,7 +1154,28 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                 onPlayEpisode={(ep) => handlePlayItem(ep, series.episodes)}
                 onDeleteEpisode={handleDeleteCompleted}
                 onDeleteSeries={(episodes) => {
-                  episodes.forEach((ep) => handleDeleteCompleted(ep.id));
+                  const ids = episodes.map((ep) => ep.id);
+                  if (selectedSendFileId && ids.includes(selectedSendFileId)) {
+                    setSelectedSendFileId(null);
+                  }
+                  if (
+                    activeSendSession &&
+                    episodes.some((ep) => ep.storageKey === activeSendSession.storageKey)
+                  ) {
+                    if (sendSessionUnsubRef.current) {
+                      sendSessionUnsubRef.current();
+                      sendSessionUnsubRef.current = null;
+                    }
+                    NativeBridgeService.stopDirectTransferServerNative();
+                    deleteDoc(
+                      doc(db, 'downloads', 'p2p_sessions', 'tasks', activeSendSession.code)
+                    ).catch(() => {});
+                    setActiveSendSession(null);
+                    setTransferStatus(null);
+                  }
+                  downloadManager.removeCompletedFilesBatch(ids);
+                  setCompletedFiles(downloadManager.getCompletedFiles());
+                  triggerToast('Deleted series removed from Downloads & Transfer list');
                 }}
               />
             ))}
@@ -1179,16 +1296,16 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       {/* DIRECT APP-TO-APP MAXPLAY TRANSFER MODAL */}
       {showTransferModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
-          <div className="flex w-full max-w-md flex-col rounded-3xl bg-[#121216] p-5 sm:p-6 border border-white/10 text-left shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-none">
+          <div className="flex w-full max-w-md flex-col rounded-3xl bg-[#121216] p-5 sm:p-6 border border-white/10 text-left shadow-2xl max-h-[92vh] overflow-y-auto scrollbar-none">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#10B981]/25 to-[#06B6D4]/25 text-[#10B981] border border-[#10B981]/40 shadow-md">
                   <Wifi className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white">Direct App-to-App Transfer</h3>
                   <p className="text-[11px] text-[#A1A1AA]">
-                    Send downloads directly from one MaxPlay app to another
+                    High-speed P2P transfer between two MaxPlay devices
                   </p>
                 </div>
               </div>
@@ -1206,9 +1323,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               <button
                 type="button"
                 onClick={() => setTransferTab('send')}
-                className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-extrabold transition cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-extrabold transition cursor-pointer ${
                   transferTab === 'send'
-                    ? 'bg-[#10B981] text-black shadow-md'
+                    ? 'bg-gradient-to-r from-[#10B981] to-[#059669] text-black shadow-md'
                     : 'text-[#A1A1AA] hover:text-white'
                 }`}
               >
@@ -1218,9 +1335,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               <button
                 type="button"
                 onClick={() => setTransferTab('receive')}
-                className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-extrabold transition cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-extrabold transition cursor-pointer ${
                   transferTab === 'receive'
-                    ? 'bg-[#06B6D4] text-black shadow-md'
+                    ? 'bg-gradient-to-r from-[#06B6D4] to-[#10B981] text-black shadow-md'
                     : 'text-[#A1A1AA] hover:text-white'
                 }`}
               >
@@ -1229,40 +1346,94 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               </button>
             </div>
 
-            {/* Live Status inside Modal if active */}
+            {/* Live Percentage Progress Indicator inside Modal (Visible on both Sender & Receiver!) */}
             {transferStatus && transferStatus.active && (
-              <div className="mt-4 rounded-xl bg-black/60 p-3 border border-emerald-500/40">
-                <div className="flex items-center justify-between text-xs font-bold text-emerald-300 mb-1.5">
-                  <span className="truncate">{transferStatus.message}</span>
-                  <span>{transferStatus.progress}%</span>
+              <div className="mt-4 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-[#0E171D] to-[#12151C] p-3.5 border border-emerald-500/50 shadow-lg">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Loader2 className="h-4 w-4 text-emerald-400 animate-spin shrink-0" />
+                    <span className="text-xs font-bold text-white truncate">
+                      {transferStatus.message}
+                    </span>
+                  </div>
+                  <span className="rounded-lg bg-emerald-500/20 border border-emerald-400/40 px-2.5 py-0.5 text-xs font-black text-emerald-300 shrink-0">
+                    {transferStatus.progress}%
+                  </span>
                 </div>
-                <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                <div className="h-2.5 w-full rounded-full bg-black/70 overflow-hidden border border-white/10">
                   <div
-                    className="h-full bg-emerald-400 transition-all duration-200"
-                    style={{ width: `${transferStatus.progress}%` }}
+                    className="h-full bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 transition-all duration-200 rounded-full"
+                    style={{ width: `${Math.min(100, Math.max(4, transferStatus.progress))}%` }}
                   />
+                </div>
+                <div className="mt-1.5 flex items-center justify-between text-[10px] font-semibold text-emerald-300/80">
+                  <span>
+                    {transferStatus.mode === 'send'
+                      ? 'Sender Device • Live P2P Sync'
+                      : 'Receiver Device • Saving to Offline Vault'}
+                  </span>
+                  <span>{transferStatus.progress}% Complete</span>
                 </div>
               </div>
             )}
 
             {transferTab === 'send' ? (
               <div className="mt-4 flex flex-col gap-3">
-                {/* Active 6-Digit Direct Transfer Code Box */}
+                {/* Styled Step-by-Step Sender Instructions */}
+                <div className="rounded-2xl bg-[#16171F] p-3.5 border border-emerald-500/25">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>How to Send (Step-by-Step)</span>
+                    </span>
+                    <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                      Zero Data P2P
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1.5 text-[11px] text-zinc-300">
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-[10px] font-black text-emerald-300 border border-emerald-500/40">
+                        1
+                      </span>
+                      <span>
+                        Connect both phones to the <strong className="text-white">same Wi-Fi or Hotspot</strong> (or keep both online).
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-[10px] font-black text-emerald-300 border border-emerald-500/40">
+                        2
+                      </span>
+                      <span>
+                        Tap <strong className="text-emerald-400">Send Direct</strong> next to any movie or episode below to generate your <strong className="text-white">6-Digit Code</strong>.
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-[10px] font-black text-emerald-300 border border-emerald-500/40">
+                        3
+                      </span>
+                      <span>
+                        On the 2nd phone, open <strong className="text-cyan-300">Transfer &gt; Receive Direct</strong>, enter the code (or tap the auto-detected card), and watch live <strong className="text-emerald-300">0%–100%</strong> progress on both phones!
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Active 6-Digit Direct Transfer Code Box with Live Sender Progress */}
                 {activeSendSession && (
-                  <div className="rounded-2xl bg-gradient-to-b from-emerald-950/60 to-[#14181D] p-4 border border-emerald-500/40 text-center">
+                  <div className="rounded-2xl bg-gradient-to-b from-emerald-950/60 to-[#14181D] p-4 border border-emerald-500/40 text-center shadow-lg">
                     <div className="flex items-center justify-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
                       <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
                       <span>
                         {activeSendSession.status === 'completed'
-                          ? 'Transfer Completed!'
+                          ? '100% Transfer Completed!'
                           : activeSendSession.status === 'transferring'
-                          ? `Sending to Receiver (${activeSendSession.progress || 25}%)...`
-                          : 'Ready to Connect • Enter Code on Receiver MaxPlay'}
+                          ? `Sending to Receiver Device (${activeSendSession.progress || 10}%)...`
+                          : 'Waiting for Receiver • Enter Code on Receiver Phone'}
                       </span>
                     </div>
 
                     <div className="mt-2.5 flex items-center justify-center gap-2">
-                      <div className="rounded-xl bg-black/70 px-5 py-2.5 border border-emerald-500/40 font-mono text-2xl font-black tracking-[0.25em] text-white shadow-inner">
+                      <div className="rounded-xl bg-black/80 px-5 py-2.5 border border-emerald-500/50 font-mono text-2xl font-black tracking-[0.25em] text-white shadow-inner">
                         {activeSendSession.code.slice(0, 3)} {activeSendSession.code.slice(3)}
                       </div>
                       <button
@@ -1278,25 +1449,61 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                       </button>
                     </div>
 
-                    <p className="mt-2 text-[11px] text-zinc-300 truncate font-semibold">
-                      Sharing: {activeSendSession.title}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-zinc-400">
-                      On the other phone, open <span className="text-white font-bold">MaxPlay &gt; Downloads &gt; Transfer &gt; Receive Direct</span>
+                    {/* Live Progress Bar inside Active Session Card on Sender Phone */}
+                    {(activeSendSession.status === 'transferring' ||
+                      activeSendSession.status === 'completed') && (
+                      <div className="mt-3 text-left">
+                        <div className="flex items-center justify-between text-[11px] font-black text-emerald-300 mb-1">
+                          <span>
+                            {activeSendSession.status === 'completed'
+                              ? 'Delivered to Receiver!'
+                              : 'Live Transfer Progress'}
+                          </span>
+                          <span>
+                            {activeSendSession.status === 'completed'
+                              ? '100%'
+                              : `${activeSendSession.progress || 10}%`}
+                          </span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-black/70 overflow-hidden border border-emerald-500/30">
+                          <div
+                            className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-200 rounded-full"
+                            style={{
+                              width: `${
+                                activeSendSession.status === 'completed'
+                                  ? 100
+                                  : Math.min(99, Math.max(8, activeSendSession.progress || 10))
+                              }%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="mt-2.5 text-[11px] text-zinc-200 truncate font-bold">
+                      Sharing: {activeSendSession.title} ({activeSendSession.fileSizeMb} MB)
                     </p>
                   </div>
                 )}
 
-                <p className="text-xs text-[#A1A1AA]">
-                  Tap <span className="text-emerald-400 font-bold">Send Direct</span> on any downloaded movie or episode to beam it directly to another MaxPlay app:
-                </p>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-white">
+                    Available Downloaded &amp; Received Files (
+                    {completedFiles.filter((f) => f.category !== 'local' && !f.hasError).length})
+                  </span>
+                  <span className="text-[10px] text-zinc-400">Deleted files are auto-removed</span>
+                </div>
 
-                {completedFiles.filter((f) => f.category !== 'local').length > 0 ? (
+                {completedFiles.filter((f) => f.category !== 'local' && !f.hasError).length > 0 ? (
                   <div className="max-h-56 overflow-y-auto flex flex-col gap-2 pr-1 scrollbar-none">
                     {completedFiles
-                      .filter((f) => f.category !== 'local')
+                      .filter((f) => f.category !== 'local' && !f.hasError)
                       .map((file) => {
                         const isSelected = selectedSendFileId === file.id;
+                        const isCurrentlySending =
+                          activeSendSession &&
+                          (activeSendSession.storageKey === file.storageKey ||
+                            activeSendSession.title === file.title);
                         const epLabel =
                           file.episodeIndex !== undefined ? ` • Ep ${file.episodeIndex + 1}` : '';
                         return (
@@ -1304,8 +1511,10 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                             key={file.id}
                             onClick={() => setSelectedSendFileId(file.id)}
                             className={`flex items-center justify-between gap-3 rounded-xl p-2.5 border transition cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-500/15 border-emerald-500/50'
+                              isCurrentlySending
+                                ? 'bg-emerald-500/20 border-emerald-400'
+                                : isSelected
+                                ? 'bg-emerald-500/10 border-emerald-500/50'
                                 : 'bg-[#18181D] border-white/5 hover:border-white/15'
                             }`}
                           >
@@ -1316,10 +1525,17 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                                 className="h-11 w-8 rounded-lg object-cover bg-black shrink-0"
                               />
                               <div className="min-w-0">
-                                <h4 className="text-xs font-bold text-white truncate">
-                                  {file.title}
-                                  {epLabel}
-                                </h4>
+                                <div className="flex items-center gap-1.5">
+                                  <h4 className="text-xs font-bold text-white truncate">
+                                    {file.title}
+                                    {epLabel}
+                                  </h4>
+                                  {file.category === 'received' && (
+                                    <span className="rounded bg-cyan-500/20 px-1.5 py-0.2 text-[8px] font-black uppercase text-cyan-300 shrink-0">
+                                      Received
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-[10px] text-[#A1A1AA]">
                                   {file.quality?.toUpperCase() || 'HD'} • {file.language || 'Default'} • {file.fileSizeMb} MB
                                 </p>
@@ -1331,9 +1547,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                                 e.stopPropagation();
                                 handleStartDirectSendSession(file);
                               }}
-                              className="shrink-0 rounded-lg bg-[#10B981] px-3 py-1.5 text-[11px] font-extrabold text-black hover:brightness-110 active:scale-95 cursor-pointer"
+                              className="shrink-0 rounded-lg bg-gradient-to-r from-[#10B981] to-[#059669] px-3 py-1.5 text-[11px] font-extrabold text-black shadow-md hover:brightness-110 active:scale-95 cursor-pointer"
                             >
-                              Send Direct
+                              {isCurrentlySending ? 'Active Code' : 'Send Direct'}
                             </button>
                           </div>
                         );
@@ -1342,13 +1558,52 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                 ) : (
                   <div className="rounded-2xl bg-[#18181D] p-6 text-center border border-white/5">
                     <p className="text-xs font-bold text-[#A1A1AA]">
-                      No downloaded MovieBox files available to send yet.
+                      No active MovieBox or Received files available to send.
                     </p>
                   </div>
                 )}
               </div>
             ) : (
               <div className="mt-4 flex flex-col gap-3">
+                {/* Styled Step-by-Step Receiver Instructions */}
+                <div className="rounded-2xl bg-[#141920] p-3.5 border border-cyan-500/25">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>How to Receive (Step-by-Step)</span>
+                    </span>
+                    <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                      Instant Save
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1.5 text-[11px] text-zinc-300">
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-[10px] font-black text-cyan-300 border border-cyan-500/40">
+                        1
+                      </span>
+                      <span>
+                        Ask the Sender phone to open <strong className="text-white">Transfer &gt; Send Direct</strong> and tap <strong className="text-emerald-400">Send Direct</strong> on a video.
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-[10px] font-black text-cyan-300 border border-cyan-500/40">
+                        2
+                      </span>
+                      <span>
+                        Enter the <strong className="text-white">6-Digit Transfer Code</strong> below or tap <strong className="text-cyan-300">Receive</strong> on the auto-detected session.
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-[10px] font-black text-cyan-300 border border-cyan-500/40">
+                        3
+                      </span>
+                      <span>
+                        Watch the live <strong className="text-cyan-300">0%–100%</strong> bar complete — your video will play offline in the <strong className="text-white">Received</strong> tab!
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* 1. Enter 6-Digit Transfer Code */}
                 <div className="rounded-2xl bg-[#18181D] p-4 border border-white/10">
                   <label className="block text-xs font-bold text-white mb-1.5">

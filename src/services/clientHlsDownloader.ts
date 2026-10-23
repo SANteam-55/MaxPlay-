@@ -1496,6 +1496,141 @@ export class ClientHlsDownloader {
   }
 
   /**
+   * Extracts a real video frame thumbnail (JPEG Data URL) and true orientation (horizontal vs vertical)
+   * from any local video file or URL using an offscreen HTML5 video & canvas.
+   */
+  public static extractRealVideoThumbnailAndOrientation(
+    source: File | string
+  ): Promise<{
+    posterUrl: string;
+    isVertical: boolean;
+    qualityLabel: string;
+    durationSec: number;
+  }> {
+    return new Promise((resolve) => {
+      if (typeof document === 'undefined') {
+        resolve({ posterUrl: '', isVertical: false, qualityLabel: 'Local HD', durationSec: 0 });
+        return;
+      }
+
+      let settled = false;
+      let tempObjectUrl = '';
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = 'anonymous';
+
+      const finish = (res: {
+        posterUrl: string;
+        isVertical: boolean;
+        qualityLabel: string;
+        durationSec: number;
+      }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+          if (tempObjectUrl) URL.revokeObjectURL(tempObjectUrl);
+        } catch {}
+        resolve(res);
+      };
+
+      const timeoutId = setTimeout(() => {
+        const w = video.videoWidth || 0;
+        const h = video.videoHeight || 0;
+        finish({
+          posterUrl: '',
+          isVertical: h > w && w > 0,
+          qualityLabel: 'Local HD',
+          durationSec: Math.round(video.duration || 0),
+        });
+      }, 3500);
+
+      const captureFrame = () => {
+        try {
+          const w = video.videoWidth || 640;
+          const h = video.videoHeight || 360;
+          const isVertical = h > w && w > 0;
+          const shortSide = Math.min(w, h) || h;
+          const qualityLabel =
+            shortSide >= 2000
+              ? '4K'
+              : shortSide >= 1000
+              ? '1080p'
+              : shortSide >= 700
+              ? '720p'
+              : shortSide >= 450
+              ? '480p'
+              : 'HD';
+
+          const maxDim = 480;
+          const scale = Math.min(1, maxDim / Math.max(w, h, 1));
+          const cw = Math.max(64, Math.round(w * scale));
+          const ch = Math.max(64, Math.round(h * scale));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = cw;
+          canvas.height = ch;
+          const ctx = canvas.getContext('2d');
+          let dataUrl = '';
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, cw, ch);
+            dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          }
+          finish({
+            posterUrl: dataUrl && dataUrl.length > 128 ? dataUrl : '',
+            isVertical,
+            qualityLabel,
+            durationSec: Math.round(video.duration || 0),
+          });
+        } catch {
+          const w = video.videoWidth || 0;
+          const h = video.videoHeight || 0;
+          finish({
+            posterUrl: '',
+            isVertical: h > w && w > 0,
+            qualityLabel: 'Local HD',
+            durationSec: Math.round(video.duration || 0),
+          });
+        }
+      };
+
+      video.onloadedmetadata = () => {
+        try {
+          const dur = Number(video.duration) || 0;
+          const targetSeek = dur > 3 ? Math.min(2.0, dur * 0.15) : 0.2;
+          video.currentTime = targetSeek;
+        } catch {
+          captureFrame();
+        }
+      };
+
+      video.onseeked = () => {
+        captureFrame();
+      };
+
+      video.onerror = () => {
+        finish({ posterUrl: '', isVertical: false, qualityLabel: 'Local HD', durationSec: 0 });
+      };
+
+      try {
+        if (typeof source === 'string') {
+          video.src = source;
+        } else {
+          tempObjectUrl = URL.createObjectURL(source);
+          video.src = tempObjectUrl;
+        }
+      } catch {
+        finish({ posterUrl: '', isVertical: false, qualityLabel: 'Local HD', durationSec: 0 });
+      }
+    });
+  }
+
+  /**
    * Imports a local video file (.mp4 / .mkv / .webm / .mov) from the user's phone storage into MaxPlay Local Files.
    * Uses 4 MB chunked slicing so even large movie files never run out of WebView RAM.
    */
@@ -1509,6 +1644,8 @@ export class ClientHlsDownloader {
     title: string;
     quality: string;
     language: string;
+    posterUrl: string;
+    isVertical: boolean;
   } | null> {
     try {
       onProgress?.(5, 'Opening local video file...');
@@ -1523,6 +1660,9 @@ export class ClientHlsDownloader {
         const directUrl = URL.createObjectURL(file);
         this.localDirectUrls.set(storageKey, directUrl);
       } catch {}
+
+      // Extract real video frame thumbnail & true orientation (horizontal vs vertical)
+      const meta = await this.extractRealVideoThumbnailAndOrientation(file);
 
       // Persist in 4 MB chunks into IndexedDB so it stays available across sessions without OOM
       const CHUNK_SIZE = 4 * 1024 * 1024;
@@ -1540,7 +1680,7 @@ export class ClientHlsDownloader {
         }
         await putChunk(`${storageKey}_totalChunks`, totalChunks);
         await putChunk(`${storageKey}_isSingleFile`, 1);
-        await putChunk(`${storageKey}_durationSec`, 1440);
+        await putChunk(`${storageKey}_durationSec`, meta.durationSec || 1440);
       } else {
         onProgress?.(85, 'Indexing large local video for direct hardware playback...');
       }
@@ -1551,8 +1691,10 @@ export class ClientHlsDownloader {
         totalBytes,
         fileSizeMb,
         title: cleanTitle,
-        quality: 'Local HD',
+        quality: meta.qualityLabel || 'Local HD',
         language: 'Original',
+        posterUrl: meta.posterUrl,
+        isVertical: meta.isVertical,
       };
     } catch (err) {
       console.error('[ClientHlsDownloader] importLocalVideoFile error:', err);

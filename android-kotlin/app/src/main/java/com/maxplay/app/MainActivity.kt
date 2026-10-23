@@ -729,7 +729,192 @@ class MainActivity : AppCompatActivity() {
             } else {
                 callback?.onReceiveValue(null)
             }
+        } else if (requestCode == 3005) {
+            val pendingFile = pendingApkInstallFile
+            if (pendingFile != null && pendingFile.exists()) {
+                launchAndroidPackageInstaller(pendingFile)
+            }
         }
+    }
+
+    private var pendingApkInstallFile: java.io.File? = null
+
+    private fun emitApkUpdateProgress(
+        status: String,
+        progress: Int,
+        downloadedMb: Double,
+        totalMb: Double,
+        version: String,
+        message: String
+    ) {
+        runOnUiThread {
+            try {
+                val payload = org.json.JSONObject().apply {
+                    put("status", status)
+                    put("progress", progress)
+                    put("downloadedMb", downloadedMb)
+                    put("totalMb", totalMb)
+                    put("version", version)
+                    put("message", message)
+                }.toString()
+                webView.evaluateJavascript(
+                    "window.__onMaxPlayApkUpdateProgress && window.__onMaxPlayApkUpdateProgress($payload);",
+                    null
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Downloads the Admin's APK update in the background with live 0% -> 100% progress
+     * and launches Android's native Package Installer automatically when complete.
+     */
+    fun startNativeApkUpdate(apkUrl: String, versionName: String, title: String) {
+        val cleanUrl = apkUrl.trim()
+        if (cleanUrl.isBlank()) {
+            emitApkUpdateProgress("error", 0, 0.0, 0.0, versionName, "Invalid APK download link.")
+            return
+        }
+
+        kotlin.concurrent.thread(start = true, name = "MaxPlayApkUpdater") {
+            try {
+                val safeVer = versionName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "latest" }
+                val updateDir = java.io.File(externalCacheDir ?: cacheDir, "apk_updates")
+                if (!updateDir.exists()) updateDir.mkdirs()
+                val apkFile = java.io.File(updateDir, "MaxPlay_Update_$safeVer.apk")
+                if (apkFile.exists()) apkFile.delete()
+
+                emitApkUpdateProgress("downloading", 2, 0.0, 0.0, versionName, "Connecting to update server...")
+
+                val req = okhttp3.Request.Builder()
+                    .url(cleanUrl)
+                    .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                    .build()
+
+                InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw Exception("Server returned HTTP ${resp.code}")
+                    }
+                    val body = resp.body ?: throw Exception("Empty APK stream")
+                    val contentLength = body.contentLength()
+                    val totalMb = if (contentLength > 0) (contentLength.toDouble() / (1024.0 * 1024.0)) else 42.0
+
+                    body.byteStream().use { input ->
+                        java.io.FileOutputStream(apkFile).use { output ->
+                            val buffer = ByteArray(32 * 1024)
+                            var bytesRead: Int
+                            var totalRead = 0L
+                            var lastEmitTime = 0L
+
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalRead += bytesRead
+                                val now = System.currentTimeMillis()
+                                if (now - lastEmitTime >= 150) {
+                                    lastEmitTime = now
+                                    val dlMb = totalRead.toDouble() / (1024.0 * 1024.0)
+                                    val pct = if (contentLength > 0) {
+                                        ((totalRead * 100L) / contentLength).toInt().coerceIn(3, 99)
+                                    } else {
+                                        ((dlMb / totalMb) * 95.0).toInt().coerceIn(5, 95)
+                                    }
+                                    emitApkUpdateProgress(
+                                        "downloading",
+                                        pct,
+                                        Math.round(dlMb * 10.0) / 10.0,
+                                        Math.round(totalMb * 10.0) / 10.0,
+                                        versionName,
+                                        "Downloading MaxPlay $versionName ($pct%)..."
+                                    )
+                                }
+                            }
+                            output.flush()
+                        }
+                    }
+
+                    val finalMb = Math.round((apkFile.length().toDouble() / (1024.0 * 1024.0)) * 10.0) / 10.0
+                    emitApkUpdateProgress(
+                        "installing",
+                        100,
+                        finalMb,
+                        finalMb,
+                        versionName,
+                        "Download complete! Launching Android App Installer..."
+                    )
+                    showNativeStatusNotification(
+                        title.ifBlank { "MaxPlay $versionName Downloaded" },
+                        "Tap to install the latest MaxPlay APK update.",
+                        ""
+                    )
+                    installDownloadedApk(apkFile)
+                }
+            } catch (e: Exception) {
+                // If direct stream failed (e.g., webpage hosting link like Google Drive / Mega / GitHub release page),
+                // open in Android system browser / downloader as seamless fallback
+                emitApkUpdateProgress(
+                    "browser_fallback",
+                    100,
+                    0.0,
+                    0.0,
+                    versionName,
+                    "Opening official APK installer download..."
+                )
+                runOnUiThread {
+                    try {
+                        val browserIntent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(cleanUrl)
+                        ).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(browserIntent)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun installDownloadedApk(apkFile: java.io.File) {
+        runOnUiThread {
+            try {
+                pendingApkInstallFile = apkFile
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    if (!packageManager.canRequestPackageInstalls()) {
+                        val permIntent = android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            android.net.Uri.parse("package:$packageName")
+                        )
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(permIntent, 3005)
+                        return@runOnUiThread
+                    }
+                }
+                launchAndroidPackageInstaller(apkFile)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun launchAndroidPackageInstaller(apkFile: java.io.File) {
+        try {
+            val apkUri: android.net.Uri = try {
+                androidx.core.content.FileProvider.getUriForFile(
+                    this,
+                    "$packageName.fileprovider",
+                    apkFile
+                )
+            } catch (_: Exception) {
+                val builder = android.os.StrictMode.VmPolicy.Builder()
+                android.os.StrictMode.setVmPolicy(builder.build())
+                android.net.Uri.fromFile(apkFile)
+            }
+
+            val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(installIntent)
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {

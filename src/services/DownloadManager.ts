@@ -41,6 +41,7 @@ export interface DownloadedFile {
   category?: 'moviebox' | 'local' | 'received' | 'movie' | 'series';
   storageKey?: string;
   videoUrl?: string;
+  isVertical?: boolean;
   hasError?: boolean;
   completedAt?: number;
   downloadedAt?: string;
@@ -526,11 +527,56 @@ class DownloadManagerService {
     const target = this.completedFiles.find(
       (f) => f.id === id || f.storageKey === id || f.contentId === id
     );
-    if (target && target.storageKey) {
-      await ClientHlsDownloader.deleteOfflineFile(target.storageKey);
-    }
-    this.completedFiles = this.completedFiles.filter((f) => f.id !== id);
+    const targetStorageKey = target?.storageKey;
+
+    // Immediately remove from in-memory state and persist to localStorage + notify UI subscribers
+    // BEFORE awaiting disk deletion so Transfer > Send Direct and all tabs update instantaneously!
+    this.completedFiles = this.completedFiles.filter((f) => {
+      if (f.id === id || f.storageKey === id || f.contentId === id) return false;
+      if (targetStorageKey && f.storageKey === targetStorageKey) return false;
+      return true;
+    });
     this.saveState();
+
+    if (targetStorageKey) {
+      try {
+        await ClientHlsDownloader.deleteOfflineFile(targetStorageKey);
+      } catch (e) {
+        console.warn('[DownloadManager] Failed to delete offline storage file:', e);
+      }
+    }
+  }
+
+  public async removeCompletedFilesBatch(ids: string[]) {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const storageKeysToDelete = new Set<string>();
+
+    this.completedFiles.forEach((f) => {
+      if (
+        idSet.has(f.id) ||
+        (f.storageKey && idSet.has(f.storageKey)) ||
+        (f.contentId && idSet.has(f.contentId))
+      ) {
+        if (f.storageKey) storageKeysToDelete.add(f.storageKey);
+      }
+    });
+
+    this.completedFiles = this.completedFiles.filter((f) => {
+      if (idSet.has(f.id)) return false;
+      if (f.storageKey && (idSet.has(f.storageKey) || storageKeysToDelete.has(f.storageKey))) {
+        return false;
+      }
+      if (f.contentId && idSet.has(f.contentId)) return false;
+      return true;
+    });
+    this.saveState();
+
+    for (const sk of Array.from(storageKeysToDelete)) {
+      try {
+        await ClientHlsDownloader.deleteOfflineFile(sk);
+      } catch {}
+    }
   }
 
   public isDownloaded(
@@ -602,6 +648,7 @@ class DownloadManagerService {
     fileSizeMb: number;
     category: 'received' | 'local' | 'moviebox';
     storageKey: string;
+    isVertical?: boolean;
   }): DownloadedFile {
     const newItem: DownloadedFile = {
       id: `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -615,13 +662,16 @@ class DownloadManagerService {
         `${params.fileSizeMb} MB • ${params.language || 'Default'} • ${(params.quality || 'HD').toUpperCase()}`,
       posterUrl:
         params.posterUrl ||
-        'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&auto=format&fit=crop&q=80',
+        (params.category === 'local'
+          ? ''
+          : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&auto=format&fit=crop&q=80'),
       quality: params.quality || '720p',
       language: params.language || 'Default',
       fileSizeMb: params.fileSizeMb,
       status: `${params.fileSizeMb} MB • ${params.category === 'received' ? 'Received via MaxPlay' : 'Local Video'}`,
       category: params.category,
       storageKey: params.storageKey,
+      isVertical: params.isVertical,
       hasError: false,
       completedAt: Date.now(),
     };

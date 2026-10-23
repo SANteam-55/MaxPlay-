@@ -646,6 +646,8 @@ object MaxPlayOfflineVault {
 
                     val sizeMb = String.format(java.util.Locale.US, "%.1f", sizeBytes / (1024.0 * 1024.0)).toDouble()
 
+                     val isVertical = height > width && width > 0
+
                     val obj = JSONObject().apply {
                         put("id", id.toString())
                         put("title", cleanTitle)
@@ -653,9 +655,13 @@ object MaxPlayOfflineVault {
                         put("sizeMb", sizeMb)
                         put("durationSec", (durMs / 1000L).toInt())
                         put("resolution", resLabel)
+                        put("width", width)
+                        put("height", height)
+                        put("isVertical", isVertical)
                         put("mimeType", mime)
                         put("dateModified", dateMod)
                         put("playbackUrl", "https://maxplay.local/device-video/$id")
+                        put("thumbnailUrl", "https://maxplay.local/device-video-thumb/$id")
                     }
                     arr.put(obj)
                     count++
@@ -669,6 +675,114 @@ object MaxPlayOfflineVault {
             out.put("error", e.message ?: "Scan failed")
         }
         return out
+    }
+
+    /**
+     * Generates and serves a real video frame thumbnail for any local video (`https://maxplay.local/device-video-thumb/{id}`)
+     * with disk caching so subsequent opens render in 0ms.
+     */
+    fun interceptDeviceVideoThumbRequest(
+        context: Context,
+        url: String
+    ): WebResourceResponse? {
+        return try {
+            val marker = "/device-video-thumb/"
+            val idx = url.indexOf(marker)
+            if (idx == -1) return null
+
+            val idStr = url.substring(idx + marker.length).substringBefore("?").substringBefore("/").trim()
+            val videoId = idStr.toLongOrNull() ?: return null
+
+            val corsHeaders = mapOf(
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers" to "*",
+                "Cache-Control" to "public, max-age=86400"
+            )
+
+            val thumbDir = File(context.cacheDir, "video_thumbs")
+            if (!thumbDir.exists()) thumbDir.mkdirs()
+            val cachedThumb = File(thumbDir, "thumb_$videoId.jpg")
+
+            if (cachedThumb.exists() && cachedThumb.length() > 256L) {
+                return WebResourceResponse(
+                    "image/jpeg",
+                    null,
+                    200,
+                    "OK",
+                    corsHeaders,
+                    FileInputStream(cachedThumb)
+                )
+            }
+
+            val contentUri = android.content.ContentUris.withAppendedId(
+                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                videoId
+            )
+
+            var bitmap: android.graphics.Bitmap? = null
+
+            // 1. Fast Android 10+ (API 29+) MediaStore loadThumbnail
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                try {
+                    bitmap = context.contentResolver.loadThumbnail(
+                        contentUri,
+                        android.util.Size(640, 360),
+                        null
+                    )
+                } catch (_: Exception) {}
+            }
+
+            // 2. Fallback: MediaMetadataRetriever real frame extraction (preserves true video aspect ratio)
+            if (bitmap == null) {
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, contentUri)
+                    bitmap = retriever.getFrameAtTime(
+                        1_500_000L,
+                        android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                    ) ?: retriever.getFrameAtTime()
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
+            }
+
+            // 3. Fallback: Legacy MediaStore Video.Thumbnails
+            if (bitmap == null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    bitmap = android.provider.MediaStore.Video.Thumbnails.getThumbnail(
+                        context.contentResolver,
+                        videoId,
+                        android.provider.MediaStore.Video.Thumbnails.MINI_KIND,
+                        null
+                    )
+                } catch (_: Exception) {}
+            }
+
+            if (bitmap != null) {
+                val baos = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 84, baos)
+                val bytes = baos.toByteArray()
+                if (bytes.isNotEmpty()) {
+                    try {
+                        FileOutputStream(cachedThumb).use { it.write(bytes) }
+                    } catch (_: Exception) {}
+                    return WebResourceResponse(
+                        "image/jpeg",
+                        null,
+                        200,
+                        "OK",
+                        corsHeaders,
+                        ByteArrayInputStream(bytes)
+                    )
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

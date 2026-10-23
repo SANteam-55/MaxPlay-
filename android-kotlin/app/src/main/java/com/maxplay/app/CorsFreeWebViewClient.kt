@@ -99,6 +99,11 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 if (devResp != null) {
                     return devResp
                 }
+            } else if (path.startsWith("/device-video-thumb/")) {
+                val thumbResp = MaxPlayOfflineVault.interceptDeviceVideoThumbRequest(context.applicationContext, reqUrl)
+                if (thumbResp != null) {
+                    return thumbResp
+                }
             }
         }
 

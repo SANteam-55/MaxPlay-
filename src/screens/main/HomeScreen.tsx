@@ -40,27 +40,39 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const {
     hasApkUpdate,
     currentApkVersion,
+    formattedCurrentVersion,
     latestApkVersion,
+    formattedLatestVersion,
     apkDownloadUrl,
+    updateTitle,
     updateReleaseNotes,
+    updateBannerUrl,
+    adminUpdateMessage,
+    forceUpdate,
+    triggerManualUpdateCheck,
   } = useGeneralSettings();
   const [showApkUpdateModal, setShowApkUpdateModal] = useState(false);
+  const [isCheckingUpdateManual, setIsCheckingUpdateManual] = useState(false);
+  const [apkUpdateProgress, setApkUpdateProgress] = useState<{
+    status: string;
+    progress: number;
+    message: string;
+  } | null>(null);
   const { heroBanner, trending, cinema, forYou, categories, screensCategories, homeRowsByScreen, contentList, loading } = useContent();
   const [activeTab, setActiveTab] = useState('Trending');
 
-  // Automatically show APK Update popup when a newer version is available, plus periodic reminders until updated
+  // Automatically show APK Update popup when a newer version is available in Admin messages/settings, plus periodic reminders until updated
   useEffect(() => {
     if (!hasApkUpdate) {
-      setShowApkUpdateModal(false);
       return;
     }
     const timer = setTimeout(() => {
       setShowApkUpdateModal(true);
-    }, 1800);
+    }, 1200);
 
     const interval = setInterval(() => {
       setShowApkUpdateModal(true);
-    }, 5 * 60 * 1000); // Remind every 5 minutes until user updates the APK
+    }, 4 * 60 * 1000);
 
     return () => {
       clearTimeout(timer);
@@ -357,22 +369,29 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <button
               type="button"
               onClick={() => {
-                // Only open the APK Update modal when a newer APK version is available (if up to date, do nothing)
-                if (hasApkUpdate) {
-                  setShowApkUpdateModal(true);
-                }
+                triggerManualUpdateCheck();
+                setShowApkUpdateModal(true);
               }}
-              title={hasApkUpdate ? `Update Available (v${latestApkVersion})` : `App Up to Date (v${currentApkVersion})`}
+              title={
+                hasApkUpdate
+                  ? `New APK Update Available (${formattedLatestVersion}) - Tap to Update`
+                  : `Check App Update (${formattedCurrentVersion})`
+              }
               className={`relative flex shrink-0 items-center justify-center h-9 w-9 rounded-full transition cursor-pointer ${
                 hasApkUpdate
-                  ? 'bg-red-600 text-white border border-red-300 shadow-[0_0_16px_rgba(239,68,68,0.9)] animate-pulse hover:bg-red-500'
-                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25'
+                  ? 'bg-red-600 text-white border-2 border-red-200 shadow-[0_0_22px_rgba(239,68,68,1)] animate-pulse hover:bg-red-500'
+                  : 'bg-white/15 backdrop-blur-md text-white hover:bg-white/25 border border-white/10'
               }`}
             >
               {hasApkUpdate && (
-                <span className="absolute -inset-1 rounded-full bg-red-500/40 animate-ping pointer-events-none" />
+                <>
+                  <span className="absolute -inset-1.5 rounded-full bg-red-500/60 animate-ping pointer-events-none" />
+                  <span className="absolute -top-1 -right-1 z-20 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[8px] font-black text-red-600 shadow">
+                    !
+                  </span>
+                </>
               )}
-              <ArrowUp className="relative z-10 h-4 w-4 text-white stroke-[2.5]" />
+              <ArrowUp className="relative z-10 h-4 w-4 text-white stroke-[2.6]" />
             </button>
           </div>
 
@@ -935,9 +954,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         });
       })()}
 
-      {/* APK UPDATE CHECKER MODAL (Triggered by blinking red ArrowUp button & periodic reminder) */}
+      {/* APK UPDATE CHECKER MODAL (Triggered by blinking red ArrowUp button & Admin Update Messages) */}
       <AnimatePresence>
-        {showApkUpdateModal && hasApkUpdate && (
+        {showApkUpdateModal && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -948,64 +967,200 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               initial={{ scale: 0.92, y: 16 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.92, y: 16 }}
-              className="relative flex w-full max-w-sm flex-col rounded-3xl bg-gradient-to-b from-[#1a1215] via-[#121216] to-[#0c0c10] p-6 border border-red-500/40 text-center shadow-[0_0_40px_rgba(239,68,68,0.25)]"
+              className={`relative flex w-full max-w-md flex-col rounded-3xl p-5 sm:p-6 border text-left shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-none ${
+                hasApkUpdate
+                  ? 'bg-gradient-to-b from-[#1f1014] via-[#131217] to-[#0b0b0f] border-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.35)]'
+                  : 'bg-[#121216] border-white/10'
+              }`}
             >
-              <button
-                type="button"
-                onClick={() => setShowApkUpdateModal(false)}
-                className="absolute right-4 top-4 rounded-full bg-white/5 p-1.5 text-white/60 hover:text-white cursor-pointer"
-                title="Remind me later"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              {!forceUpdate && (
+                <button
+                  type="button"
+                  onClick={() => setShowApkUpdateModal(false)}
+                  className="absolute right-4 top-4 rounded-full bg-white/10 p-1.5 text-white/70 hover:text-white cursor-pointer z-10"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
 
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/40 border border-red-400/50 animate-pulse">
-                <ArrowUp className="h-8 w-8 stroke-[2.6]" />
-              </div>
+              {hasApkUpdate ? (
+                <>
+                  {/* Top Blinking Red Header */}
+                  <div className="flex items-center gap-3.5 pr-7">
+                    <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/50 border border-red-300/50 animate-pulse">
+                      <span className="absolute -inset-1 rounded-2xl bg-red-500/30 animate-ping pointer-events-none" />
+                      <ArrowUp className="relative z-10 h-7 w-7 stroke-[2.8]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="inline-flex items-center gap-1.5 rounded-full bg-red-500/20 border border-red-500/40 px-2.5 py-0.5 text-[10px] font-black text-red-300 uppercase tracking-wider">
+                        <span className="h-2 w-2 rounded-full bg-red-400 animate-ping" />
+                        <span>
+                          {forceUpdate
+                            ? `Mandatory Force Update • ${formattedLatestVersion}`
+                            : `New APK Update Available • ${formattedLatestVersion}`}
+                        </span>
+                      </div>
+                      <h3 className="mt-1 text-lg sm:text-xl font-black text-white tracking-tight leading-snug">
+                        {updateTitle || `Update MaxPlay to ${formattedLatestVersion}`}
+                      </h3>
+                    </div>
+                  </div>
 
-              <div className="mt-3 inline-flex items-center justify-center gap-2 self-center rounded-full bg-red-500/15 border border-red-500/30 px-3 py-0.5 text-[11px] font-black text-red-300 uppercase tracking-wider">
-                <span>New Update Available • v{latestApkVersion}</span>
-              </div>
+                  {/* Version Comparison Strip (Synced with Me > Settings > Check Update) */}
+                  <div className="mt-4 grid grid-cols-2 gap-2.5 rounded-2xl bg-black/50 p-3 border border-red-500/25">
+                    <div className="flex flex-col rounded-xl bg-white/[0.03] p-2.5 border border-white/5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Settings &gt; Check Update
+                      </span>
+                      <span className="mt-0.5 font-mono text-sm font-black text-zinc-200 tabular-nums">
+                        {formattedCurrentVersion} (Current)
+                      </span>
+                    </div>
+                    <div className="flex flex-col rounded-xl bg-red-500/10 p-2.5 border border-red-500/30">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-red-300">
+                        Admin Latest Release
+                      </span>
+                      <span className="mt-0.5 font-mono text-sm font-black text-emerald-400 tabular-nums">
+                        {formattedLatestVersion} (New APK)
+                      </span>
+                    </div>
+                  </div>
 
-              <h3 className="mt-2.5 text-xl font-black text-white tracking-tight">
-                Upgrade Your MaxPlay APK
-              </h3>
+                  {/* Detailed Admin Announcement / Release Notes Box */}
+                  <div className="mt-3.5 rounded-2xl bg-white/[0.04] p-3.5 border border-white/10 space-y-2.5">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-tr from-red-600 to-purple-600 text-[10px] font-black text-white shrink-0">
+                          {(adminUpdateMessage?.senderName || 'M').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="truncate">
+                          <span className="text-xs font-extrabold text-white">
+                            {adminUpdateMessage?.senderName || 'MaxPlay Official'}
+                          </span>
+                          <span className="ml-1.5 text-[10px] font-mono text-red-300">
+                            {adminUpdateMessage?.senderHandle || '@MaxPlayAdmin'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-semibold text-zinc-400 shrink-0">
+                        {adminUpdateMessage?.date || 'Official APK'}
+                      </span>
+                    </div>
 
-              <p className="mt-1.5 text-xs text-[#A1A1AA] leading-relaxed">
-                {updateReleaseNotes ||
-                  'Update to the latest version of MaxPlay to enjoy ultra-fast HD streaming, smoother Server 2 offline downloads, voice search, and exclusive new features!'}
-              </p>
+                    <div className="max-h-40 overflow-y-auto pr-1 text-xs text-zinc-200 leading-relaxed whitespace-pre-line scrollbar-none">
+                      {updateReleaseNotes ||
+                        `Admin has released a newer version (${formattedLatestVersion}) above your current version (${formattedCurrentVersion}). Please download and install the latest MaxPlay APK to enjoy all new features and improvements.`}
+                    </div>
 
-              <div className="mt-4 rounded-2xl bg-white/5 p-3 border border-white/10 text-left space-y-1.5">
-                <div className="flex items-center gap-2 text-xs text-white/90 font-semibold">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                  <span>Faster 1080p & 4K HLS Playback + Quality Switch</span>
+                    {updateBannerUrl && (
+                      <div className="w-full rounded-xl overflow-hidden border border-white/10 bg-black/50 max-h-44">
+                        <img
+                          src={updateBannerUrl}
+                          alt={updateTitle}
+                          referrerPolicy="no-referrer"
+                          className="w-full max-h-44 object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Primary Action CTA: Hidden APK Link + Native Android Self-Updater */}
+                  <div className="mt-4 flex flex-col gap-2.5">
+                    {apkUpdateProgress && (
+                      <div className="rounded-xl bg-black/60 border border-red-500/30 p-3 space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px] font-bold">
+                          <span className="text-zinc-200 truncate pr-2">
+                            {apkUpdateProgress.message}
+                          </span>
+                          <span className="text-emerald-400 font-black tabular-nums shrink-0">
+                            {apkUpdateProgress.progress}%
+                          </span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-red-500 via-orange-500 to-emerald-400 transition-all duration-200"
+                            style={{ width: `${Math.max(4, apkUpdateProgress.progress)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={apkUpdateProgress?.status === 'downloading'}
+                      onClick={() => {
+                        NativeBridgeService.triggerApkUpdate(
+                          apkDownloadUrl,
+                          formattedLatestVersion,
+                          updateTitle || `MaxPlay ${formattedLatestVersion} Update`,
+                          (state) => setApkUpdateProgress(state)
+                        );
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer disabled:opacity-75"
+                    >
+                      <Download className="h-4 w-4 stroke-[2.6]" />
+                      <span>
+                        {apkUpdateProgress?.status === 'downloading'
+                          ? `Downloading Update (${apkUpdateProgress.progress}%)...`
+                          : apkUpdateProgress?.status === 'installing'
+                          ? 'Launching Android App Installer...'
+                          : `Update App Now (${formattedLatestVersion})`}
+                      </span>
+                    </button>
+
+                    {!forceUpdate && (
+                      <button
+                        type="button"
+                        onClick={() => setShowApkUpdateModal(false)}
+                        className="w-full rounded-xl py-2 text-[11px] font-semibold text-zinc-400 hover:text-white transition cursor-pointer text-center"
+                      >
+                        Remind me later (Red icon will keep blinking)
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                /* Up-to-Date Status View when user taps the Upload Icon manually */
+                <div className="flex flex-col items-center text-center py-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    <CheckCircle2 className="h-7 w-7" />
+                  </div>
+                  <span className="mt-3 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-0.5 text-[10px] font-black uppercase tracking-wider text-emerald-300">
+                    App Up To Date • {formattedCurrentVersion}
+                  </span>
+                  <h3 className="mt-2 text-lg font-black text-white">
+                    You Have the Latest MaxPlay Version
+                  </h3>
+                  <p className="mt-1.5 text-xs text-zinc-400 leading-relaxed">
+                    Your current version in <strong className="text-white">Me &gt; Settings &gt; Check update</strong> is{' '}
+                    <strong className="text-emerald-400">{formattedCurrentVersion}</strong>. Whenever Admin sends an update message with a version higher than {formattedCurrentVersion}, the upload icon will blink red automatically.
+                  </p>
+                  <div className="mt-4 flex w-full gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsCheckingUpdateManual(true);
+                        await triggerManualUpdateCheck();
+                        setTimeout(() => setIsCheckingUpdateManual(false), 500);
+                      }}
+                      className="flex-1 rounded-xl bg-white/10 hover:bg-white/15 py-2.5 text-xs font-bold text-white border border-white/10 transition cursor-pointer"
+                    >
+                      {isCheckingUpdateManual ? 'Checking Admin Messages...' : 'Check Again Now'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowApkUpdateModal(false)}
+                      className="flex-1 rounded-xl bg-emerald-500 py-2.5 text-xs font-black text-black transition cursor-pointer"
+                    >
+                      Done
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-white/90 font-semibold">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                  <span>Improved Offline Downloads & Device Transfer</span>
-                </div>
-                <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-white/10 text-[11px] text-white/50">
-                  <span>Installed: v{currentApkVersion}</span>
-                  <span className="text-emerald-400 font-bold">Latest: v{latestApkVersion}</span>
-                </div>
-              </div>
-
-              <a
-                href={apkDownloadUrl || '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                download
-                onClick={(e) => {
-                  if (!apkDownloadUrl) {
-                    e.preventDefault();
-                  }
-                }}
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer"
-              >
-                <Download className="h-4 w-4 stroke-[2.5]" />
-                <span>Download Latest APK (v{latestApkVersion})</span>
-              </a>
+              )}
             </motion.div>
           </motion.div>
         )}

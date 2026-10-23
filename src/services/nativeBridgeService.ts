@@ -96,6 +96,16 @@ interface MaxPlayKotlinBridge {
     targetStorageKey: string,
     callbackId: string
   ) => void;
+  downloadAndInstallApk?: (apkUrl: string, versionName: string, title: string) => boolean;
+}
+
+export interface ApkUpdateProgressState {
+  status: 'downloading' | 'installing' | 'permission_required' | 'completed' | 'error';
+  progress: number;
+  downloadedMb: number;
+  totalMb: number;
+  version: string;
+  message: string;
 }
 
 export interface DeviceLocalVideoItem {
@@ -105,9 +115,13 @@ export interface DeviceLocalVideoItem {
   sizeMb: number;
   durationSec: number;
   resolution: string;
+  width?: number;
+  height?: number;
+  isVertical?: boolean;
   mimeType: string;
   dateModified: number;
   playbackUrl: string;
+  thumbnailUrl?: string;
 }
 
 declare global {
@@ -120,6 +134,7 @@ declare global {
     __onMaxPlayPipModeChanged?: (isInPip: boolean) => void;
     __onMaxPlayVoiceResult?: (spokenText: string) => void;
     __onMaxPlayTransferProgress?: (callbackId: string, pct: number, msg: string) => void;
+    __onMaxPlayApkUpdateProgress?: (payload: ApkUpdateProgressState) => void;
     __handleMaxPlayHardwareBack?: () => string;
   }
 }
@@ -1196,5 +1211,106 @@ export class NativeBridgeService {
         resolve({ ok: false, error: e?.message || 'Bridge exception' });
       }
     });
+  }
+
+  /**
+   * Triggers the Admin's hidden APK download link behind the Update button.
+   * - Inside the Android Kotlin APK: Streams the `.apk` natively with live 0% -> 100% progress
+   *   and launches the Android System Package Installer (`application/vnd.android.package-archive`) automatically.
+   * - Inside Web/Preview: Simulates/streams progress and triggers direct file download seamlessly.
+   */
+  public static triggerApkUpdate(
+    apkUrl: string,
+    versionLabel: string,
+    title: string = 'MaxPlay Official Update',
+    onProgress?: (state: ApkUpdateProgressState) => void
+  ): void {
+    const cleanUrl = (apkUrl || '').trim();
+    if (!cleanUrl) {
+      onProgress?.({
+        status: 'error',
+        progress: 0,
+        downloadedMb: 0,
+        totalMb: 0,
+        version: versionLabel,
+        message: 'Admin has not attached an APK download link yet.',
+      });
+      return;
+    }
+
+    // 1. Native Android APK Self-Updater Path
+    if (
+      this.isRunningInKotlinApp() &&
+      typeof window.MaxPlayNative?.downloadAndInstallApk === 'function'
+    ) {
+      window.__onMaxPlayApkUpdateProgress = (payload: ApkUpdateProgressState) => {
+        onProgress?.(payload);
+      };
+      onProgress?.({
+        status: 'downloading',
+        progress: 2,
+        downloadedMb: 0,
+        totalMb: 42.5,
+        version: versionLabel,
+        message: `Starting native Android APK update (${versionLabel})...`,
+      });
+      try {
+        window.MaxPlayNative.downloadAndInstallApk(cleanUrl, versionLabel, title);
+        return;
+      } catch {}
+    }
+
+    // 2. Comfortable Web / Browser Fallback with smooth progress feedback & hidden anchor download
+    let pct = 8;
+    const totalMb = 42.4;
+    onProgress?.({
+      status: 'downloading',
+      progress: pct,
+      downloadedMb: 3.4,
+      totalMb,
+      version: versionLabel,
+      message: `Preparing MaxPlay_${versionLabel}.apk download...`,
+    });
+
+    const interval = setInterval(() => {
+      pct = Math.min(95, pct + 18);
+      const dlMb = Math.round(((pct / 100) * totalMb) * 10) / 10;
+      onProgress?.({
+        status: 'downloading',
+        progress: pct,
+        downloadedMb: dlMb,
+        totalMb,
+        version: versionLabel,
+        message: `Downloading MaxPlay ${versionLabel} APK (${pct}%)...`,
+      });
+    }, 220);
+
+    setTimeout(() => {
+      clearInterval(interval);
+      onProgress?.({
+        status: 'installing',
+        progress: 100,
+        downloadedMb: totalMb,
+        totalMb,
+        version: versionLabel,
+        message: `APK Ready! Starting MaxPlay ${versionLabel} installer download...`,
+      });
+      try {
+        const a = document.createElement('a');
+        a.href = cleanUrl;
+        a.download = `MaxPlay_${versionLabel.replace(/[^a-zA-Z0-9._-]/g, '_')}.apk`;
+        a.rel = 'noopener noreferrer';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          try {
+            document.body.removeChild(a);
+          } catch {}
+        }, 1500);
+      } catch {
+        window.location.href = cleanUrl;
+      }
+    }, 1150);
   }
 }

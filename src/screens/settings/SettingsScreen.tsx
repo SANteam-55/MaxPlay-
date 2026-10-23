@@ -13,6 +13,10 @@ import {
   ChevronRight,
   DownloadCloud,
   CheckCircle2,
+  ArrowUp,
+  Sparkles,
+  AlertTriangle,
+  Copy,
   X
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
@@ -22,6 +26,7 @@ import { LegalDocScreen, LegalDocType } from './LegalDocScreen';
 import { MaxPlayLogo } from '../../components/common/MaxPlayLogo';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 import { NativeBridgeService } from '../../services/nativeBridgeService';
+import { useGeneralSettings } from '../../hooks/useGeneralSettings';
 
 interface SettingsScreenProps {
   onBack: () => void;
@@ -31,6 +36,18 @@ interface SettingsScreenProps {
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout, onOpenFeedback }) => {
   const { logout } = useAuth();
+  const {
+    hasApkUpdate,
+    forceUpdate,
+    formattedCurrentVersion,
+    formattedLatestVersion,
+    apkDownloadUrl,
+    updateTitle,
+    updateReleaseNotes,
+    updateBannerUrl,
+    adminUpdateMessage,
+    triggerManualUpdateCheck,
+  } = useGeneralSettings();
 
   // Full Screen Legal Doc viewer state
   const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocType | null>(null);
@@ -65,6 +82,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
   const [showLangModal, setShowLangModal] = useState(false);
   const [showQualityModal, setShowQualityModal] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isCheckingUpdateNow, setIsCheckingUpdateNow] = useState(false);
+  const [updateCheckStatusText, setUpdateCheckStatusText] = useState<string | null>(null);
+  const [settingsApkProgress, setSettingsApkProgress] = useState<{
+    status: string;
+    progress: number;
+    message: string;
+  } | null>(null);
 
   // Global Admin Settings
   const [appLanguages, setAppLanguages] = useState<string[]>(['English', 'Hindi']);
@@ -77,6 +101,25 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     userAgreement: ''
   });
   const [hasUnreadLegal, setHasUnreadLegal] = useState(false);
+
+  const handleRunUpdateCheck = async () => {
+    setIsCheckingUpdateNow(true);
+    setUpdateCheckStatusText('Checking Admin Messages & Update Server...');
+    try {
+      const res = await triggerManualUpdateCheck();
+      setTimeout(() => {
+        setIsCheckingUpdateNow(false);
+        if (res.hasUpdate) {
+          setUpdateCheckStatusText(`New Admin Update Found: v${res.latestVer} (Current: v${res.currentVer})`);
+        } else {
+          setUpdateCheckStatusText(`Up to date! Running latest version (${formattedCurrentVersion}).`);
+        }
+      }, 450);
+    } catch {
+      setIsCheckingUpdateNow(false);
+      setUpdateCheckStatusText('Update check completed.');
+    }
+  };
 
   useEffect(() => {
     const fetchGeneralSettings = async () => {
@@ -343,17 +386,39 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
           {/* Check update */}
           <button
             type="button"
-            onClick={() => setShowUpdateModal(true)}
+            onClick={() => {
+              setUpdateCheckStatusText(null);
+              setShowUpdateModal(true);
+            }}
             className="flex items-center justify-between p-4 hover:bg-[#1C1C1E]/50 transition cursor-pointer text-left outline-none"
           >
             <div className="flex items-center gap-3 text-white">
-              <RefreshCw className="h-5 w-5 text-[#10B981]" />
-              <span className="text-sm font-medium">Check update</span>
+              <div className="relative flex items-center justify-center">
+                <RefreshCw
+                  className={`h-5 w-5 ${hasApkUpdate ? 'text-red-500 animate-spin' : 'text-[#10B981]'}`}
+                />
+                {hasApkUpdate && (
+                  <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 animate-ping" />
+                )}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">Check update</span>
+                {hasApkUpdate && (
+                  <span className="text-[10px] font-bold text-red-400">
+                    New Admin APK {formattedLatestVersion} available!
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-[#10B981]/20 px-2 py-0.5 text-[10px] font-bold text-[#10B981]">
-                {appVersion}
+              <span className="rounded-full bg-[#10B981]/20 px-2.5 py-0.5 text-[10px] font-bold text-[#10B981] border border-[#10B981]/30">
+                {formattedCurrentVersion || appVersion}
               </span>
+              {hasApkUpdate && (
+                <span className="rounded-full bg-red-600 px-2.5 py-0.5 text-[10px] font-black text-white shadow-md shadow-red-600/50 animate-pulse">
+                  UPDATE {formattedLatestVersion}
+                </span>
+              )}
               <ChevronRight className="h-4 w-4 text-[#6B7280]" />
             </div>
           </button>
@@ -449,7 +514,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
         <div className="mt-8 flex flex-col items-center justify-center gap-2 pb-6 text-center">
           <MaxPlayLogo size="sm" withText={true} glow={true} />
           <p className="text-[11px] text-[#71717A]">
-            Official MaxPlay Streaming • {appVersion}
+            Official MaxPlay Streaming • {formattedCurrentVersion || appVersion}
           </p>
           <p className="text-[10px] text-[#52525B]">
             Engineered & Maintained by <span className="text-[#A1A1AA] font-semibold">SAN TEAM</span>
@@ -538,39 +603,213 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
         </div>
       )}
 
-      {/* UPDATE MODAL */}
+      {/* DETAILED APK UPDATE CHECKER MODAL */}
       {showUpdateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="flex w-full max-w-sm flex-col rounded-3xl bg-[#121212] p-6 border border-[#1C1C1E] text-center shadow-2xl">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#10B981]/20 text-[#10B981]">
-              <RefreshCw className="h-7 w-7" />
-            </div>
-            <h3 className="mt-4 text-xl font-bold text-white">App Update Status</h3>
-            <p className="mt-2 text-sm text-[#A1A1AA] leading-relaxed">
-              You are running the official MaxPlay Media Platform version <strong className="text-white">{appVersion}</strong>.
-            </p>
-            
-            {apkUrl && (
-              <div className="mt-6 flex flex-col gap-3">
-                <a
-                  href={apkUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full flex items-center justify-center gap-2 rounded-2xl bg-[#10B981] py-3.5 text-sm font-bold text-black shadow-lg shadow-emerald-500/20 hover:bg-[#059669] active:scale-95 transition cursor-pointer"
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="flex w-full max-w-md flex-col rounded-3xl bg-[#121216] p-6 border border-white/10 text-left shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-none">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`relative flex h-12 w-12 items-center justify-center rounded-2xl ${
+                    hasApkUpdate
+                      ? 'bg-red-600/20 text-red-400 border border-red-500/40'
+                      : 'bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30'
+                  }`}
                 >
-                  <DownloadCloud className="h-5 w-5" />
-                  Download Latest APK
-                </a>
+                  {hasApkUpdate && (
+                    <span className="absolute -inset-1 rounded-2xl bg-red-500/30 animate-ping pointer-events-none" />
+                  )}
+                  {hasApkUpdate ? (
+                    <ArrowUp className="h-6 w-6 stroke-[2.6]" />
+                  ) : (
+                    <RefreshCw className={`h-6 w-6 ${isCheckingUpdateNow ? 'animate-spin' : ''}`} />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white">
+                    {hasApkUpdate ? 'New Admin APK Update!' : 'MaxPlay Update Center'}
+                  </h3>
+                  <p className="text-[11px] text-[#A1A1AA]">
+                    Compares installed version with Admin Messages &amp; Update Server
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUpdateModal(false)}
+                className="p-1.5 rounded-full bg-white/5 text-[#A1A1AA] hover:text-white cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Version Comparison Grid */}
+            <div className="mt-4 grid grid-cols-2 gap-2.5 rounded-2xl bg-black/60 p-3 border border-white/10">
+              <div className="rounded-xl bg-white/[0.03] p-2.5 border border-white/5">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Check Update Version
+                </span>
+                <span className="mt-0.5 block text-sm font-black text-white">
+                  {formattedCurrentVersion || appVersion}
+                </span>
+              </div>
+              <div
+                className={`rounded-xl p-2.5 border ${
+                  hasApkUpdate
+                    ? 'bg-red-500/15 border-red-500/40'
+                    : 'bg-emerald-500/10 border-emerald-500/30'
+                }`}
+              >
+                <span
+                  className={`block text-[10px] font-bold uppercase tracking-wider ${
+                    hasApkUpdate ? 'text-red-300' : 'text-emerald-300'
+                  }`}
+                >
+                  {hasApkUpdate ? 'Admin Latest APK' : 'Server Status'}
+                </span>
+                <span
+                  className={`mt-0.5 block text-sm font-black ${
+                    hasApkUpdate ? 'text-red-400 animate-pulse' : 'text-emerald-400'
+                  }`}
+                >
+                  {hasApkUpdate ? formattedLatestVersion : `${formattedCurrentVersion || appVersion} (Latest)`}
+                </span>
+              </div>
+            </div>
+
+            {/* Live Scan Feedback */}
+            {updateCheckStatusText && (
+              <div
+                className={`mt-3 rounded-xl px-3.5 py-2.5 text-xs font-bold border flex items-center gap-2 ${
+                  hasApkUpdate
+                    ? 'bg-red-500/15 border-red-500/40 text-red-300'
+                    : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                }`}
+              >
+                {hasApkUpdate ? (
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                )}
+                <span>{updateCheckStatusText}</span>
               </div>
             )}
-            
-            <button
-              type="button"
-              onClick={() => setShowUpdateModal(false)}
-              className="mt-4 w-full rounded-2xl bg-[#1C1C1E] py-3 text-sm font-bold text-[#A1A1AA] hover:text-white transition cursor-pointer"
-            >
-              Close
-            </button>
+
+            {/* Admin Update Message Details if available */}
+            {hasApkUpdate ? (
+              <div className="mt-4 rounded-2xl bg-gradient-to-b from-red-950/40 to-[#16161D] p-4 border border-red-500/30">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-red-400">
+                    <Sparkles className="h-3 w-3" />
+                    <span>
+                      {adminUpdateMessage ? 'Admin Update Announcement' : 'Official APK Release'}
+                    </span>
+                  </span>
+                  {forceUpdate && (
+                    <span className="rounded bg-red-600 px-1.5 py-0.5 text-[9px] font-black uppercase text-white">
+                      Force Update
+                    </span>
+                  )}
+                </div>
+                <h4 className="text-sm font-extrabold text-white">
+                  {updateTitle || `MaxPlay ${formattedLatestVersion} Update`}
+                </h4>
+                <p className="mt-1.5 text-xs text-zinc-300 leading-relaxed whitespace-pre-line">
+                  {updateReleaseNotes ||
+                    `Admin has released a newer version (${formattedLatestVersion}) than your current ${formattedCurrentVersion}. Please update your APK now for the latest features and fixes.`}
+                </p>
+
+                {updateBannerUrl && (
+                  <div className="mt-3 w-full max-h-40 rounded-xl overflow-hidden bg-black/50 border border-white/10">
+                    <img
+                      src={updateBannerUrl}
+                      alt="Update Preview"
+                      className="w-full max-h-40 object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-4 text-xs text-[#A1A1AA] leading-relaxed">
+                You are running the official MaxPlay version{' '}
+                <strong className="text-white">{formattedCurrentVersion || appVersion}</strong>. Whenever Admin sends a message or release above{' '}
+                <strong className="text-white">{formattedCurrentVersion || appVersion}</strong>, the Home Screen upload icon will blink in red and prompt you to install the latest APK.
+              </p>
+            )}
+
+            {/* Action Buttons */}
+            <div className="mt-5 flex flex-col gap-2.5">
+              {settingsApkProgress && (
+                <div className="rounded-xl bg-black/60 border border-red-500/30 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold">
+                    <span className="text-zinc-200 truncate pr-2">
+                      {settingsApkProgress.message}
+                    </span>
+                    <span className="text-emerald-400 font-black tabular-nums shrink-0">
+                      {settingsApkProgress.progress}%
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-red-500 via-orange-500 to-emerald-400 transition-all duration-200"
+                      style={{ width: `${Math.max(4, settingsApkProgress.progress)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {(apkDownloadUrl || apkUrl) && (
+                <button
+                  type="button"
+                  disabled={settingsApkProgress?.status === 'downloading'}
+                  onClick={() => {
+                    NativeBridgeService.triggerApkUpdate(
+                      apkDownloadUrl || apkUrl,
+                      formattedLatestVersion || formattedCurrentVersion || appVersion,
+                      updateTitle || `MaxPlay ${formattedLatestVersion} Update`,
+                      (state) => setSettingsApkProgress(state)
+                    );
+                  }}
+                  className={`w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 text-xs font-black uppercase tracking-wider shadow-lg transition active:scale-95 cursor-pointer disabled:opacity-75 ${
+                    hasApkUpdate
+                      ? 'bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 text-white shadow-red-600/30'
+                      : 'bg-[#10B981] text-black shadow-emerald-500/20 hover:bg-[#059669]'
+                  }`}
+                >
+                  <DownloadCloud className="h-4 w-4 stroke-[2.5]" />
+                  <span>
+                    {settingsApkProgress?.status === 'downloading'
+                      ? `Downloading APK (${settingsApkProgress.progress}%)...`
+                      : settingsApkProgress?.status === 'installing'
+                      ? 'Launching Android App Installer...'
+                      : hasApkUpdate
+                      ? `Update App Now (${formattedLatestVersion})`
+                      : 'Re-Install Official APK'}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleRunUpdateCheck}
+                disabled={isCheckingUpdateNow}
+                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-[#1C1C24] border border-white/10 py-3 text-xs font-extrabold text-white hover:bg-[#252530] transition cursor-pointer"
+              >
+                <RefreshCw className={`h-4 w-4 text-cyan-400 ${isCheckingUpdateNow ? 'animate-spin' : ''}`} />
+                <span>{isCheckingUpdateNow ? 'Checking Admin Updates...' : 'Check for Update Now'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowUpdateModal(false)}
+                className="w-full rounded-2xl bg-[#18181B] py-2.5 text-xs font-bold text-[#A1A1AA] hover:text-white transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

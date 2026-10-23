@@ -31,14 +31,24 @@ export const RootNavigator: React.FC = () => {
     appName,
     forceUpdate,
     currentApkVersion,
+    formattedCurrentVersion,
     latestApkVersion,
+    formattedLatestVersion,
     apkDownloadUrl,
+    updateTitle,
     updateReleaseNotes,
+    updateBannerUrl,
+    adminUpdateMessage,
   } = useGeneralSettings();
 
   // Offline Auto-Detection
   const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const [showOfflineModal, setShowOfflineModal] = useState(false);
+  const [forceApkProgress, setForceApkProgress] = useState<{
+    status: string;
+    progress: number;
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     const handleOffline = () => {
@@ -499,43 +509,111 @@ export const RootNavigator: React.FC = () => {
     return <MaintenanceScreen appName={appName} />;
   }
 
-  // Non-dismissible Admin Force-Update Gate: blocks old APK versions when Admin enables forceUpdate / minRequiredVersion
+  // Non-dismissible Admin Force-Update Gate: blocks old APK versions when Admin enables forceUpdate / sends a mandatory update message
   if (forceUpdate) {
     return (
-      <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#09090b] p-6 text-center select-none">
-        <div className="relative flex w-full max-w-sm flex-col items-center rounded-3xl bg-gradient-to-b from-[#1c1115] via-[#121216] to-[#0c0c10] p-7 border border-red-500/40 shadow-[0_0_50px_rgba(239,68,68,0.3)]">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/40 border border-red-400/50 animate-pulse">
-            <ShieldAlert className="h-8 w-8 stroke-[2.4]" />
+      <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#09090b] p-5 text-center select-none overflow-y-auto">
+        <div className="relative flex w-full max-w-md flex-col items-center rounded-3xl bg-gradient-to-b from-[#240d12] via-[#121216] to-[#0c0c10] p-6 border border-red-500/50 shadow-[0_0_60px_rgba(239,68,68,0.35)]">
+          <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-red-600 to-rose-500 text-white shadow-lg shadow-red-600/40 border border-red-400/50">
+            <span className="absolute -inset-1 rounded-2xl bg-red-500/40 animate-ping opacity-75 pointer-events-none" />
+            <ShieldAlert className="relative z-10 h-8 w-8 stroke-[2.4]" />
           </div>
 
-          <span className="mt-4 rounded-full bg-red-500/20 border border-red-500/40 px-3.5 py-1 text-[11px] font-black uppercase tracking-wider text-red-300">
-            Mandatory Update Required • v{latestApkVersion || 'Latest'}
+          <span className="mt-4 rounded-full bg-red-500/20 border border-red-500/40 px-3.5 py-1 text-[11px] font-black uppercase tracking-wider text-red-300 animate-pulse">
+            Mandatory APK Update Required • {formattedLatestVersion}
           </span>
 
-          <h1 className="mt-3 text-2xl font-black text-white tracking-tight">
-            Update {appName} to Continue
+          <h1 className="mt-3 text-xl sm:text-2xl font-black text-white tracking-tight">
+            {updateTitle || `Update ${appName} to Continue`}
           </h1>
 
-          <p className="mt-2 text-xs text-[#A1A1AA] leading-relaxed">
-            {updateReleaseNotes ||
-              `Your current version (v${currentApkVersion}) is no longer supported. Please download and install the latest v${latestApkVersion || 'New'} APK to continue watching movies, series, and anime without interruption.`}
-          </p>
-
-          <div className="mt-5 flex w-full items-center justify-between rounded-2xl bg-white/5 px-4 py-2.5 border border-white/10 text-xs">
-            <span className="text-white/50 font-semibold">Current: v{currentApkVersion}</span>
-            <span className="text-emerald-400 font-black">Required: v{latestApkVersion || 'Latest'}</span>
+          {/* Version Comparison Box */}
+          <div className="mt-4 grid w-full grid-cols-2 gap-2.5 rounded-2xl bg-black/60 p-3 border border-white/10 text-left">
+            <div className="rounded-xl bg-white/[0.03] p-2.5 border border-white/5">
+              <span className="block text-[9px] font-bold uppercase tracking-wider text-zinc-400">
+                Check Update Version
+              </span>
+              <span className="mt-0.5 block text-sm font-black text-zinc-200">
+                {formattedCurrentVersion || `v${currentApkVersion}`}
+              </span>
+            </div>
+            <div className="rounded-xl bg-red-500/15 p-2.5 border border-red-500/40">
+              <span className="block text-[9px] font-bold uppercase tracking-wider text-red-300">
+                Admin Required APK
+              </span>
+              <span className="mt-0.5 block text-sm font-black text-red-400">
+                {formattedLatestVersion || `v${latestApkVersion || 'Latest'}`}
+              </span>
+            </div>
           </div>
 
-          <a
-            href={apkDownloadUrl || '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            download
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer"
+          {/* Admin Message & Release Notes */}
+          <div className="mt-3.5 w-full rounded-2xl bg-white/[0.04] p-3.5 border border-white/10 text-left">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wider text-red-400">
+                {adminUpdateMessage ? 'Official Admin Update Message' : 'Release Notes'}
+              </span>
+              {adminUpdateMessage?.date && (
+                <span className="text-[10px] text-zinc-400">{adminUpdateMessage.date}</span>
+              )}
+            </div>
+            <p className="text-xs text-[#D4D4D8] leading-relaxed whitespace-pre-line">
+              {updateReleaseNotes ||
+                `Your current version (${formattedCurrentVersion}) is outdated. Admin requires updating to ${formattedLatestVersion} to continue streaming movies, series, and anime.`}
+            </p>
+            {updateBannerUrl && (
+              <div className="mt-3 w-full max-h-40 rounded-xl overflow-hidden bg-black/50 border border-white/10">
+                <img
+                  src={updateBannerUrl}
+                  alt="Admin Update Banner"
+                  className="w-full max-h-40 object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
+          {forceApkProgress && (
+            <div className="mt-4 w-full rounded-xl bg-black/60 border border-red-500/30 p-3 space-y-1.5 text-left">
+              <div className="flex items-center justify-between text-[11px] font-bold">
+                <span className="text-zinc-200 truncate pr-2">{forceApkProgress.message}</span>
+                <span className="text-emerald-400 font-black tabular-nums shrink-0">
+                  {forceApkProgress.progress}%
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-red-500 via-orange-500 to-emerald-400 transition-all duration-200"
+                  style={{ width: `${Math.max(4, forceApkProgress.progress)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            disabled={forceApkProgress?.status === 'downloading'}
+            onClick={() => {
+              NativeBridgeService.triggerApkUpdate(
+                apkDownloadUrl,
+                formattedLatestVersion,
+                updateTitle || `MaxPlay ${formattedLatestVersion} Mandatory Update`,
+                (state) => setForceApkProgress(state)
+              );
+            }}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-red-600/40 hover:brightness-110 active:scale-95 transition cursor-pointer disabled:opacity-75"
           >
             <Download className="h-4 w-4 stroke-[2.5]" />
-            <span>Download Latest APK Now</span>
-          </a>
+            <span>
+              {forceApkProgress?.status === 'downloading'
+                ? `Downloading APK (${forceApkProgress.progress}%)...`
+                : forceApkProgress?.status === 'installing'
+                ? 'Launching Android Installer...'
+                : `Update App Now (${formattedLatestVersion})`}
+            </span>
+          </button>
         </div>
       </div>
     );

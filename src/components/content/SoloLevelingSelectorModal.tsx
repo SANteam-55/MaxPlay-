@@ -170,7 +170,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
             y: -5,
             transition: { duration: 0.15 }
           }}
-          className="absolute left-0 top-[calc(100%+8px)] z-[100] w-[300px] sm:w-[360px] bg-[#030712]/95 text-white rounded-xl border border-cyan-400/50 shadow-[0_10px_35px_rgba(6,182,212,0.4),0_0_50px_rgba(147,51,234,0.15),inset_0_0_15px_rgba(6,182,212,0.15)] max-h-[60vh] flex flex-col overflow-hidden select-none backdrop-blur-md origin-top-left"
+          className="absolute left-0 top-[calc(100%+8px)] z-[100] w-[min(320px,calc(100vw-2.5rem))] sm:w-[360px] bg-[#030712]/95 text-white rounded-xl border border-cyan-400/50 shadow-[0_10px_35px_rgba(6,182,212,0.4),0_0_50px_rgba(147,51,234,0.15),inset_0_0_15px_rgba(6,182,212,0.15)] max-h-[60vh] flex flex-col overflow-hidden select-none backdrop-blur-md origin-top-left"
         >
             {/* Holographic Top & Bottom Laser Edge Accents */}
             <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-300 to-transparent shadow-[0_0_10px_#22d3ee]" />
@@ -225,7 +225,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
             <div className="p-2 overflow-y-auto max-h-[35vh] space-y-1.5 scrollbar-thin scrollbar-thumb-cyan-500/30">
               {type === 'language' ? (
                 // Language Options List
-                languages.map((lang, index) => {
+                (languages.length > 0 ? languages : [activeLanguage || 'Hindi']).map((lang, index) => {
                   const meta = getLanguageMeta(lang);
                   const isSelected = activeLanguage.toLowerCase() === lang.toLowerCase();
 

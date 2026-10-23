@@ -463,6 +463,15 @@ class MaxPlayNativeBridge(
         }
     }
 
+    /**
+     * Downloads the Admin's latest APK in the background with live progress callbacks
+     * and launches Android's native Package Installer automatically.
+     */
+    @JavascriptInterface
+    fun downloadAndInstallApk(apkUrl: String, versionName: String, title: String) {
+        activity.startNativeApkUpdate(apkUrl, versionName, title)
+    }
+
     private fun parseHeadersJson(headersJson: String?): Map<String, String> {
         if (headersJson.isNullOrBlank()) return emptyMap()
         val map = mutableMapOf<String, String>()
