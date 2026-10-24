@@ -404,18 +404,127 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
+  async function probeRemoteSegmentByteSize(segUrl: string, referer: string): Promise<number> {
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    try {
+      const headRes = await fetch(segUrl, {
+        method: 'HEAD',
+        headers: { 'User-Agent': ua, 'Referer': referer, 'Accept': '*/*' },
+        signal: AbortSignal.timeout(2500)
+      });
+      if (headRes.ok) {
+        const cl = parseInt(headRes.headers.get('content-length') || '0', 10);
+        if (cl > 500) return cl;
+      }
+    } catch {}
+    try {
+      const rangeRes = await fetch(segUrl, {
+        method: 'GET',
+        headers: { 'User-Agent': ua, 'Referer': referer, 'Range': 'bytes=0-0', 'Accept': '*/*' },
+        signal: AbortSignal.timeout(2500)
+      });
+      const cr = rangeRes.headers.get('content-range') || '';
+      const slashIdx = cr.lastIndexOf('/');
+      if (slashIdx !== -1) {
+        const total = parseInt(cr.slice(slashIdx + 1).trim(), 10);
+        if (total > 500) return total;
+      }
+      const cl = parseInt(rangeRes.headers.get('content-length') || '0', 10);
+      if (cl > 500) return cl;
+    } catch {}
+    return 0;
+  }
+
+  async function measurePlaylistRealDurationAndMb(
+    playlistUrl: string,
+    playlistText: string,
+    referer: string,
+    knownBandwidthBps: number = 0
+  ): Promise<{ durationSec: number; sizeMb: number; bandwidthBps: number }> {
+    const lines = playlistText.split(/\r?\n/).map(l => l.trim());
+    let totalDur = 0;
+    let totalByteRange = 0;
+    let pendingDur = 0;
+    const segments: { url: string; dur: number }[] = [];
+
+    for (const line of lines) {
+      if (!line) continue;
+      if (line.startsWith('#EXTINF:')) {
+        const m = line.match(/#EXTINF:([\d.]+)/);
+        const d = m ? parseFloat(m[1]) || 0 : 0;
+        totalDur += d;
+        pendingDur = d;
+        continue;
+      }
+      if (line.startsWith('#EXT-X-BYTERANGE:')) {
+        const bm = line.match(/#EXT-X-BYTERANGE:(\d+)/);
+        if (bm) totalByteRange += parseInt(bm[1], 10) || 0;
+        continue;
+      }
+      if (line.startsWith('#')) continue;
+      let segUrl = line;
+      try {
+        segUrl = new URL(line, playlistUrl).toString();
+      } catch {}
+      segments.push({ url: segUrl, dur: pendingDur > 0 ? pendingDur : 4 });
+      pendingDur = 0;
+    }
+
+    const durationSec = totalDur > 1 ? Math.round(totalDur) : segments.length * 4;
+
+    if (totalByteRange > 1024 * 1024 && durationSec > 0) {
+      const sizeMb = Math.max(1, Math.round(totalByteRange / (1024 * 1024)));
+      const bw = Math.round((totalByteRange * 8) / durationSec);
+      return { durationSec, sizeMb, bandwidthBps: bw };
+    }
+
+    if (knownBandwidthBps > 50000 && durationSec > 0) {
+      const bytes = (knownBandwidthBps * durationSec) / 8;
+      const sizeMb = Math.max(1, Math.round(bytes / (1024 * 1024)));
+      return { durationSec, sizeMb, bandwidthBps: knownBandwidthBps };
+    }
+
+    if (segments.length > 0 && durationSec > 0) {
+      const idxs = Array.from(new Set([
+        Math.min(segments.length - 1, Math.floor(segments.length * 0.25)),
+        Math.min(segments.length - 1, Math.floor(segments.length * 0.65))
+      ]));
+      let sampledBytes = 0;
+      let sampledDur = 0;
+      const results = await Promise.all(
+        idxs.map(async (idx) => {
+          const seg = segments[idx];
+          const b = await probeRemoteSegmentByteSize(seg.url, referer);
+          return { b, dur: seg.dur };
+        })
+      );
+      for (const r of results) {
+        if (r.b > 0 && r.dur > 0) {
+          sampledBytes += r.b;
+          sampledDur += r.dur;
+        }
+      }
+      if (sampledBytes > 0 && sampledDur > 0) {
+        const bps = Math.round((sampledBytes * 8) / sampledDur);
+        const totalBytes = (sampledBytes / sampledDur) * durationSec;
+        const sizeMb = Math.max(1, Math.round(totalBytes / (1024 * 1024)));
+        return { durationSec, sizeMb, bandwidthBps: bps };
+      }
+    }
+
+    return { durationSec, sizeMb: 0, bandwidthBps: knownBandwidthBps };
+  }
+
   async function parseHlsManifestMetadata(
     m3u8Url: string,
     durationSec: number = 0,
     customReferer?: string,
-    skipSubPlaylistProbe: boolean = false
+    skipSubPlaylistProbe: boolean = false,
+    forcedQuality: string = '',
+    originalSourceUrl: string = ''
   ): Promise<ExtractedStreamMetadata> {
-    const fallbackQualities = ['1080p', '720p'];
-    const fallbackDownloadQualities = [
-      { id: '1080p', label: '1080p Full HD', sizeMb: 450, url: m3u8Url, bandwidth: 2200000 },
-      { id: '720p', label: '720p HD', sizeMb: 240, url: m3u8Url, bandwidth: 1100000 },
-    ];
-    const fallbackAudios = ['Hindi', 'English'];
+    const cleanForcedQ = (forcedQuality || '').trim();
+    const defaultSingleQ = cleanForcedQ || '1080p';
 
     try {
       let referer = customReferer || 'https://byseraguci.com/';
@@ -434,15 +543,15 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           'Referer': referer,
           'Accept': '*/*'
         },
-        signal: AbortSignal.timeout(4000)
+        signal: AbortSignal.timeout(5000)
       });
       if (!resp.ok) {
         return {
-          qualities: fallbackQualities,
-          qualityLinks: { '1080p': m3u8Url, '720p': m3u8Url },
-          downloadQualities: fallbackDownloadQualities,
-          audioTracks: fallbackAudios,
-          duration: durationSec || 1440
+          qualities: [defaultSingleQ],
+          qualityLinks: { [defaultSingleQ]: originalSourceUrl || m3u8Url },
+          downloadQualities: [],
+          audioTracks: [],
+          duration: durationSec || 0
         };
       }
 
@@ -451,29 +560,34 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const qualityLinks: Record<string, string> = {};
       const downloadQualities: any[] = [];
       const audioTracks: string[] = [];
+      let hasSeparateAudioRendition = false;
 
-      // 1. Comprehensive Audio Tracks extraction
-      const audioLines = text.split('\n').filter(l => l.includes('#EXT-X-MEDIA:TYPE=AUDIO'));
+      // 1. Comprehensive Audio Tracks extraction (#EXT-X-MEDIA:TYPE=AUDIO)
+      const audioLines = text.split('\n').filter(l => l.includes('#EXT-X-MEDIA:') && l.includes('TYPE=AUDIO'));
       for (const line of audioLines) {
         const nameMatch = line.match(/NAME="([^"]+)"/i) || line.match(/NAME=([^\s,]+)/i);
         const langMatch = line.match(/LANGUAGE="([^"]+)"/i) || line.match(/LANGUAGE=([^\s,]+)/i);
+        const uriMatch = line.match(/URI="([^"]+)"/i) || line.match(/URI=([^\s,]+)/i);
+        if (uriMatch && uriMatch[1]) hasSeparateAudioRendition = true;
         const rawName = (nameMatch ? nameMatch[1] : '').trim();
         const rawLang = (langMatch ? langMatch[1] : '').trim();
-        let friendly = rawName || rawLang || 'Default Audio';
-        const code = (rawLang || rawName).toLowerCase();
-        if (code.includes('hin') || code.includes('hi')) friendly = 'Hindi';
-        else if (code.includes('eng') || code.includes('en')) friendly = 'English';
-        else if (code.includes('jpn') || code.includes('ja') || code.includes('jap')) friendly = 'Japanese';
-        else if (code.includes('tam') || code.includes('ta')) friendly = 'Tamil';
-        else if (code.includes('tel') || code.includes('te')) friendly = 'Telugu';
-        else if (code.includes('kor') || code.includes('ko')) friendly = 'Korean';
-        else if (code.includes('spa') || code.includes('es')) friendly = 'Spanish';
-        else if (code.includes('fre') || code.includes('fr')) friendly = 'French';
-        else if (code.includes('ger') || code.includes('de')) friendly = 'German';
-        else if (code.includes('ben') || code.includes('bn')) friendly = 'Bengali';
-        else if (code.includes('pan') || code.includes('pa')) friendly = 'Punjabi';
-        else if (code.includes('mar') || code.includes('mr')) friendly = 'Marathi';
-        else if (code.includes('urd') || code.includes('ur')) friendly = 'Urdu';
+        let friendly = rawName || rawLang || '';
+        const code = `${rawLang} ${rawName}`.toLowerCase();
+        if (code.includes('hin') || /\bhi\b/.test(code)) friendly = 'Hindi';
+        else if (code.includes('eng') || /\ben\b/.test(code)) friendly = 'English';
+        else if (code.includes('jpn') || /\bja\b/.test(code) || code.includes('jap')) friendly = 'Japanese';
+        else if (code.includes('tam') || /\bta\b/.test(code)) friendly = 'Tamil';
+        else if (code.includes('tel') || /\bte\b/.test(code)) friendly = 'Telugu';
+        else if (code.includes('mal') || /\bml\b/.test(code)) friendly = 'Malayalam';
+        else if (code.includes('kan') || /\bkn\b/.test(code)) friendly = 'Kannada';
+        else if (code.includes('kor') || /\bko\b/.test(code)) friendly = 'Korean';
+        else if (code.includes('spa') || /\bes\b/.test(code)) friendly = 'Spanish';
+        else if (code.includes('fre') || /\bfr\b/.test(code)) friendly = 'French';
+        else if (code.includes('ger') || /\bde\b/.test(code)) friendly = 'German';
+        else if (code.includes('ben') || /\bbn\b/.test(code)) friendly = 'Bengali';
+        else if (code.includes('pan') || /\bpa\b/.test(code)) friendly = 'Punjabi';
+        else if (code.includes('mar') || /\bmr\b/.test(code)) friendly = 'Marathi';
+        else if (code.includes('urd') || /\bur\b/.test(code)) friendly = 'Urdu';
 
         if (friendly && !audioTracks.includes(friendly)) {
           audioTracks.push(friendly);
@@ -487,10 +601,14 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (line.startsWith('#EXT-X-STREAM-INF:')) {
+          let width = 0;
           let height = 0;
 
-          const resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
-          if (resMatch) height = parseInt(resMatch[1], 10);
+          const resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+          if (resMatch) {
+            width = parseInt(resMatch[1], 10);
+            height = parseInt(resMatch[2], 10);
+          }
 
           const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
           const avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
@@ -511,10 +629,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               resolvedUrl = new URL(nextUrl, m3u8Url).toString();
             } catch (_) {}
 
-            const qLabel = height >= 1000 ? '1080p' : height >= 700 ? '720p' : height >= 450 ? '480p' : height > 0 ? `${height}p` : '720p';
+            let qLabel = '720p';
+            if (height >= 1400 || width >= 2500) qLabel = '1440p';
+            else if (height >= 900 || width >= 1800) qLabel = '1080p';
+            else if (height >= 580 || width >= 1200) qLabel = '720p';
+            else if (height >= 400 || width >= 800) qLabel = '480p';
+            else if (height > 0 || width > 0) qLabel = '360p';
+            else if (detectedBw >= 2000000) qLabel = '1080p';
+            else if (detectedBw >= 950000) qLabel = '720p';
+            else if (detectedBw >= 500000) qLabel = '480p';
+            else qLabel = '360p';
 
             if (detectedBw > 0) {
-              bandwidthsByQuality[qLabel] = detectedBw;
+              bandwidthsByQuality[qLabel] = Math.max(bandwidthsByQuality[qLabel] || 0, detectedBw);
             }
 
             if (!qualities.includes(qLabel)) {
@@ -525,87 +652,136 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       }
 
-      // 3. Exact Duration Calculation: Probe media playlist segment durations (#EXTINF) only when needed
+      // If forcedQuality was specified (e.g., Admin placed a single-quality provider link in the 360p or 480p box)
+      // and the master playlist only has 1 variant, assign it to forcedQuality!
+      if (cleanForcedQ && qualities.length === 1 && qualities[0] !== cleanForcedQ) {
+        const oldQ = qualities[0];
+        const vUrl = qualityLinks[oldQ];
+        const vBw = bandwidthsByQuality[oldQ] || 0;
+        qualities[0] = cleanForcedQ;
+        delete qualityLinks[oldQ];
+        qualityLinks[cleanForcedQ] = vUrl;
+        if (vBw > 0) {
+          delete bandwidthsByQuality[oldQ];
+          bandwidthsByQuality[cleanForcedQ] = vBw;
+        }
+      }
+
       let detectedDuration = durationSec > 0 ? durationSec : 0;
-      let sampleMediaPlaylist = '';
+      let measuredFirstVariantMb = 0;
+      let measuredFirstVariantBw = 0;
 
       if (text.includes('#EXTINF:')) {
-        sampleMediaPlaylist = text;
-      } else if (!skipSubPlaylistProbe && detectedDuration <= 0 && Object.values(qualityLinks).length > 0) {
+        const measured = await measurePlaylistRealDurationAndMb(m3u8Url, text, referer, 0);
+        if (measured.durationSec > 0) detectedDuration = measured.durationSec;
+        measuredFirstVariantMb = measured.sizeMb;
+        measuredFirstVariantBw = measured.bandwidthBps;
+      } else if (!skipSubPlaylistProbe && qualities.length > 0) {
         try {
-          const probeUrl = Object.values(qualityLinks)[0];
+          const firstQ = qualities[0];
+          const probeUrl = qualityLinks[firstQ];
           const pResp = await fetch(probeUrl, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
               'Referer': referer,
               'Accept': '*/*'
             },
-            signal: AbortSignal.timeout(3500)
+            signal: AbortSignal.timeout(4000)
           });
           if (pResp.ok) {
-            sampleMediaPlaylist = await pResp.text();
+            const subText = await pResp.text();
+            if (subText.includes('#EXTINF:')) {
+              const measured = await measurePlaylistRealDurationAndMb(
+                probeUrl,
+                subText,
+                referer,
+                bandwidthsByQuality[firstQ] || 0
+              );
+              if (measured.durationSec > 0) detectedDuration = measured.durationSec;
+              measuredFirstVariantMb = measured.sizeMb;
+              measuredFirstVariantBw = measured.bandwidthBps;
+            }
           }
         } catch (_) {}
       }
 
-      if (sampleMediaPlaylist) {
-        let segSum = 0;
-        const extinfRegex = /#EXTINF:(\d+(?:\.\d+)?)/g;
-        let eMatch: RegExpExecArray | null;
-        while ((eMatch = extinfRegex.exec(sampleMediaPlaylist)) !== null) {
-          segSum += parseFloat(eMatch[1]);
-        }
-        if (segSum > 5) {
-          detectedDuration = Math.round(segSum);
-        }
-      }
+      const finalDuration = detectedDuration > 0 ? detectedDuration : (durationSec > 0 ? durationSec : 0);
 
-      const finalDuration = detectedDuration > 0 ? detectedDuration : (durationSec > 0 ? durationSec : 1440);
-
-      // Single-quality fallback if no variants detected
+      // Single-quality media playlist handling
       if (qualities.length === 0) {
-        qualities.push('1080p');
-        qualityLinks['1080p'] = m3u8Url;
+        qualities.push(defaultSingleQ);
+        qualityLinks[defaultSingleQ] = originalSourceUrl || m3u8Url;
+        if (measuredFirstVariantBw > 0) {
+          bandwidthsByQuality[defaultSingleQ] = measuredFirstVariantBw;
+        }
       }
 
-      // 4. Calculate accurate MB/GB for each quality based on exact duration and real manifest bitrates
-      for (const q of qualities) {
-        const url = qualityLinks[q] || m3u8Url;
-        const defaultBps = q.includes('1080') ? 2400000 : q.includes('720') ? 1200000 : q.includes('480') ? 600000 : 300000;
-        const actualBps = bandwidthsByQuality[q] || defaultBps;
-        const estBytes = (actualBps * finalDuration) / 8;
-        const sizeMb = Math.max(15, Math.round(estBytes / (1024 * 1024)));
+      const separateAudioMb = hasSeparateAudioRendition && finalDuration > 0
+        ? Math.max(2, Math.round((128000 * finalDuration) / (8 * 1024 * 1024)))
+        : 0;
+
+      for (let idx = 0; idx < qualities.length; idx++) {
+        const q = qualities[idx];
+        const resolvedSubUrl = qualityLinks[q] || m3u8Url;
+        const assignedUrl = qualities.length === 1 && originalSourceUrl ? originalSourceUrl : resolvedSubUrl;
+        let sizeMb = 0;
+        let actualBps = bandwidthsByQuality[q] || 0;
+
+        if (idx === 0 && measuredFirstVariantMb > 0) {
+          sizeMb = measuredFirstVariantMb + separateAudioMb;
+          if (!actualBps) actualBps = measuredFirstVariantBw;
+        } else if (actualBps > 50000 && finalDuration > 0) {
+          const estBytes = (actualBps * finalDuration) / 8;
+          sizeMb = Math.max(1, Math.round(estBytes / (1024 * 1024))) + separateAudioMb;
+        } else if (!skipSubPlaylistProbe && resolvedSubUrl && resolvedSubUrl !== m3u8Url) {
+          try {
+            const subR = await fetch(resolvedSubUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Referer': referer,
+                'Accept': '*/*'
+              },
+              signal: AbortSignal.timeout(3500)
+            });
+            if (subR.ok) {
+              const subTxt = await subR.text();
+              if (subTxt.includes('#EXTINF:')) {
+                const m = await measurePlaylistRealDurationAndMb(resolvedSubUrl, subTxt, referer, actualBps);
+                if (m.sizeMb > 0) sizeMb = m.sizeMb + separateAudioMb;
+                if (m.bandwidthBps > 0) actualBps = m.bandwidthBps;
+              }
+            }
+          } catch {}
+        }
 
         downloadQualities.push({
           id: q,
           label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : 'Standard'}`,
           sizeMb,
-          url,
+          url: assignedUrl,
+          resolvedM3u8Url: resolvedSubUrl,
           bandwidth: actualBps
         });
       }
 
-      // Sort qualities by resolution descending
       qualities.sort((a, b) => parseInt(b) - parseInt(a));
       downloadQualities.sort((a, b) => parseInt(b.id) - parseInt(a.id));
 
-      const finalAudios = audioTracks.length > 0 ? audioTracks : fallbackAudios;
-
       return {
-        qualities: qualities.length > 0 ? qualities : fallbackQualities,
-        qualityLinks: Object.keys(qualityLinks).length > 0 ? qualityLinks : { '1080p': m3u8Url, '720p': m3u8Url },
-        downloadQualities: downloadQualities.length > 0 ? downloadQualities : fallbackDownloadQualities,
-        audioTracks: finalAudios,
+        qualities,
+        qualityLinks,
+        downloadQualities,
+        audioTracks,
         duration: finalDuration
       };
     } catch (e) {
       console.warn('Error reading HLS manifest stream metadata:', e);
       return {
-        qualities: fallbackQualities,
-        qualityLinks: { '1080p': m3u8Url, '720p': m3u8Url },
-        downloadQualities: fallbackDownloadQualities,
-        audioTracks: fallbackAudios,
-        duration: durationSec || 1440
+        qualities: [defaultSingleQ],
+        qualityLinks: { [defaultSingleQ]: originalSourceUrl || m3u8Url },
+        downloadQualities: [],
+        audioTracks: [],
+        duration: durationSec || 0
       };
     }
   }
@@ -1129,6 +1305,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const forceRefresh = req.body?.forceRefresh === true || req.query?.forceRefresh === "true";
       const requestedDuration = Number(req.body?.duration || req.query?.duration) || 0;
       const skipSubPlaylistProbe = req.body?.fast === true || req.query?.fast === "true";
+      const forcedQuality = String(req.body?.forcedQuality || req.query?.forcedQuality || "").trim();
 
       if (!sourceUrl || typeof sourceUrl !== "string" || !sourceUrl.trim()) {
         res.status(400).json({ ok: false, error: "Source video URL is required" });
@@ -1136,22 +1313,23 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       const trimmedUrl = sourceUrl.trim();
+      const cacheKey = forcedQuality ? `${trimmedUrl}::${forcedQuality}` : trimmedUrl;
       const now = Date.now();
 
       // Return server-side cached link if valid
       if (!forceRefresh) {
-        const cached = streamExtractionCache.get(trimmedUrl);
+        const cached = streamExtractionCache.get(cacheKey);
         if (cached && cached.expiresAt > now) {
           res.json({
             ok: true,
             m3u8Url: cached.m3u8Url,
             rawM3u8Url: (cached as any).rawM3u8Url || cached.m3u8Url,
-            qualities: cached.qualities || ['1080p', '720p'],
-            qualityLinks: cached.qualityLinks || { '1080p': cached.m3u8Url, '720p': cached.m3u8Url },
+            qualities: cached.qualities || [],
+            qualityLinks: cached.qualityLinks || { [forcedQuality || '720p']: cached.m3u8Url },
             rawQualityLinks: (cached as any).rawQualityLinks || cached.qualityLinks,
             downloadQualities: cached.downloadQualities || [],
-            audioTracks: cached.audioTracks || ['Hindi'],
-            duration: cached.duration || 1440,
+            audioTracks: cached.audioTracks || [],
+            duration: cached.duration || 0,
             headers: (cached as any).headers,
             cached: true,
             expiresAt: cached.expiresAt,
@@ -1163,11 +1341,18 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       // Direct HLS stream parsing without third-party extractor if URL is already an m3u8
       if (trimmedUrl.includes(".m3u8") || trimmedUrl.includes("m3u8")) {
-        const streamMeta = await parseHlsManifestMetadata(trimmedUrl, requestedDuration, undefined, skipSubPlaylistProbe);
+        const streamMeta = await parseHlsManifestMetadata(
+          trimmedUrl,
+          requestedDuration,
+          undefined,
+          skipSubPlaylistProbe,
+          forcedQuality || undefined,
+          trimmedUrl
+        );
         const ttlMs = 170 * 60 * 1000;
         const expiresAt = now + ttlMs;
 
-        streamExtractionCache.set(trimmedUrl, {
+        streamExtractionCache.set(cacheKey, {
           m3u8Url: trimmedUrl,
           expiresAt,
           cachedAt: now,
@@ -1208,7 +1393,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             fmResult.m3u8Url,
             requestedDuration,
             customRef,
-            skipSubPlaylistProbe
+            skipSubPlaylistProbe,
+            forcedQuality || undefined,
+            trimmedUrl
           );
 
           const host = req.get('host') || 'localhost:3000';
@@ -1225,15 +1412,15 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             }
           }
           if (Object.keys(proxiedQualityLinks).length === 0) {
-            proxiedQualityLinks['1080p'] = proxiedMaster;
+            proxiedQualityLinks[forcedQuality || '1080p'] = proxiedMaster;
           }
 
           const proxiedDownloadQualities = (streamMeta.downloadQualities || []).map((dq: any) => ({
             ...dq,
-            url: `${serverOrigin}/proxy/ts?url=${encodeURIComponent(dq.url || fmResult.m3u8Url)}`
+            url: forcedQuality ? trimmedUrl : `${serverOrigin}/proxy/ts?url=${encodeURIComponent(dq.url || fmResult.m3u8Url)}`
           }));
 
-          streamExtractionCache.set(trimmedUrl, {
+          streamExtractionCache.set(cacheKey, {
             m3u8Url: proxiedMaster,
             rawM3u8Url: fmResult.m3u8Url,
             rawQualityLinks: streamMeta.qualityLinks,
@@ -1367,9 +1554,16 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const ttlMs = 170 * 60 * 1000;
       const expiresAt = now + ttlMs;
 
-      const streamMeta = await parseHlsManifestMetadata(resolvedM3u8, requestedDuration);
+      const streamMeta = await parseHlsManifestMetadata(
+        resolvedM3u8,
+        requestedDuration,
+        undefined,
+        skipSubPlaylistProbe,
+        forcedQuality || undefined,
+        trimmedUrl
+      );
 
-      streamExtractionCache.set(trimmedUrl, {
+      streamExtractionCache.set(cacheKey, {
         m3u8Url: resolvedM3u8,
         expiresAt,
         cachedAt: now,

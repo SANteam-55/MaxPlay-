@@ -582,8 +582,8 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     }
   }, [availableLanguages, selectedLanguage]);
 
-  // 3. Available Qualities resolution (Merges Admin multi-quality server links + live HLS manifest probe)
-  const qualityOptions = useMemo(() => {
+  // 3. Available Qualities resolution (100% Real Admin & Live HLS Probed Qualities + Cross-Server Quality Discovery)
+  const { qualityOptions, crossServerQualityOptions } = useMemo(() => {
     const activeEp = isSeries ? currentEpisodes[focusedEpisodeIdx] : null;
     const isServer2 = modalServer === 'server2';
 
@@ -600,143 +600,155 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         ? (content as any).movieParts[0]
         : null;
 
-    // Deterministic series+episode fingerprint so fallback/probed bitrates never produce identical MB across different series
-    const seedStr = `${content.id}_${content.title}_${selectedSeasonIdx}_${focusedEpisodeIdx}`;
-    let seedHash = 0;
-    for (let i = 0; i < seedStr.length; i++) {
-      seedHash = (seedHash * 31 + seedStr.charCodeAt(i)) & 0x7fffffff;
-    }
-    const seriesVariance = 0.93 + ((seedHash % 15) * 0.01); // 0.93 to 1.07
+    const s1LinksMap: Record<string, string> | undefined =
+      (activeEp as any)?.qualityLinks ||
+      epPart0?.qualityLinks ||
+      content.qualityLinks ||
+      contentPart0?.qualityLinks ||
+      moviePart0?.qualityLinks;
 
-    const durationSec =
-      extractedMeta?.duration && extractedMeta.duration !== 1440
-        ? extractedMeta.duration
-        : content.duration
-        ? content.duration > 300
-          ? content.duration
-          : content.duration * 60
-        : Math.round(6900 * seriesVariance);
+    const s2LinksMap: Record<string, string> | undefined =
+      (activeEp as any)?.secondaryServerQualityLinks ||
+      (activeEp as any)?.secondaryQualityLinks ||
+      epPart0?.secondaryServerQualityLinks ||
+      epPart0?.secondaryQualityLinks ||
+      (content as any).secondaryServerQualityLinks ||
+      content.secondaryQualityLinks ||
+      contentPart0?.secondaryServerQualityLinks ||
+      contentPart0?.secondaryQualityLinks ||
+      moviePart0?.secondaryServerQualityLinks ||
+      moviePart0?.secondaryQualityLinks;
 
-    const epDurationSec =
-      extractedMeta?.duration && extractedMeta.duration !== 1440
-        ? extractedMeta.duration
-        : activeEp?.duration
-        ? activeEp.duration > 300
-          ? activeEp.duration
-          : activeEp.duration * 60
-        : Math.round(1420 * seriesVariance);
+    const s1SavedDl =
+      (activeEp as any)?.downloadQualities ||
+      epPart0?.downloadQualities ||
+      (content as any)?.downloadQualities ||
+      contentPart0?.downloadQualities;
 
-    const calcSizeMb = (dur: number, bitrateBps: number) =>
-      Math.max(25, Math.round((bitrateBps * dur) / (8 * 1024 * 1024)));
+    const s2SavedDl =
+      (activeEp as any)?.secondaryDownloadQualities ||
+      epPart0?.secondaryDownloadQualities ||
+      (content as any)?.secondaryDownloadQualities ||
+      contentPart0?.secondaryDownloadQualities;
 
-    // Check explicit per-quality server links (1080p, 720p, 480p, 360p) configured in Admin Panel for active server
-    const qLinks: Record<string, string> | undefined =
-      isServer2 && hasServer2
-        ? (activeEp as any)?.secondaryServerQualityLinks ||
-          (activeEp as any)?.secondaryQualityLinks ||
-          epPart0?.secondaryServerQualityLinks ||
-          epPart0?.secondaryQualityLinks ||
-          (content as any).secondaryServerQualityLinks ||
-          content.secondaryQualityLinks ||
-          contentPart0?.secondaryServerQualityLinks ||
-          contentPart0?.secondaryQualityLinks ||
-          moviePart0?.secondaryServerQualityLinks ||
-          moviePart0?.secondaryQualityLinks
-        : (activeEp as any)?.qualityLinks ||
-          epPart0?.qualityLinks ||
-          content.qualityLinks ||
-          contentPart0?.qualityLinks ||
-          moviePart0?.qualityLinks;
+    const buildServerQualityList = (
+      serverId: 'server1' | 'server2',
+      linksDict: Record<string, string> | undefined,
+      savedDlArr: any[] | undefined,
+      liveMeta: ExtractedServerMeta | null
+    ) => {
+      const map = new Map<string, {
+        id: string;
+        label: string;
+        badge: string;
+        movieSizeMb: number;
+        epSizeMb: number;
+        bandwidth: number;
+        url: string;
+        isLive: boolean;
+        serverSource: 'server1' | 'server2';
+      }>();
 
-    const rawDl =
-      extractedMeta?.downloadQualities ||
-      (isServer2 && hasServer2
-        ? (activeEp as any)?.secondaryDownloadQualities || (content as any)?.secondaryDownloadQualities
-        : (activeEp as any)?.downloadQualities || (content as any)?.downloadQualities);
+      // 1. Add Admin-configured explicit quality links (1080p, 720p, 480p, 360p)
+      if (linksDict && typeof linksDict === 'object') {
+        for (const [k, linkUrl] of Object.entries(linksDict)) {
+          const cleanKey = k.trim();
+          const cleanLink = SmartStreamService.sanitizeStreamUrl(linkUrl);
+          if (cleanLink && isQualityKey(cleanKey) && cleanKey.toLowerCase() !== 'auto') {
+            map.set(cleanKey, {
+              id: cleanKey,
+              label: `${cleanKey} ${cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver'}`,
+              badge: cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver',
+              movieSizeMb: 0,
+              epSizeMb: 0,
+              bandwidth: 0,
+              url: cleanLink,
+              isLive: true,
+              serverSource: serverId,
+            });
+          }
+        }
+      }
 
-    const mergedMap = new Map<string, any>();
-
-    // First, populate any explicit Admin multi-quality links (1080p, 720p, 480p, 360p)
-    if (qLinks && typeof qLinks === 'object') {
-      for (const [k, linkUrl] of Object.entries(qLinks)) {
-        const cleanKey = k.trim();
-        const cleanLink = SmartStreamService.sanitizeStreamUrl(linkUrl);
-        if (cleanLink && isQualityKey(cleanKey) && cleanKey.toLowerCase() !== 'auto') {
-          const bitrate = Math.round(
-            (cleanKey.includes('1080')
-              ? 2400000
-              : cleanKey.includes('720')
-              ? 1200000
-              : cleanKey.includes('480')
-              ? 650000
-              : 360000) * seriesVariance
-          );
-          mergedMap.set(cleanKey, {
-            id: cleanKey,
-            label: `${cleanKey} ${cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver'}`,
-            badge: cleanKey.includes('1080') ? 'Best Quality' : cleanKey.includes('720') ? 'Recommended' : 'Data Saver',
-            movieSizeMb: calcSizeMb(durationSec, bitrate),
-            epSizeMb: calcSizeMb(epDurationSec, bitrate),
-            bandwidth: bitrate,
-            url: cleanLink,
+      // 2. Merge Admin-verified downloadQualities (real MB size saved from Admin Verify button)
+      if (Array.isArray(savedDlArr)) {
+        for (const q of savedDlArr) {
+          const qId = String(q?.id || '').trim();
+          if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
+          const existing = map.get(qId);
+          const realMb = Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : (existing?.movieSizeMb || 0);
+          const cleanUrl = SmartStreamService.sanitizeStreamUrl(existing?.url || q?.url || '');
+          map.set(qId, {
+            id: qId,
+            label: q?.label || existing?.label || `${qId} ${qId.includes('1080') ? 'Full HD' : qId.includes('720') ? 'HD' : 'Standard'}`,
+            badge: realMb > 0 ? 'Verified HLS • Real Size' : (existing?.badge || 'Verified Stream'),
+            movieSizeMb: realMb,
+            epSizeMb: realMb,
+            bandwidth: Number(q?.bandwidth || existing?.bandwidth || 0),
+            url: cleanUrl,
             isLive: true,
+            serverSource: serverId,
           });
         }
       }
-    }
 
-    // Second, merge live probed HLS variants (preserving explicit per-quality link URLs if configured)
-    if (Array.isArray(rawDl) && rawDl.length > 0) {
-      for (const q of rawDl) {
-        const qId = (q.id || '720p').trim();
-        if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
-        const defaultBps = Math.round(
-          (qId.includes('1080')
-            ? 2400000
-            : qId.includes('720')
-            ? 1200000
-            : qId.includes('480')
-            ? 650000
-            : 360000) * seriesVariance
-        );
-        const existingExplicit = mergedMap.get(qId);
-        const rawSizeMb =
-          q.sizeMb ||
-          calcSizeMb(isMovie ? durationSec : epDurationSec, q.bandwidth || defaultBps);
-
-        mergedMap.set(qId, {
-          id: qId,
-          label: q.label || `${qId} ${qId.includes('1080') ? 'Full HD' : qId.includes('720') ? 'HD' : 'Standard'}`,
-          badge: extractedMeta?.isLiveProbed
-            ? qId.includes('1080')
-              ? 'Live Stream • Full HD'
-              : qId.includes('720')
-              ? 'Live Stream • HD'
-              : 'Live Stream • Data Saver'
-            : qId === '1080p'
-            ? 'Best Quality'
-            : qId === '720p'
-            ? 'Recommended'
-            : 'Data Saver',
-          movieSizeMb: rawSizeMb,
-          epSizeMb: rawSizeMb,
-          bandwidth: q.bandwidth || defaultBps,
-          url: existingExplicit?.url || (extractedMeta?.isLiveProbed ? q.url : undefined),
-          isLive: Boolean(extractedMeta?.isLiveProbed || existingExplicit),
-        });
+      // 3. Merge live probed HLS manifest variants (preserving explicit per-quality link URL when present)
+      if (liveMeta && Array.isArray(liveMeta.downloadQualities)) {
+        for (const q of liveMeta.downloadQualities) {
+          const qId = String(q?.id || '').trim();
+          if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
+          const existing = map.get(qId);
+          // If admin configured explicit quality boxes, don't add unconfigured sub-variants unless map was empty or matches box
+          if (linksDict && Object.keys(linksDict).length > 0 && !existing && map.size > 0) {
+            // Still allow if the single master link genuinely contains multiple variants
+            if (Object.keys(linksDict).length > 1) continue;
+          }
+          const realMb = existing?.movieSizeMb && existing.movieSizeMb > 0
+            ? existing.movieSizeMb
+            : (Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : 0);
+          const cleanUrl = SmartStreamService.sanitizeStreamUrl(existing?.url || q?.url || '');
+          map.set(qId, {
+            id: qId,
+            label: q?.label || existing?.label || `${qId} ${qId.includes('1080') ? 'Full HD' : qId.includes('720') ? 'HD' : 'Standard'}`,
+            badge: realMb > 0
+              ? (qId.includes('1080') ? 'Verified • Full HD' : qId.includes('720') ? 'Verified • HD' : 'Verified • Data Saver')
+              : (existing?.badge || 'Live Stream'),
+            movieSizeMb: realMb,
+            epSizeMb: realMb,
+            bandwidth: Number(q?.bandwidth || existing?.bandwidth || 0),
+            url: cleanUrl,
+            isLive: true,
+            serverSource: serverId,
+          });
+        }
       }
-    }
 
-    if (mergedMap.size > 0) {
-      return Array.from(mergedMap.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id));
-    }
+      return Array.from(map.values()).sort((a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0));
+    };
 
-    return [
-      { id: '1080p', label: '1080p Full HD', badge: 'Target Max Quality', movieSizeMb: calcSizeMb(durationSec, Math.round(2400000 * seriesVariance)), epSizeMb: calcSizeMb(epDurationSec, Math.round(2400000 * seriesVariance)), bandwidth: 2400000, isLive: false },
-      { id: '720p', label: '720p HD', badge: 'Recommended HD', movieSizeMb: calcSizeMb(durationSec, Math.round(1200000 * seriesVariance)), epSizeMb: calcSizeMb(epDurationSec, Math.round(1200000 * seriesVariance)), bandwidth: 1200000, isLive: false },
-      { id: '480p', label: '480p Standard', badge: 'Data Saver', movieSizeMb: calcSizeMb(durationSec, Math.round(650000 * seriesVariance)), epSizeMb: calcSizeMb(epDurationSec, Math.round(650000 * seriesVariance)), bandwidth: 650000, isLive: false },
-    ];
-  }, [content, isSeries, isMovie, currentEpisodes, focusedEpisodeIdx, selectedSeasonIdx, extractedMeta, modalServer, hasServer2]);
+    const s1Options = hasServer1 ? buildServerQualityList('server1', s1LinksMap, s1SavedDl, server1Meta) : [];
+    const s2Options = hasServer2 ? buildServerQualityList('server2', s2LinksMap, s2SavedDl, server2Meta) : [];
+
+    const activeOptions = isServer2 ? s2Options : s1Options;
+    const otherOptions = isServer2 ? s1Options : s2Options;
+
+    return {
+      qualityOptions: activeOptions,
+      crossServerQualityOptions: otherOptions,
+    };
+  }, [
+    content,
+    isSeries,
+    isMovie,
+    currentEpisodes,
+    focusedEpisodeIdx,
+    selectedSeasonIdx,
+    server1Meta,
+    server2Meta,
+    modalServer,
+    hasServer1,
+    hasServer2,
+  ]);
 
   const [selectedQuality, setSelectedQuality] = useState<string>(() => {
     try {
@@ -745,12 +757,12 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       const savedVidQ = localStorage.getItem('maxplay_video_quality');
       if (savedVidQ && savedVidQ !== 'auto') return savedVidQ;
     } catch {}
-    return qualityOptions[0]?.id || '720p';
+    return qualityOptions[0]?.id || crossServerQualityOptions[0]?.id || '720p';
   });
 
   const activeQualityId = qualityOptions.some((q) => q.id.toLowerCase() === selectedQuality.toLowerCase())
     ? qualityOptions.find((q) => q.id.toLowerCase() === selectedQuality.toLowerCase())!.id
-    : (qualityOptions[0]?.id || '720p');
+    : (qualityOptions[0]?.id || crossServerQualityOptions[0]?.id || '720p');
 
   const toggleEpisode = (idx: number) => {
     setFocusedEpisodeIdx(idx);
@@ -796,7 +808,8 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
     return false;
   }, [content, currentEpisodes, primaryUrl, secondaryUrl]);
 
-  // Robust download URL resolution strictly for HLS mode streams (prioritizes permanent server/qualityLinks over expiring CDN URLs!)
+  // Robust download URL resolution strictly for HLS mode streams:
+  // Always prioritizes the exact link for the user's selected quality (`activeQuality`) on `targetServer`!
   const resolveItemDownloadUrl = (
     ep: any | null,
     activeQuality: string,
@@ -868,12 +881,10 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         ? (content as any).movieParts[0]
         : null;
 
-    // Check deep extracted server URLs for this item
     const deepUrls = extractUrlsFromItem(ep, isInitialFocus);
 
     if (ep) {
       if (isServer2) {
-        // 1. Prioritize explicit per-quality link on Server 2 (e.g. 1080p, 720p, 480p, 360p)
         const fromEpSecQuality = findInQualityDict(
           (ep as any)?.secondaryServerQualityLinks ||
             (ep as any)?.secondaryQualityLinks ||
@@ -882,40 +893,33 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         );
         if (fromEpSecQuality && isHlsStream(fromEpSecQuality)) return fromEpSecQuality;
 
-        // 2. Next check permanent Server 2 master/hoster URL (so we resolve fresh Master .m3u8 with audio tracks!)
-        if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
-
-        // 3. Fallback to secondaryDownloadQualities if no permanent link was found
         const epSecDl = (ep as any)?.secondaryDownloadQualities || epPart0?.secondaryDownloadQualities;
         if (Array.isArray(epSecDl) && epSecDl.length > 0) {
-          const match = epSecDl.find((q: any) => q.id === activeQuality) || epSecDl[0];
+          const match = epSecDl.find((q: any) => String(q.id).toLowerCase() === activeQuality.toLowerCase()) || epSecDl[0];
           if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
         }
+
+        if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
       } else {
-        // 1. Prioritize explicit per-quality link on Server 1 (e.g. 1080p, 720p, 480p, 360p)
         const fromEpQuality = findInQualityDict(ep.qualityLinks || epPart0?.qualityLinks);
         if (fromEpQuality && isHlsStream(fromEpQuality)) return fromEpQuality;
 
-        // 2. Check language-specific videoSources on Server 1
         const fromEpSources = findInSources(ep.videoSources || epPart0?.videoSources);
         if (fromEpSources && isHlsStream(fromEpSources)) return fromEpSources;
 
-        // 3. Check permanent Server 1 master/hoster URL
-        if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
-
-        // 4. Last resort fallback to downloadQualities
         const epDl = (ep as any)?.downloadQualities || epPart0?.downloadQualities;
         if (Array.isArray(epDl) && epDl.length > 0) {
-          const match = epDl.find((q: any) => q.id === activeQuality) || epDl[0];
+          const match = epDl.find((q: any) => String(q.id).toLowerCase() === activeQuality.toLowerCase()) || epDl[0];
           if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
         }
+
+        if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
       }
 
       if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
       if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
     }
 
-    // Content-level resolution (Prioritize explicit qualityLinks / secondaryQualityLinks and permanent URLs)
     if (isServer2) {
       const fromContentSecQuality = findInQualityDict(
         (content as any).secondaryServerQualityLinks ||
@@ -927,13 +931,13 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       );
       if (fromContentSecQuality && isHlsStream(fromContentSecQuality)) return fromContentSecQuality;
 
-      if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
-
       const contentSecDl = (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities;
       if (Array.isArray(contentSecDl) && contentSecDl.length > 0) {
-        const match = contentSecDl.find((q: any) => q.id === activeQuality) || contentSecDl[0];
+        const match = contentSecDl.find((q: any) => String(q.id).toLowerCase() === activeQuality.toLowerCase()) || contentSecDl[0];
         if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
       }
+
+      if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
     } else {
       const fromContentQuality = findInQualityDict(
         content.qualityLinks || contentPart0?.qualityLinks || moviePart0?.qualityLinks
@@ -945,48 +949,55 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       );
       if (fromContentSources && isHlsStream(fromContentSources)) return fromContentSources;
 
-      if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
-
       const contentDl = (content as any)?.downloadQualities || contentPart0?.downloadQualities;
       if (Array.isArray(contentDl) && contentDl.length > 0) {
-        const match = contentDl.find((q: any) => q.id === activeQuality) || contentDl[0];
+        const match = contentDl.find((q: any) => String(q.id).toLowerCase() === activeQuality.toLowerCase()) || contentDl[0];
         if (match?.url && isHlsStream(match.url)) return SmartStreamService.sanitizeStreamUrl(match.url);
       }
+
+      if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
+    }
+
+    if (targetServer === modalServer) {
+      const matchedOpt = qualityOptions.find((q) => q.id.toLowerCase() === activeQuality.toLowerCase());
+      if (matchedOpt?.url && isHlsStream(matchedOpt.url)) return matchedOpt.url;
     }
 
     if (deepUrls.primaryUrl && isHlsStream(deepUrls.primaryUrl)) return deepUrls.primaryUrl;
     if (deepUrls.secondaryUrl && isHlsStream(deepUrls.secondaryUrl)) return deepUrls.secondaryUrl;
 
-    if (targetServer === modalServer) {
-      const matchedOpt = qualityOptions.find((q) => q.id === activeQuality);
-      if (matchedOpt?.url && isHlsStream(matchedOpt.url)) return matchedOpt.url;
-    }
-
-    if (content.isSmartHls || (ep as any)?.isSmartHls) {
-      if (deepUrls.primaryUrl) return deepUrls.primaryUrl;
-      if (deepUrls.secondaryUrl) return deepUrls.secondaryUrl;
-      return 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
-    }
-
     return '';
   };
 
-  // Size calculations with per-episode duration & probed bitrate awareness
-  const activeQualityObj = qualityOptions.find((q) => q.id === activeQualityId) || qualityOptions[0] || {
-    id: '720p',
-    label: '720p HD',
-    badge: 'Recommended',
-    movieSizeMb: 450,
-    epSizeMb: 180,
-    bandwidth: 1200000,
+  // Real size lookup for the selected quality (0 if not yet verified/probed)
+  const activeQualityObj = qualityOptions.find((q) => q.id.toLowerCase() === activeQualityId.toLowerCase()) || qualityOptions[0] || {
+    id: activeQualityId,
+    label: `${activeQualityId}`,
+    badge: 'HLS Stream',
+    movieSizeMb: 0,
+    epSizeMb: 0,
+    bandwidth: 0,
     isLive: false,
   };
 
-  // Helper to compute individual episode estimated MB using probed bitrate + episode duration
+  // Real per-episode MB lookup (checks episode's own verified downloadQualities / secondaryDownloadQualities first!)
   const getEpisodeEstimatedMb = (epIndex: number): number => {
-    const baseEpMb = activeQualityObj.epSizeMb || 180;
-    if (epIndex === focusedEpisodeIdx) return baseEpMb;
     const ep = currentEpisodes[epIndex];
+    if (ep) {
+      const epDlList = modalServer === 'server2'
+        ? ((ep as any)?.secondaryDownloadQualities || (ep as any)?.downloadQualities)
+        : ((ep as any)?.downloadQualities || (ep as any)?.secondaryDownloadQualities);
+      if (Array.isArray(epDlList) && epDlList.length > 0) {
+        const exactMatch = epDlList.find((q: any) => String(q?.id || '').toLowerCase() === activeQualityId.toLowerCase());
+        if (exactMatch && Number(exactMatch.sizeMb) > 0) {
+          return Math.round(Number(exactMatch.sizeMb));
+        }
+      }
+    }
+    const baseEpMb = Number(activeQualityObj.epSizeMb || 0);
+    if (baseEpMb <= 0) return 0;
+    if (epIndex === focusedEpisodeIdx) return baseEpMb;
+
     const focusedEp = currentEpisodes[focusedEpisodeIdx];
     const epDurRaw = Number(ep?.duration || 0);
     const focusedDurRaw = Number(focusedEp?.duration || extractedMeta?.duration || 0);
@@ -994,28 +1005,25 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       const epDurSec = epDurRaw > 300 ? epDurRaw : epDurRaw * 60;
       const focDurSec = focusedDurRaw > 300 ? focusedDurRaw : focusedDurRaw * 60;
       if (focDurSec > 60) {
-        return Math.max(25, Math.round(baseEpMb * (epDurSec / focDurSec)));
+        return Math.max(1, Math.round(baseEpMb * (epDurSec / focDurSec)));
       }
     }
-    // Slight deterministic per-episode variance so episodes with default duration don't look artificially identical
-    const epSeed = ((epIndex + 1) * 17 + (content.id?.charCodeAt(0) || 7)) % 11; // 0..10
-    const epFactor = 0.96 + epSeed * 0.008;
-    return Math.max(25, Math.round(baseEpMb * epFactor));
+    return baseEpMb;
   };
 
   const totalEstimatedMb = useMemo(() => {
     if (isMovie) {
-      return Math.max(25, activeQualityObj.movieSizeMb || 450);
+      return Math.max(0, Number(activeQualityObj.movieSizeMb || 0));
     }
     if (selectedEpIndices.size === 0) {
-      return Math.max(25, activeQualityObj.epSizeMb || 180);
+      return Math.max(0, Number(activeQualityObj.epSizeMb || 0));
     }
     let sum = 0;
     selectedEpIndices.forEach((idx) => {
       sum += getEpisodeEstimatedMb(idx);
     });
-    return Math.max(25, sum);
-  }, [isMovie, activeQualityObj, selectedEpIndices, currentEpisodes, focusedEpisodeIdx, extractedMeta]);
+    return Math.max(0, sum);
+  }, [isMovie, activeQualityObj, selectedEpIndices, currentEpisodes, focusedEpisodeIdx, extractedMeta, modalServer, activeQualityId]);
 
   const handleStartDownload = () => {
     if (!isHlsMode) {
@@ -1165,7 +1173,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                   Download Configuration
                 </span>
                 <span className="text-[11px] font-extrabold text-emerald-400">
-                  Total: ~{totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`}
+                  {totalEstimatedMb > 0
+                    ? `Total: ${totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`}`
+                    : 'Verified HLS Stream'}
                 </span>
               </div>
 
@@ -1203,7 +1213,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                       </span>
                     </div>
                     <span className="text-xs font-extrabold text-emerald-400 flex-shrink-0">
-                      ~{totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(1)} GB` : `${totalEstimatedMb} MB`}
+                      {totalEstimatedMb > 0
+                        ? (totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`)
+                        : 'HLS Ready'}
                     </span>
                   </div>
                 ) : (
@@ -1234,7 +1246,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                           </div>
 
                           <span className="text-xs font-bold text-emerald-400 flex-shrink-0">
-                            ~{sizeMb >= 1000 ? `${(sizeMb / 1024).toFixed(1)} GB` : `${sizeMb} MB`}
+                            {sizeMb > 0
+                              ? (sizeMb >= 1000 ? `${(sizeMb / 1024).toFixed(2)} GB` : `${sizeMb} MB`)
+                              : 'HLS Ready'}
                           </span>
                         </div>
                       );
@@ -1386,49 +1400,112 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
               </div>
             </div>
 
-            {/* 2. QUALITY SELECTOR CARDS */}
+            {/* 2. QUALITY SELECTOR CARDS (Real Admin & HLS Qualities + Cross-Server One-Tap Switch) */}
             <div>
               <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider mb-2 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
-                  <span>Select Quality</span>
+                  <span>Available Qualities ({modalServer === 'server2' ? 'Server 2' : 'Server 1'})</span>
                   {isProbing && (
                     <span className="text-[10px] text-sky-400 font-semibold flex items-center gap-1 animate-pulse">
-                      <Sparkles className="h-3 w-3" /> Reading stream sizes...
+                      <Sparkles className="h-3 w-3" /> Reading real sizes...
                     </span>
                   )}
                 </span>
                 <span className="text-[11px] text-emerald-400 font-extrabold">
-                  {totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`}
+                  {totalEstimatedMb > 0
+                    ? (totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`)
+                    : (isProbing ? 'Probing...' : 'HLS Ready')}
                 </span>
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {qualityOptions.map((q) => {
-                  const isSelected = activeQualityId === q.id;
-                  const sizeText = isMovie
-                    ? (q.movieSizeMb >= 1000 ? `${(q.movieSizeMb / 1024).toFixed(1)} GB` : `${q.movieSizeMb} MB`)
-                    : (q.epSizeMb >= 1000 ? `${(q.epSizeMb / 1024).toFixed(1)} GB/ep` : `${q.epSizeMb} MB/ep`);
 
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      onClick={() => setSelectedQuality(q.id)}
-                      className={`flex flex-col p-2.5 rounded-2xl border text-left transition cursor-pointer relative ${
-                        isSelected
-                          ? 'bg-[#8B5CF6]/15 border-[#8B5CF6] text-white shadow-md shadow-purple-600/10'
-                          : 'bg-[#181820] border-[#27272A] text-[#A1A1AA] hover:bg-[#1E1E28]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between w-full">
-                        <span className="text-xs font-extrabold text-white">{q.id.toUpperCase()}</span>
-                        {isSelected && <Check className="h-3.5 w-3.5 text-[#8B5CF6]" />}
-                      </div>
-                      <span className="text-[10px] text-[#A1A1AA] mt-0.5">{q.badge}</span>
-                      <span className="text-[11px] font-bold text-emerald-400 mt-1">{sizeText}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              {qualityOptions.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {qualityOptions.map((q) => {
+                    const isSelected = activeQualityId.toLowerCase() === q.id.toLowerCase();
+                    const rawMb = isMovie ? q.movieSizeMb : q.epSizeMb;
+                    const sizeText = rawMb > 0
+                      ? isMovie
+                        ? (rawMb >= 1000 ? `${(rawMb / 1024).toFixed(2)} GB` : `${rawMb} MB`)
+                        : (rawMb >= 1000 ? `${(rawMb / 1024).toFixed(2)} GB/ep` : `${rawMb} MB/ep`)
+                      : (isProbing ? 'Reading MB...' : 'Verified Link');
+
+                    return (
+                      <button
+                        key={`${modalServer}-${q.id}`}
+                        type="button"
+                        onClick={() => setSelectedQuality(q.id)}
+                        className={`flex flex-col p-2.5 rounded-2xl border text-left transition cursor-pointer relative ${
+                          isSelected
+                            ? 'bg-[#8B5CF6]/15 border-[#8B5CF6] text-white shadow-md shadow-purple-600/10'
+                            : 'bg-[#181820] border-[#27272A] text-[#A1A1AA] hover:bg-[#1E1E28]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-extrabold text-white">{q.id.toUpperCase()}</span>
+                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-black ${
+                              modalServer === 'server2'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                            }`}>
+                              {modalServer === 'server2' ? 'S2' : 'S1'}
+                            </span>
+                          </div>
+                          {isSelected && <Check className="h-3.5 w-3.5 text-[#8B5CF6]" />}
+                        </div>
+                        <span className="text-[10px] text-[#A1A1AA] mt-0.5">{q.badge}</span>
+                        <span className="text-[11px] font-bold text-emerald-400 mt-1">{sizeText}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-3 rounded-2xl bg-[#16161C] border border-[#27272A] text-xs text-[#A1A1AA] flex items-center justify-between">
+                  <span>{isProbing ? 'Probing live HLS qualities & real MB sizes...' : 'No separate qualities found on this server.'}</span>
+                </div>
+              )}
+
+              {/* Cross-Server Available Qualities (Tap any card to auto-switch server & select quality!) */}
+              {crossServerQualityOptions.length > 0 && (
+                <div className="mt-2.5 pt-2.5 border-t border-[#27272A]/60">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300/90">
+                      Also Available on {modalServer === 'server1' ? 'Server 2 (Tap to Switch)' : 'Server 1 (Tap to Switch)'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {crossServerQualityOptions.map((q) => {
+                      const otherServer = modalServer === 'server1' ? 'server2' : 'server1';
+                      const rawMb = isMovie ? q.movieSizeMb : q.epSizeMb;
+                      const sizeText = rawMb > 0
+                        ? isMovie
+                          ? (rawMb >= 1000 ? `${(rawMb / 1024).toFixed(2)} GB` : `${rawMb} MB`)
+                          : (rawMb >= 1000 ? `${(rawMb / 1024).toFixed(2)} GB/ep` : `${rawMb} MB/ep`)
+                        : 'Verified Link';
+
+                      return (
+                        <button
+                          key={`${otherServer}-${q.id}`}
+                          type="button"
+                          onClick={() => {
+                            setModalServer(otherServer);
+                            setSelectedQuality(q.id);
+                          }}
+                          className="flex flex-col p-2 rounded-xl border border-dashed border-amber-500/35 bg-[#16161E] hover:bg-amber-500/10 hover:border-amber-400 text-left transition cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between w-full">
+                            <span className="text-xs font-extrabold text-white">{q.id.toUpperCase()}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-black border border-amber-500/30">
+                              {otherServer === 'server2' ? 'Server 2' : 'Server 1'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold text-emerald-400 mt-1">{sizeText}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 3. MOVIE SINGLE CARD OR SERIES EPISODE SELECTOR */}
@@ -1460,7 +1537,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                     </div>
                   </div>
                   <span className="text-xs font-extrabold text-emerald-400 flex-shrink-0">
-                    ~{totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(1)} GB` : `${totalEstimatedMb} MB`}
+                    {totalEstimatedMb > 0
+                      ? (totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`)
+                      : 'HLS Ready'}
                   </span>
                 </div>
               </div>
@@ -1559,7 +1638,9 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
                   </span>
                 </span>
                 <span className="text-xs font-extrabold text-white">
-                  Total: ~{totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(1)} GB` : `${totalEstimatedMb} MB`}
+                  {totalEstimatedMb > 0
+                    ? `Total: ${totalEstimatedMb >= 1000 ? `${(totalEstimatedMb / 1024).toFixed(2)} GB` : `${totalEstimatedMb} MB`}`
+                    : (isProbing ? 'Reading stream size...' : 'Verified HLS Stream')}
                 </span>
               </div>
 

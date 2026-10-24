@@ -7,12 +7,15 @@ android {
     namespace = "com.maxplay.app"
     compileSdk = 34
 
+    val isAdminApp = project.hasProperty("adminApp") && project.property("adminApp").toString().equals("true", ignoreCase = true)
+
     defaultConfig {
-        applicationId = "com.maxplay.app"
+        applicationId = if (isAdminApp) "com.maxplay.admin" else "com.maxplay.app"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        manifestPlaceholders["appLabel"] = if (isAdminApp) "MaxPlay Admin" else "MaxPlay"
     }
 
     signingConfigs {

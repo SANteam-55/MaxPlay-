@@ -1064,13 +1064,18 @@
         top: 0;
         bottom: 0;
         transform: translateX(-100%);
+        z-index: 950;
       }
       .sidebar.open {
         transform: translateX(0);
         box-shadow: 0 0 60px rgba(0, 0, 0, 0.95);
       }
       .content-area {
-        padding: 16px;
+        padding: 12px 10px 80px 10px;
+      }
+      .top-header {
+        padding: 0 12px;
+        height: 58px;
       }
       .stats-grid, .stat-grid {
         grid-template-columns: 1fr;
@@ -1079,6 +1084,20 @@
       div[style*="grid-template-columns: 1fr 1fr"],
       div[style*="grid-template-columns: 1fr 1fr 1fr"] {
         grid-template-columns: 1fr !important;
+      }
+      .server-q-row {
+        flex-wrap: nowrap !important;
+        gap: 6px !important;
+      }
+      .server-q-row input.input-control {
+        min-width: 0 !important;
+        font-size: 11px !important;
+      }
+      .episode-card {
+        padding: 12px !important;
+      }
+      button, .btn-primary, .btn-secondary {
+        touch-action: manipulation;
       }
     }
   </style>
@@ -5989,77 +6008,291 @@
       if (resEl) resEl.style.display = 'none';
     };
 
+    // =========================================================================
+    // NATIVE KOTLIN + WEB HYBRID MULTI-BOX STREAM VERIFIER (Server 1 & Server 2)
+    // =========================================================================
+    window.__handleMaxPlayHardwareBack = function() {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar && sidebar.classList.contains('open')) {
+        window.toggleMobileSidebar();
+        return true;
+      }
+      const openModals = document.querySelectorAll('.modal-overlay[style*="display: flex"], .modal-overlay[style*="display:flex"], .modal-overlay.active');
+      if (openModals.length > 0) {
+        const lastModal = openModals[openModals.length - 1];
+        lastModal.style.display = 'none';
+        lastModal.classList.remove('active');
+        return true;
+      }
+      return false;
+    };
+
+    window.probeSingleQualityBoxSmart = async function(rawUrl, forcedQuality, requestedDurationSec) {
+      const cleanUrl = window.sanitizeAdminStreamUrl(rawUrl);
+      if (!cleanUrl) return { ok: false, error: 'Empty URL' };
+
+      // 1. Native Kotlin Bridge Priority (MaxPlay-Admin.apk)
+      if (window.MaxPlayNative && typeof window.MaxPlayNative.probeSingleStreamBoxAsync === 'function') {
+        try {
+          const nativeData = await new Promise((resolve) => {
+            const cbId = 'admin_probe_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            const timeout = setTimeout(() => {
+              if (window.__maxPlayNativeCallbacks && window.__maxPlayNativeCallbacks[cbId]) {
+                delete window.__maxPlayNativeCallbacks[cbId];
+              }
+              resolve({ ok: false, error: 'Native bridge probe timeout' });
+            }, 38000);
+            window.__maxPlayNativeCallbacks = window.__maxPlayNativeCallbacks || {};
+            window.__maxPlayNativeCallbacks[cbId] = function(res) {
+              clearTimeout(timeout);
+              resolve(res || { ok: false, error: 'Empty native response' });
+            };
+            window.MaxPlayNative.probeSingleStreamBoxAsync(cleanUrl, forcedQuality || '', cbId);
+          });
+
+          if (nativeData && nativeData.ok && nativeData.m3u8Url) {
+            return {
+              ok: true,
+              engine: nativeData.engine || 'KOTLIN_NATIVE',
+              sourceUrl: cleanUrl,
+              m3u8Url: nativeData.m3u8Url,
+              qualities: Array.isArray(nativeData.qualities) ? nativeData.qualities : (forcedQuality ? [forcedQuality] : []),
+              qualityLinks: nativeData.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
+              downloadQualities: Array.isArray(nativeData.downloadQualities) ? nativeData.downloadQualities.map(dq => ({
+                ...dq,
+                url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
+              })) : [],
+              audioTracks: Array.isArray(nativeData.audioTracks) ? nativeData.audioTracks : [],
+              duration: Number(nativeData.duration || 0),
+              remainingSeconds: 10200
+            };
+          }
+        } catch (nativeErr) {
+          console.warn('[AdminNativeVerify] Native probe fallback to web API:', nativeErr);
+        }
+      }
+
+      // 2. Web / Server Extractor API Fallback
+      const resp = await fetch('/api/extract-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: cleanUrl,
+          forcedQuality: forcedQuality || '',
+          duration: requestedDurationSec || 0,
+          forceRefresh: true
+        })
+      });
+      const data = await resp.json();
+      if (data && data.ok && data.m3u8Url) {
+        return {
+          ok: true,
+          engine: 'SERVER_API',
+          sourceUrl: cleanUrl,
+          m3u8Url: data.m3u8Url,
+          qualities: Array.isArray(data.qualities) ? data.qualities : (forcedQuality ? [forcedQuality] : []),
+          qualityLinks: data.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
+          downloadQualities: Array.isArray(data.downloadQualities) ? data.downloadQualities.map(dq => ({
+            ...dq,
+            url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
+          })) : [],
+          audioTracks: Array.isArray(data.audioTracks) ? data.audioTracks : [],
+          duration: Number(data.duration || 0),
+          remainingSeconds: Number(data.remainingSeconds || 10200)
+        };
+      }
+      return {
+        ok: false,
+        error: (data && data.error) ? data.error : 'Could not extract HLS stream metadata'
+      };
+    };
+
+    window.verifyServerQualityBoxesBatch = async function(boxEntries, fallbackSingleUrl, onProgress, requestedDurationSec) {
+      const order = ['1080p', '720p', '480p', '360p'];
+      const tasks = [];
+      for (const q of order) {
+        if (boxEntries && boxEntries[q] && window.sanitizeAdminStreamUrl(boxEntries[q])) {
+          tasks.push({ quality: q, url: window.sanitizeAdminStreamUrl(boxEntries[q]), forcedQuality: q });
+        }
+      }
+      if (tasks.length === 0 && fallbackSingleUrl && window.sanitizeAdminStreamUrl(fallbackSingleUrl)) {
+        tasks.push({ quality: 'Master', url: window.sanitizeAdminStreamUrl(fallbackSingleUrl), forcedQuality: '' });
+      }
+      if (tasks.length === 0) {
+        return { ok: false, error: 'Please enter at least one stream link in the quality boxes first.' };
+      }
+
+      const mergedQualities = [];
+      const mergedQualityLinks = {};
+      const mergedDownloadMap = new Map();
+      const mergedAudioTracks = [];
+      let bestDuration = 0;
+      let primaryM3u8Url = '';
+      let lastError = '';
+      let usedEngine = window.MaxPlayNative ? 'Kotlin Native Engine' : 'Extractor API';
+      let verifiedCount = 0;
+
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        if (typeof onProgress === 'function') {
+          onProgress(i + 1, tasks.length, t.quality, t.url);
+        }
+        try {
+          const res = await window.probeSingleQualityBoxSmart(t.url, t.forcedQuality, requestedDurationSec);
+          if (res && res.ok) {
+            verifiedCount++;
+            if (!primaryM3u8Url && res.m3u8Url) primaryM3u8Url = res.m3u8Url;
+            if (res.engine && res.engine.includes('KOTLIN')) usedEngine = 'Kotlin Native Engine';
+            if (res.duration && res.duration > bestDuration) {
+              bestDuration = res.duration;
+            }
+            if (Array.isArray(res.audioTracks)) {
+              res.audioTracks.forEach(lang => {
+                if (lang && lang !== 'Default' && lang !== 'Default Audio' && !mergedAudioTracks.some(a => a.toLowerCase() === lang.toLowerCase())) {
+                  mergedAudioTracks.push(lang);
+                }
+              });
+            }
+            if (t.forcedQuality) {
+              if (!mergedQualities.includes(t.forcedQuality)) mergedQualities.push(t.forcedQuality);
+              mergedQualityLinks[t.forcedQuality] = t.url;
+              const dqMatch = (res.downloadQualities || []).find(d => d.id === t.forcedQuality) || (res.downloadQualities || [])[0];
+              if (dqMatch && dqMatch.sizeMb > 0) {
+                mergedDownloadMap.set(t.forcedQuality, {
+                  id: t.forcedQuality,
+                  label: `${t.forcedQuality} ${t.forcedQuality === '1080p' ? 'Full HD' : t.forcedQuality === '720p' ? 'HD' : t.forcedQuality === '480p' ? 'Standard' : 'Data Saver'}`,
+                  sizeMb: dqMatch.sizeMb,
+                  url: t.url,
+                  bandwidth: dqMatch.bandwidth || 0
+                });
+              }
+            } else {
+              (res.qualities || []).forEach(q => {
+                if (q && !mergedQualities.includes(q)) mergedQualities.push(q);
+              });
+              if (res.qualityLinks && typeof res.qualityLinks === 'object') {
+                Object.assign(mergedQualityLinks, res.qualityLinks);
+              }
+              (res.downloadQualities || []).forEach(dq => {
+                if (dq && dq.id && dq.sizeMb > 0 && !mergedDownloadMap.has(dq.id)) {
+                  mergedDownloadMap.set(dq.id, dq);
+                }
+              });
+            }
+          } else {
+            lastError = (res && res.error) ? `${t.quality}: ${res.error}` : `${t.quality} failed`;
+          }
+        } catch (err) {
+          lastError = `${t.quality}: ${err.message || 'Verification error'}`;
+        }
+      }
+
+      if (verifiedCount === 0) {
+        return { ok: false, error: lastError || 'All stream links failed verification.' };
+      }
+
+      mergedQualities.sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
+      const finalDownloadQualities = Array.from(mergedDownloadMap.values()).sort(
+        (a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0)
+      );
+
+      return {
+        ok: true,
+        verifiedCount,
+        totalBoxes: tasks.length,
+        engine: usedEngine,
+        m3u8Url: primaryM3u8Url,
+        qualities: mergedQualities,
+        qualityLinks: mergedQualityLinks,
+        downloadQualities: finalDownloadQualities,
+        audioTracks: mergedAudioTracks,
+        duration: bestDuration,
+        remainingSeconds: 10200
+      };
+    };
+
+    window.syncStep1QualitiesAndLanguages = function(qualities, audioTracks) {
+      if (Array.isArray(qualities) && qualities.length > 0) {
+        qualities.forEach(q => {
+          if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
+            window.activeQualities.push(q);
+          }
+          if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(q);
+        });
+        document.querySelectorAll('#qualities-checkboxes .quality-checkbox').forEach(cb => {
+          if (qualities.some(q => q.toLowerCase() === cb.value.toLowerCase())) {
+            cb.checked = true;
+          }
+        });
+      }
+      if (Array.isArray(audioTracks) && audioTracks.length > 0) {
+        audioTracks.forEach(lang => {
+          if (!window.activeLanguages.some(x => x.toLowerCase() === lang.toLowerCase())) {
+            window.activeLanguages.push(lang);
+          }
+          if (window.ensureLanguageCheckboxExists) window.ensureLanguageCheckboxExists(lang);
+        });
+        document.querySelectorAll('#languages-checkboxes .language-checkbox').forEach(cb => {
+          if (audioTracks.some(l => l.toLowerCase() === cb.value.toLowerCase())) {
+            cb.checked = true;
+          }
+        });
+      }
+    };
+
     window.testAndExtractMovieStream = async function() {
+      if (typeof window.syncMovieSmartServerInputs === 'function') {
+        window.syncMovieSmartServerInputs();
+      }
       const urlInput = document.getElementById('movie-hls-url');
       const statusEl = document.getElementById('movie-hls-extract-result');
       const btn = document.getElementById('btn-test-movie-hls');
-      if (!urlInput || !statusEl) return;
-      
-      const rawUrl = urlInput.value.trim();
-      if (!rawUrl) {
-        showToast('Please enter a stream URL first (e.g. https://voe.sx/...)', 'warning');
+      if (!statusEl) return;
+
+      const s1BoxMap = typeof window.collectMovieServerQualityLinks === 'function'
+        ? window.collectMovieServerQualityLinks(1)
+        : {};
+      const rawUrl = urlInput ? urlInput.value.trim() : '';
+
+      if (Object.keys(s1BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 1 stream URL first', 'warning');
         return;
       }
 
       const origHtml = btn ? btn.innerHTML : '';
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Extracting...';
       }
-
       statusEl.style.display = 'block';
-      statusEl.innerHTML = '<div style="color:var(--accent-cyan); display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-spinner fa-spin"></i> Calling extractor API with key & resolving proxy stream...</div>';
 
       try {
-        const resp = await fetch('/api/extract-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
-        });
-        const data = await resp.json();
+        const data = await window.verifyServerQualityBoxesBatch(
+          s1BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `Verifying ${currentIdx}/${totalCount} (${qLabel})...`;
+            if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            statusEl.innerHTML = `
+              <div style="background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.3); border-radius:10px; padding:10px 12px; color:#38BDF8; display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700;">
+                <span><i class="fa-solid fa-spinner fa-spin"></i> ${progMsg} — probing HLS segments & real MB size</span>
+                <span style="background:rgba(56,189,248,0.2); padding:2px 8px; border-radius:99px; font-size:10px;">${Math.round((currentIdx / totalCount) * 100)}%</span>
+              </div>
+            `;
+          },
+          window.movieTotalDuration || 0
+        );
 
         if (data.ok && data.m3u8Url) {
           window.extractedMovieM3u8Url = data.m3u8Url;
           window.extractedMovieQualities = data.qualities || [];
           window.extractedMovieQualityLinks = data.qualityLinks || {};
           window.extractedMovieDownloadQualities = data.downloadQualities || [];
-          window.extractedMovieAudioTracks = data.audioTracks || [];
-
-          // 1. Auto-fill Step 1 Active Qualities and check checkboxes
-          if (Array.isArray(data.qualities) && data.qualities.length > 0) {
-            data.qualities.forEach(q => {
-              if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
-                window.activeQualities.push(q);
-              }
-              if (window.ensureQualityCheckboxExists) {
-                window.ensureQualityCheckboxExists(q);
-              }
-            });
-            document.querySelectorAll('#qualities-checkboxes .quality-checkbox').forEach(cb => {
-              if (data.qualities.some(q => q.toLowerCase() === cb.value.toLowerCase())) {
-                cb.checked = true;
-              }
-            });
-          }
-
-          // 2. Auto-fill Step 1 Active Languages and check checkboxes
           if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
-            data.audioTracks.forEach(lang => {
-              if (!window.activeLanguages.some(x => x.toLowerCase() === lang.toLowerCase())) {
-                window.activeLanguages.push(lang);
-              }
-              if (window.ensureLanguageCheckboxExists) {
-                window.ensureLanguageCheckboxExists(lang);
-              }
-            });
-            document.querySelectorAll('#languages-checkboxes .language-checkbox').forEach(cb => {
-              if (data.audioTracks.some(l => l.toLowerCase() === cb.value.toLowerCase())) {
-                cb.checked = true;
-              }
-            });
+            window.extractedMovieAudioTracks = data.audioTracks;
           }
 
-          // 3. Auto-fill Movie Duration
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
+
           if (data.duration && data.duration > 0) {
             window.movieTotalDuration = data.duration;
             const durDisplay = document.getElementById('movie-total-duration-text');
@@ -6071,7 +6304,6 @@
             }
           }
 
-          // 4. Auto-populate Movie Part 1 quality inputs
           if (data.qualityLinks && typeof data.qualityLinks === 'object') {
             for (let q in data.qualityLinks) {
               const inputs = document.querySelectorAll(`.movie-q-input[data-quality="${q}"]`);
@@ -6081,8 +6313,8 @@
             }
           }
 
-          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p, 720p';
-          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : (window.activeLanguages && window.activeLanguages.length > 0 ? window.activeLanguages.join(', ') : 'Original Audio');
 
           const movieDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
             ? data.downloadQualities.map((q, idx) => {
@@ -6097,63 +6329,48 @@
                 <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:28px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
               </div>
             `;}).join('')
-            : '<span style="color:#A1A1AA; font-size:11px;">Standard stream</span>';
+            : '<span style="color:#A1A1AA; font-size:11px;">No segment size reported</span>';
 
           statusEl.innerHTML = `
             <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:12px; margin-top:8px;">
-              <div style="color:#10B981; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-                <i class="fa-solid fa-circle-check"></i> Extractor API Success! Stream & Real Download Data Ready
-              </div>
-              <div style="font-size:11px; color:#ddd; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.3); padding:8px; border-radius:6px; margin-bottom:8px; border:1px solid rgba(255,255,255,0.05);">
-                ${data.m3u8Url}
+              <div style="color:#10B981; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                <span><i class="fa-solid fa-circle-check"></i> Verified ${data.verifiedCount}/${data.totalBoxes} Link(s) • Real HLS Metadata Ready</span>
+                <span style="font-size:10px; background:rgba(16,185,129,0.18); color:#34D399; padding:2px 8px; border-radius:99px;">${data.engine}</span>
               </div>
               <div style="display:flex; flex-direction:column; gap:5px; font-size:11px; margin-bottom:8px;">
-                <div style="display:flex; align-items:center; gap:6px;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                   <span style="color:var(--text-tertiary); font-weight:700;"><i class="fa-solid fa-sliders" style="color:#A78BFA;"></i> Qualities:</span>
                   <span style="color:#fff; font-weight:600;">${qLabels}</span>
                 </div>
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <span style="color:var(--text-tertiary); font-weight:700;"><i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> Audios:</span>
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span style="color:var(--text-tertiary); font-weight:700;"><i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> Shared Audios:</span>
                   <span style="color:#fff; font-weight:600;">${aLabels}</span>
                 </div>
               </div>
-
-              <!-- Real-time Download Sheet Table for Movie -->
               <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08);">
                 <div style="font-size:11px; font-weight:800; color:#10B981; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-                  <i class="fa-solid fa-download"></i> Verified Download Inputs Sheet (Auto-Filled)
+                  <i class="fa-solid fa-download"></i> Server 1 Verified Download Sizes (Real HLS Probed)
                 </div>
                 ${movieDlRows}
               </div>
-
-              <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px; margin-top:8px;">
-                <span style="color:var(--text-tertiary);">Token Session: ${Math.round((data.remainingSeconds || 10200) / 60)} min safe window</span>
-                <button type="button" class="btn-secondary" style="height:26px; font-size:10px; padding:0 10px;" onclick="calculateTotalDuration('movie')">
-                  <i class="fa-solid fa-stopwatch"></i> Calculate Duration
-                </button>
-              </div>
             </div>
           `;
-          showToast('Stream & download data extracted successfully!', 'success');
-          // Automatically trigger duration probe for movie
-          if (typeof window.calculateTotalDuration === 'function') {
-            window.calculateTotalDuration('movie');
-          }
+          showToast(`Verified ${data.verifiedCount}/${data.totalBoxes} Server 1 quality box(es) with real MB!`, 'success');
         } else {
           statusEl.innerHTML = `
             <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
-              <i class="fa-solid fa-circle-exclamation"></i> Extraction Failed: ${data.error || 'Could not extract m3u8Url from stream'}
+              <i class="fa-solid fa-circle-exclamation"></i> Verification Failed: ${data.error || 'Could not extract HLS stream'}
             </div>
           `;
-          showToast(data.error || 'Extraction failed', 'error');
+          showToast(data.error || 'Verification failed', 'error');
         }
       } catch (err) {
         statusEl.innerHTML = `
           <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
-            <i class="fa-solid fa-circle-exclamation"></i> Network error: ${err.message}
+            <i class="fa-solid fa-circle-exclamation"></i> Error: ${err.message}
           </div>
         `;
-        showToast('Error connecting to extractor: ' + err.message, 'error');
+        showToast('Verification error: ' + err.message, 'error');
       } finally {
         if (btn) {
           btn.disabled = false;
@@ -6171,6 +6388,15 @@
       }
     };
 
+    window.updateMovieSecondaryDownloadSize = function(idx, val) {
+      if (window.extractedMovieSecondaryDownloadQualities && window.extractedMovieSecondaryDownloadQualities[idx]) {
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num > 0) {
+          window.extractedMovieSecondaryDownloadQualities[idx].sizeMb = num;
+        }
+      }
+    };
+
     window.updateEpisodeDownloadSize = function(epIdx, qIdx, val) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
@@ -6184,6 +6410,19 @@
       }
     };
 
+    window.updateEpisodeSecondaryDownloadSize = function(epIdx, qIdx, val) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
+        const ep = activeSeason.episodes[epIdx];
+        if (ep.secondaryDownloadQualities && ep.secondaryDownloadQualities[qIdx]) {
+          const num = parseInt(val, 10);
+          if (!isNaN(num) && num > 0) {
+            ep.secondaryDownloadQualities[qIdx].sizeMb = num;
+          }
+        }
+      }
+    };
+
     window.testAndExtractEpisodeStream = async function(epIdx, btn) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (!activeSeason || !activeSeason.episodes[epIdx]) return;
@@ -6191,84 +6430,72 @@
       if (!card) return;
       const inp = card.querySelector('.ep-hls-stream-input');
       const statusEl = card.querySelector('.ep-hls-extract-status');
-      const rawUrl = inp ? inp.value.trim() : '';
 
-      if (!rawUrl) {
-        showToast('Please enter episode stream URL first', 'warning');
+      const s1BoxMap = {};
+      card.querySelectorAll('.ep-s1-q-input').forEach(qInp => {
+        const row = qInp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = qInp.getAttribute('data-quality');
+        const val = window.sanitizeAdminStreamUrl(qInp.value);
+        if (q && val) s1BoxMap[q] = val;
+      });
+      const rawUrl = inp ? window.sanitizeAdminStreamUrl(inp.value) : '';
+
+      if (Object.keys(s1BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 1 episode URL first', 'warning');
         return;
       }
 
       const origHtml = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent-cyan);"><i class="fa-solid fa-spinner fa-spin"></i> Verifying & extracting stream metadata...</span>';
 
       try {
-        const resp = await fetch('/api/extract-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
-        });
-        const data = await resp.json();
+        const ep = activeSeason.episodes[epIdx];
+        const data = await window.verifyServerQualityBoxesBatch(
+          s1BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `${currentIdx}/${totalCount} (${qLabel})`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            if (statusEl) {
+              statusEl.innerHTML = `<span style="color:var(--accent-cyan); font-weight:700;"><i class="fa-solid fa-spinner fa-spin"></i> Verifying ${progMsg} — reading real HLS segments & MB...</span>`;
+            }
+          },
+          ep?.duration || 0
+        );
+
         if (data.ok && data.m3u8Url) {
-          const ep = activeSeason.episodes[epIdx];
           if (ep) {
             ep.downloadQualities = data.downloadQualities || [];
-            ep.audioTracks = data.audioTracks || [];
             ep.qualities = data.qualities || [];
-            ep.availableLanguages = data.audioTracks || [];
+            ep.qualityLinks = Object.keys(data.qualityLinks || {}).length > 0 ? data.qualityLinks : s1BoxMap;
+            if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
+              ep.audioTracks = data.audioTracks;
+              ep.availableLanguages = data.audioTracks;
+            }
             if (data.duration && data.duration > 0) {
               ep.duration = data.duration;
             }
           }
 
-          // 1. Auto-fill Episode Duration input and display
           if (data.duration && data.duration > 0) {
+            const mm = Math.floor(data.duration / 60);
+            const ss = (data.duration % 60).toString().padStart(2, '0');
             const durInp = card.querySelector('.ep-input-dur');
-            if (durInp) {
-              const mm = Math.floor(data.duration / 60);
-              const ss = (data.duration % 60).toString().padStart(2, '0');
-              durInp.value = `${mm}:${ss}`;
-            }
+            if (durInp) durInp.value = `${mm}:${ss}`;
             const durTxt = card.querySelector('.ep-total-duration-text');
             if (durTxt) {
-              const mm = Math.floor(data.duration / 60);
-              const ss = (data.duration % 60).toString().padStart(2, '0');
               durTxt.innerHTML = `<span style="color:#10B981; font-weight:900; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-circle-check"></i> ${mm}:${ss}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${data.duration}s)</span>`;
             }
           }
 
-          // 2. Auto-fill Step 1 Qualities & Languages if not present
-          if (Array.isArray(data.qualities) && data.qualities.length > 0) {
-            data.qualities.forEach(q => {
-              if (!window.activeQualities.some(x => x.toLowerCase() === q.toLowerCase())) {
-                window.activeQualities.push(q);
-              }
-              if (window.ensureQualityCheckboxExists) window.ensureQualityCheckboxExists(q);
-            });
-          }
-          if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
-            data.audioTracks.forEach(lang => {
-              if (!window.activeLanguages.some(x => x.toLowerCase() === lang.toLowerCase())) {
-                window.activeLanguages.push(lang);
-              }
-              if (window.ensureLanguageCheckboxExists) window.ensureLanguageCheckboxExists(lang);
-            });
-          }
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
 
-          // 3. Auto-populate Part 1 normal inputs if present
-          if (data.qualityLinks && typeof data.qualityLinks === 'object') {
-            for (let q in data.qualityLinks) {
-              const qInputs = card.querySelectorAll(`.ep-part1-q-input[data-quality="${q}"]`);
-              qInputs.forEach(inp => {
-                inp.value = data.qualityLinks[q];
-              });
-            }
-          }
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0)
+            ? data.audioTracks.join(', ')
+            : (ep?.availableLanguages && ep.availableLanguages.length > 0 ? ep.availableLanguages.join(', ') : 'Shared Audio');
 
-          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p';
-          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
-          
           const epDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
             ? data.downloadQualities.map((q, idx) => {
               const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
@@ -6287,8 +6514,9 @@
           if (statusEl) {
             statusEl.innerHTML = `
               <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:8px; padding:8px 10px; margin-top:6px;">
-                <div style="color:#10B981; font-weight:800; font-size:11px; display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                  <i class="fa-solid fa-circle-check"></i> Extracted & Ready for Playback & Download
+                <div style="color:#10B981; font-weight:800; font-size:11px; display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:4px; flex-wrap:wrap;">
+                  <span><i class="fa-solid fa-circle-check"></i> Verified ${data.verifiedCount}/${data.totalBoxes} Box(es) • Ready for Playback & Download</span>
+                  <span style="font-size:9px; background:rgba(16,185,129,0.18); color:#34D399; padding:1px 6px; border-radius:99px;">${data.engine}</span>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:6px; font-size:10px; color:#ddd; align-items:center; margin-bottom:6px;">
                   <span><i class="fa-solid fa-sliders" style="color:#A78BFA;"></i> ${qLabels}</span>
@@ -6297,22 +6525,17 @@
                 </div>
                 ${epDlRows ? `
                   <div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.08);">
-                    <div style="font-size:10px; font-weight:800; color:#10B981; margin-bottom:4px;"><i class="fa-solid fa-download"></i> Episode Download Inputs Sheet</div>
+                    <div style="font-size:10px; font-weight:800; color:#10B981; margin-bottom:4px;"><i class="fa-solid fa-download"></i> Server 1 Real Download Sizes</div>
                     ${epDlRows}
                   </div>
                 ` : ''}
               </div>
             `;
           }
-          showToast(`Episode ${epIdx + 1} stream & download metadata verified!`, 'success');
-          // Trigger duration probe for this episode card
-          const calcBtn = card.querySelector('button[onclick*="calculateTotalDuration"]');
-          if (calcBtn && typeof window.calculateTotalDuration === 'function') {
-            window.calculateTotalDuration('episode', calcBtn);
-          }
+          showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 1 link(s)!`, 'success');
         } else {
           if (statusEl) {
-            statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Failed'}</span>`;
+            statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Verification failed'}</span>`;
           }
           showToast(data.error || 'Extraction failed', 'error');
         }
@@ -6325,40 +6548,53 @@
     };
 
     window.testAndExtractMovieSecondaryStream = async function() {
+      if (typeof window.syncMovieSmartServerInputs === 'function') {
+        window.syncMovieSmartServerInputs();
+      }
       const urlInput = document.getElementById('movie-secondary-hls-url');
       const statusEl = document.getElementById('movie-secondary-hls-extract-result');
       const btn = document.getElementById('btn-test-movie-secondary-hls');
-      if (!urlInput || !statusEl) return;
+      if (!statusEl) return;
 
-      const rawUrl = urlInput.value.trim();
-      if (!rawUrl) {
-        showToast('Please enter a Server 2 (Filemoon / Byse) stream URL first', 'warning');
+      const s2BoxMap = typeof window.collectMovieServerQualityLinks === 'function'
+        ? window.collectMovieServerQualityLinks(2)
+        : {};
+      const rawUrl = urlInput ? urlInput.value.trim() : '';
+      if (Object.keys(s2BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 2 (Filemoon / Byse) stream URL first', 'warning');
         return;
       }
 
       const origHtml = btn ? btn.innerHTML : '';
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
       }
-
       statusEl.style.display = 'block';
-      statusEl.innerHTML = '<div style="color:#FBBF24; display:flex; align-items:center; gap:8px; font-size:12px;"><i class="fa-solid fa-spinner fa-spin"></i> Verifying Server 2 (Filemoon / Byse) stream & decrypting HLS...</div>';
 
       try {
-        const resp = await fetch('/api/extract-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
-        });
-        const data = await resp.json();
+        const data = await window.verifyServerQualityBoxesBatch(
+          s2BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `Verifying ${currentIdx}/${totalCount} (${qLabel})...`;
+            if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            statusEl.innerHTML = `
+              <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:10px 12px; color:#FBBF24; display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700;">
+                <span><i class="fa-solid fa-spinner fa-spin"></i> Server 2: ${progMsg} — decrypting Filemoon HLS & real MB</span>
+                <span style="background:rgba(245,158,11,0.2); padding:2px 8px; border-radius:99px; font-size:10px;">${Math.round((currentIdx / totalCount) * 100)}%</span>
+              </div>
+            `;
+          },
+          window.movieTotalDuration || 0
+        );
 
         if (data.ok && data.m3u8Url) {
           window.extractedMovieSecondaryDownloadQualities = data.downloadQualities || [];
-          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p, 720p';
-          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
+          if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0 && (!window.extractedMovieAudioTracks || window.extractedMovieAudioTracks.length === 0)) {
+            window.extractedMovieAudioTracks = data.audioTracks;
+          }
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
 
-          // If movie duration wasn't calculated yet, fill it from Server 2
           if (data.duration && data.duration > 0 && !window.movieTotalDuration) {
             window.movieTotalDuration = data.duration;
             const durDisplay = document.getElementById('movie-total-duration-text');
@@ -6370,19 +6606,43 @@
             }
           }
 
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0)
+            ? data.audioTracks.join(', ')
+            : (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0 ? window.extractedMovieAudioTracks.join(', ') : 'Shared Audio');
+
+          const s2MovieDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 85px 130px 1fr; gap:8px; align-items:center; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:8px; margin-bottom:5px; border:1px solid rgba(245,158,11,0.2);">
+                <span style="font-weight:800; color:#FBBF24; font-size:12px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <input type="number" class="input-control movie-s2-dl-size-input" data-idx="${idx}" value="${q.sizeMb}" style="height:28px; width:75px; padding:2px 6px; font-size:11px; text-align:right;" oninput="updateMovieSecondaryDownloadSize(${idx}, this.value)">
+                  <span style="font-size:11px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:28px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '';
+
           statusEl.innerHTML = `
             <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:12px; margin-top:6px;">
-              <div style="color:#FBBF24; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-                <i class="fa-solid fa-circle-check"></i> Server 2 (Filemoon / Byse) Verified! Direct HLS Ready
-              </div>
-              <div style="font-size:11px; color:#ddd; font-family:monospace; word-break:break-all; background:rgba(0,0,0,0.3); padding:8px; border-radius:6px; margin-bottom:6px; border:1px solid rgba(255,255,255,0.05);">
-                ${data.m3u8Url}
+              <div style="color:#FBBF24; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                <span><i class="fa-solid fa-circle-check"></i> Server 2 Verified (${data.verifiedCount}/${data.totalBoxes} Link(s))! Direct HLS Ready</span>
+                <span style="font-size:10px; background:rgba(245,158,11,0.2); color:#FBBF24; padding:2px 8px; border-radius:99px;">${data.engine}</span>
               </div>
               <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:#ddd; margin-bottom:8px;">
                 <span><strong style="color:#FBBF24;">Qualities:</strong> ${qLabels}</span>
                 <span>•</span>
                 <span><strong style="color:#38BDF8;">Audio:</strong> ${aLabels}</span>
               </div>
+              ${s2MovieDlRows ? `
+                <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(245,158,11,0.25);">
+                  <div style="font-size:11px; font-weight:800; color:#FBBF24; margin-bottom:6px;"><i class="fa-solid fa-download"></i> Server 2 Verified Download Sizes (Real HLS Probed)</div>
+                  ${s2MovieDlRows}
+                </div>
+              ` : ''}
               <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(245,158,11,0.25); display:flex; flex-direction:column; gap:6px;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                   <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s2-movie-preview-box', '${data.m3u8Url}')">
@@ -6396,7 +6656,7 @@
               </div>
             </div>
           `;
-          showToast('Server 2 (Filemoon) stream verified!', 'success');
+          showToast(`Server 2: Verified ${data.verifiedCount}/${data.totalBoxes} quality box(es)!`, 'success');
         } else {
           statusEl.innerHTML = `
             <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:10px; margin-top:6px; color:#F87171; font-size:12px;">
@@ -6422,45 +6682,98 @@
       if (!card) return;
       const inp = card.querySelector('.ep-secondary-hls-stream-input');
       const statusEl = card.querySelector('.ep-secondary-hls-extract-status');
-      const rawUrl = inp ? inp.value.trim() : '';
 
-      if (!rawUrl) {
-        showToast('Please enter Server 2 (Filemoon / Byse) episode URL first', 'warning');
+      const s2BoxMap = {};
+      card.querySelectorAll('.ep-s2-q-input').forEach(qInp => {
+        const row = qInp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = qInp.getAttribute('data-quality');
+        const val = window.sanitizeAdminStreamUrl(qInp.value);
+        if (q && val) s2BoxMap[q] = val;
+      });
+      const rawUrl = inp ? window.sanitizeAdminStreamUrl(inp.value) : '';
+
+      if (Object.keys(s2BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 2 (Filemoon / Byse) episode URL first', 'warning');
         return;
       }
 
       const origHtml = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-      if (statusEl) statusEl.innerHTML = '<span style="color:#FBBF24;"><i class="fa-solid fa-spinner fa-spin"></i> Verifying Server 2 (Filemoon / Byse) stream...</span>';
 
       try {
-        const resp = await fetch('/api/extract-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: rawUrl, forceRefresh: true })
-        });
-        const data = await resp.json();
+        const ep = activeSeason.episodes[epIdx];
+        const data = await window.verifyServerQualityBoxesBatch(
+          s2BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `${currentIdx}/${totalCount} (${qLabel})`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            if (statusEl) {
+              statusEl.innerHTML = `<span style="color:#FBBF24; font-weight:700;"><i class="fa-solid fa-spinner fa-spin"></i> Server 2: Verifying ${progMsg} — reading real HLS segments & MB...</span>`;
+            }
+          },
+          ep?.duration || 0
+        );
+
         if (data.ok && data.m3u8Url) {
-          const ep = activeSeason.episodes[epIdx];
           if (ep) {
-            ep.secondaryVideoUrl = rawUrl;
+            const primaryS2 = s2BoxMap['1080p'] || s2BoxMap['720p'] || s2BoxMap['480p'] || s2BoxMap['360p'] || rawUrl;
+            ep.secondaryVideoUrl = primaryS2;
+            ep.secondaryServerUrl = primaryS2;
+            ep.secondaryQualityLinks = Object.keys(data.qualityLinks || {}).length > 0 ? data.qualityLinks : s2BoxMap;
+            ep.secondaryServerQualityLinks = ep.secondaryQualityLinks;
             ep.secondaryDownloadQualities = data.downloadQualities || [];
+            if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0 && (!ep.audioTracks || ep.audioTracks.length === 0)) {
+              ep.audioTracks = data.audioTracks;
+              ep.availableLanguages = data.audioTracks;
+            }
             if (data.duration && data.duration > 0 && !ep.duration) {
               ep.duration = data.duration;
+              const mm = Math.floor(data.duration / 60);
+              const ss = (data.duration % 60).toString().padStart(2, '0');
+              const durInp = card.querySelector('.ep-input-dur');
+              if (durInp && !durInp.value) durInp.value = `${mm}:${ss}`;
             }
           }
-          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : '1080p, 720p';
-          const aLabels = (data.audioTracks && data.audioTracks.length > 0) ? data.audioTracks.join(', ') : 'Default Audio';
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
+
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0)
+            ? data.audioTracks.join(', ')
+            : (ep?.availableLanguages && ep.availableLanguages.length > 0 ? ep.availableLanguages.join(', ') : 'Shared Audio');
+
+          const epS2DlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 80px 125px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(245,158,11,0.2);">
+                <span style="font-weight:800; color:#FBBF24; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:3px;">
+                  <input type="number" class="input-control ep-s2-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${q.sizeMb}" style="height:26px; width:65px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeSecondaryDownloadSize(${epIdx}, ${idx}, this.value)">
+                  <span style="font-size:10px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:26px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '';
+
           if (statusEl) {
             statusEl.innerHTML = `
               <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:8px; padding:8px 10px; margin-top:6px;">
-                <div style="color:#FBBF24; font-weight:800; font-size:11px; display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-                  <i class="fa-solid fa-circle-check"></i> Server 2 (Filemoon / Byse) Verified & Ready
+                <div style="color:#FBBF24; font-weight:800; font-size:11px; display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:2px; flex-wrap:wrap;">
+                  <span><i class="fa-solid fa-circle-check"></i> Server 2 Verified (${data.verifiedCount}/${data.totalBoxes} Box(es))</span>
+                  <span style="font-size:9px; background:rgba(245,158,11,0.2); color:#FBBF24; padding:1px 6px; border-radius:99px;">${data.engine}</span>
                 </div>
                 <div style="font-size:10px; color:#ddd; margin-bottom:6px;">
                   <i class="fa-solid fa-sliders" style="color:#FBBF24;"></i> ${qLabels} • <i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> ${aLabels}
                 </div>
+                ${epS2DlRows ? `
+                  <div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(245,158,11,0.25);">
+                    <div style="font-size:10px; font-weight:800; color:#FBBF24; margin-bottom:4px;"><i class="fa-solid fa-download"></i> Server 2 Real Download Sizes</div>
+                    ${epS2DlRows}
+                  </div>
+                ` : ''}
                 <div style="padding-top:6px; border-top:1px solid rgba(245,158,11,0.25);">
                   <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('s2-ep-preview-box-${epIdx}', '${data.m3u8Url}')">
                     <i class="fa-solid fa-play"></i> Test Play S2 Stream
@@ -6472,7 +6785,7 @@
               </div>
             `;
           }
-          showToast(`Episode ${epIdx + 1} Server 2 (Filemoon) verified!`, 'success');
+          showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 2 link(s)!`, 'success');
         } else {
           if (statusEl) {
             statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Server 2 verification failed'}</span>`;
@@ -7421,13 +7734,24 @@
             delete ep.secondaryServerQualityLinks;
           }
 
-          // Preserve & sync episode download sizes if edited
+          // Preserve & sync episode download sizes if edited (Server 1 & Server 2)
           const sizeInputs = card.querySelectorAll('.ep-dl-size-input');
           if (sizeInputs.length > 0 && ep.downloadQualities) {
             sizeInputs.forEach(sInp => {
               const qId = sInp.getAttribute('data-quality');
               const sVal = parseInt(sInp.value, 10);
               const qItem = ep.downloadQualities.find(q => q.id === qId);
+              if (qItem && !isNaN(sVal) && sVal > 0) {
+                qItem.sizeMb = sVal;
+              }
+            });
+          }
+          const s2SizeInputs = card.querySelectorAll('.ep-s2-dl-size-input');
+          if (s2SizeInputs.length > 0 && ep.secondaryDownloadQualities) {
+            s2SizeInputs.forEach(sInp => {
+              const qId = sInp.getAttribute('data-quality');
+              const sVal = parseInt(sInp.value, 10);
+              const qItem = ep.secondaryDownloadQualities.find(q => q.id === qId);
               if (qItem && !isNaN(sVal) && sVal > 0) {
                 qItem.sizeMb = sVal;
               }

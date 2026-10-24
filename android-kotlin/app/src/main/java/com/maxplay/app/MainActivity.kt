@@ -47,7 +47,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         // Primary entry: HTTPS virtual origin mapped to assets/webapp/ inside APK (avoids file:// ES module & path block!)
         const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"
+        const val LOCAL_ADMIN_BUNDLE_URL = "https://appassets.androidplatform.net/admin.html"
         const val LIVE_APP_URL = "https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app"
+        const val LIVE_ADMIN_URL = "https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app/admin.html"
         const val FIRESTORE_MESSAGES_REST_URL =
             "https://firestore.googleapis.com/v1/projects/gen-lang-client-0291911037/databases/ai-studio-maxplay-e5163e97-7cd5-4a42-875c-8b5dce9fd72d/documents/messages?pageSize=60"
     }
@@ -87,17 +89,28 @@ class MainActivity : AppCompatActivity() {
 
         configureCorsFreeWebView()
 
+        val isAdminApp = packageName.endsWith(".admin", ignoreCase = true)
+
         // Load bundled webapp assets over HTTPS virtual origin if present in APK, otherwise load live MaxPlay URL
+        val targetAssetFile = if (isAdminApp) "admin.html" else "index.html"
         val hasLocalBundle = try {
-            assets.list("webapp")?.contains("index.html") == true
+            assets.list("webapp")?.contains(targetAssetFile) == true
         } catch (_: Exception) {
             false
         }
 
-        if (hasLocalBundle) {
-            webView.loadUrl(LOCAL_BUNDLE_URL)
+        if (isAdminApp) {
+            if (hasLocalBundle) {
+                webView.loadUrl(LOCAL_ADMIN_BUNDLE_URL)
+            } else {
+                webView.loadUrl(LIVE_ADMIN_URL)
+            }
         } else {
-            webView.loadUrl(LIVE_APP_URL)
+            if (hasLocalBundle) {
+                webView.loadUrl(LOCAL_BUNDLE_URL)
+            } else {
+                webView.loadUrl(LIVE_APP_URL)
+            }
         }
 
         // Create notification channel & request notification + microphone permissions upfront
@@ -105,7 +118,9 @@ class MainActivity : AppCompatActivity() {
         requestStartupPermissions()
 
         // Start native background poller for Firestore Admin messages so notifications arrive even when minimized
-        startBackgroundAnnouncementMonitor()
+        if (!isAdminApp) {
+            startBackgroundAnnouncementMonitor()
+        }
 
         // Check if launched from tapping a status-bar notification
         handleNotificationIntent(intent)

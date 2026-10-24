@@ -357,68 +357,97 @@ export class ClientHlsDownloader {
         }
       }
 
-      // 3. Accurate Duration calculation (if Master playlist has no #EXTINF, probe first variant sub-playlist)
-      let detectedDuration =
-        requestedDurationSec > 0 && requestedDurationSec !== 1440 ? requestedDurationSec : 0;
-      if (text.includes('#EXTINF:')) {
-        let segSum = 0;
-        const extinfRegex = /#EXTINF:([\d.]+)/g;
-        let eMatch: RegExpExecArray | null;
-        while ((eMatch = extinfRegex.exec(text)) !== null) {
-          segSum += parseFloat(eMatch[1]) || 0;
-        }
-        if (segSum > 5) {
-          detectedDuration = Math.round(segSum);
-        }
-      } else if (qualities.length > 0) {
-        const firstVariantUrl = qualityLinks[qualities[0]];
-        if (firstVariantUrl && firstVariantUrl !== rawMasterUrl) {
-          try {
-            const subCtrl = new AbortController();
-            const subTimer = setTimeout(() => subCtrl.abort(), 5000);
-            const subRes = await fetch(wrapProxyUrl(firstVariantUrl), { signal: subCtrl.signal });
-            clearTimeout(subTimer);
-            if (subRes.ok) {
-              const subText = await subRes.text();
-              if (subText && subText.includes('#EXTINF:')) {
-                let segSum = 0;
-                const extinfRegex = /#EXTINF:([\d.]+)/g;
-                let eMatch: RegExpExecArray | null;
-                while ((eMatch = extinfRegex.exec(subText)) !== null) {
-                  segSum += parseFloat(eMatch[1]) || 0;
-                }
-                if (segSum > 5) {
-                  detectedDuration = Math.round(segSum);
-                }
+      // 3. Accurate Duration & Real Segment Size calculation
+      const measureMediaPlaylistRealSize = async (
+        mediaUrl: string,
+        mediaText: string,
+        knownBw: number,
+        fallbackDurSec: number
+      ): Promise<{ durationSec: number; sizeMb: number }> => {
+        const mLines = mediaText.split(/\r?\n/).map((l) => l.trim());
+        let segDurSum = 0;
+        let byteRangeSum = 0;
+        const segUrls: string[] = [];
+
+        for (let idx = 0; idx < mLines.length; idx++) {
+          const l = mLines[idx];
+          if (l.startsWith('#EXTINF:')) {
+            const dMatch = l.match(/#EXTINF:([\d.]+)/);
+            if (dMatch) segDurSum += parseFloat(dMatch[1]) || 0;
+            for (let k = idx + 1; k < mLines.length; k++) {
+              const cand = mLines[k];
+              if (!cand) continue;
+              if (cand.startsWith('#EXT-X-BYTERANGE:')) {
+                const br = cand.match(/#EXT-X-BYTERANGE:(\d+)/i);
+                if (br) byteRangeSum += parseInt(br[1], 10) || 0;
+                continue;
+              }
+              if (!cand.startsWith('#')) {
+                segUrls.push(resolveRelativeUrl(mediaUrl, cand));
+                break;
               }
             }
-          } catch {}
+          }
         }
-      }
 
-      const finalDuration =
-        detectedDuration > 0
-          ? detectedDuration > 300
-            ? detectedDuration
-            : detectedDuration * 60
-          : requestedDurationSec > 0
+        const durSec =
+          segDurSum > 5
+            ? Math.round(segDurSum)
+            : fallbackDurSec > 0
+            ? fallbackDurSec > 300
+              ? fallbackDurSec
+              : fallbackDurSec * 60
+            : 0;
+
+        if (byteRangeSum > 1024 * 100) {
+          return { durationSec: durSec, sizeMb: Math.max(1, Math.round(byteRangeSum / (1024 * 1024))) };
+        }
+        if (knownBw > 0 && durSec > 0) {
+          return {
+            durationSec: durSec,
+            sizeMb: Math.max(1, Math.round(((knownBw * durSec) / 8) / (1024 * 1024))),
+          };
+        }
+        if (segUrls.length > 0) {
+          const totalSegs = segUrls.length;
+          const indices = Array.from(
+            new Set([0, Math.floor(totalSegs / 2), Math.max(0, totalSegs - 2)])
+          );
+          const sampledSizes = await Promise.all(
+            indices.map(async (sIdx) => {
+              try {
+                const sCtrl = new AbortController();
+                const sTimer = setTimeout(() => sCtrl.abort(), 3500);
+                const sRes = await fetch(wrapProxyUrl(segUrls[sIdx], inferredReferer), {
+                  method: 'HEAD',
+                  signal: sCtrl.signal,
+                });
+                clearTimeout(sTimer);
+                const cl = parseInt(sRes.headers.get('content-length') || '0', 10);
+                return cl > 1024 ? cl : 0;
+              } catch {
+                return 0;
+              }
+            })
+          );
+          const validSamples = sampledSizes.filter((b) => b > 1024);
+          if (validSamples.length > 0) {
+            const avgBytes = validSamples.reduce((a, b) => a + b, 0) / validSamples.length;
+            return {
+              durationSec: durSec,
+              sizeMb: Math.max(1, Math.round((avgBytes * totalSegs) / (1024 * 1024))),
+            };
+          }
+        }
+        return { durationSec: durSec, sizeMb: 0 };
+      };
+
+      let finalDuration =
+        requestedDurationSec > 0 && requestedDurationSec !== 1440
           ? requestedDurationSec > 300
             ? requestedDurationSec
             : requestedDurationSec * 60
-          : 1440;
-
-      if (qualities.length === 0) {
-        qualities.push('1080p', '720p');
-        qualityLinks['1080p'] = rawMasterUrl;
-        qualityLinks['720p'] = rawMasterUrl;
-      }
-
-      // Deterministic URL fingerprint so streams without BANDWIDTH tags don't collide on identical MB
-      let urlHash = 0;
-      for (let i = 0; i < rawMasterUrl.length; i++) {
-        urlHash = (urlHash * 31 + rawMasterUrl.charCodeAt(i)) & 0x7fffffff;
-      }
-      const bitrateVarianceFactor = 0.94 + ((urlHash % 13) * 0.01);
+          : 0;
 
       const downloadQualities: {
         id: string;
@@ -428,28 +457,84 @@ export class ClientHlsDownloader {
         bandwidth: number;
       }[] = [];
 
-      for (const q of qualities) {
-        const url = qualityLinks[q] || rawMasterUrl;
-        const defaultBps = Math.round(
-          (q.includes('1080')
-            ? 2400000
-            : q.includes('720')
-            ? 1200000
-            : q.includes('480')
-            ? 650000
-            : 360000) * bitrateVarianceFactor
-        );
-        const actualBps = bandwidthsByQuality[q] || defaultBps;
-        const estBytes = (actualBps * finalDuration) / 8;
-        const sizeMb = Math.max(15, Math.round(estBytes / (1024 * 1024)));
+      // Case A: Single-quality media playlist (contains #EXTINF directly)
+      if (qualities.length === 0 && text.includes('#EXTINF:')) {
+        const inferredQ = rawMasterUrl.includes('1080')
+          ? '1080p'
+          : rawMasterUrl.includes('480')
+          ? '480p'
+          : rawMasterUrl.includes('360')
+          ? '360p'
+          : '720p';
+        const measured = await measureMediaPlaylistRealSize(rawMasterUrl, text, 0, finalDuration);
+        if (measured.durationSec > 0) finalDuration = measured.durationSec;
+        if (measured.sizeMb > 0) {
+          qualities.push(inferredQ);
+          qualityLinks[inferredQ] = rawMasterUrl;
+          downloadQualities.push({
+            id: inferredQ,
+            label: `${inferredQ} ${inferredQ.includes('1080') ? 'Full HD' : inferredQ.includes('720') ? 'HD' : 'Standard'}`,
+            sizeMb: measured.sizeMb,
+            url: rawMasterUrl,
+            bandwidth: finalDuration > 0 ? Math.round((measured.sizeMb * 1024 * 1024 * 8) / finalDuration) : 0,
+          });
+        }
+      } else if (qualities.length > 0) {
+        // Case B: Master playlist with #EXT-X-STREAM-INF variants
+        const firstVariantUrl = qualityLinks[qualities[0]];
+        if (firstVariantUrl && firstVariantUrl !== rawMasterUrl) {
+          try {
+            const subCtrl = new AbortController();
+            const subTimer = setTimeout(() => subCtrl.abort(), 5000);
+            const subRes = await fetch(wrapProxyUrl(firstVariantUrl, inferredReferer), { signal: subCtrl.signal });
+            clearTimeout(subTimer);
+            if (subRes.ok) {
+              const subText = await subRes.text();
+              if (subText && subText.includes('#EXTINF:')) {
+                const firstBw = bandwidthsByQuality[qualities[0]] || 0;
+                const measured = await measureMediaPlaylistRealSize(firstVariantUrl, subText, firstBw, finalDuration);
+                if (measured.durationSec > 0) finalDuration = measured.durationSec;
+                if (measured.sizeMb > 0 && !bandwidthsByQuality[qualities[0]] && finalDuration > 0) {
+                  bandwidthsByQuality[qualities[0]] = Math.round((measured.sizeMb * 1024 * 1024 * 8) / finalDuration);
+                }
+              }
+            }
+          } catch {}
+        }
 
-        downloadQualities.push({
-          id: q,
-          label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : 'Standard'}`,
-          sizeMb,
-          url,
-          bandwidth: actualBps,
-        });
+        for (const q of qualities) {
+          const url = qualityLinks[q] || rawMasterUrl;
+          const actualBps = bandwidthsByQuality[q] || 0;
+          let sizeMb = 0;
+          if (actualBps > 0 && finalDuration > 0) {
+            sizeMb = Math.max(1, Math.round(((actualBps * finalDuration) / 8) / (1024 * 1024)));
+          } else if (url !== rawMasterUrl) {
+            try {
+              const vCtrl = new AbortController();
+              const vTimer = setTimeout(() => vCtrl.abort(), 4500);
+              const vRes = await fetch(wrapProxyUrl(url, inferredReferer), { signal: vCtrl.signal });
+              clearTimeout(vTimer);
+              if (vRes.ok) {
+                const vText = await vRes.text();
+                if (vText && vText.includes('#EXTINF:')) {
+                  const vMeasured = await measureMediaPlaylistRealSize(url, vText, 0, finalDuration);
+                  if (vMeasured.durationSec > 0 && !finalDuration) finalDuration = vMeasured.durationSec;
+                  sizeMb = vMeasured.sizeMb;
+                }
+              }
+            } catch {}
+          }
+
+          if (sizeMb > 0) {
+            downloadQualities.push({
+              id: q,
+              label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : 'Standard'}`,
+              sizeMb,
+              url,
+              bandwidth: actualBps || (finalDuration > 0 ? Math.round((sizeMb * 1024 * 1024 * 8) / finalDuration) : 0),
+            });
+          }
+        }
       }
 
       qualities.sort((a, b) => parseInt(b) - parseInt(a));

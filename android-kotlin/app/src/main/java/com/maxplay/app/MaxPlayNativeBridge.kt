@@ -131,6 +131,427 @@ class MaxPlayNativeBridge(
         }
     }
 
+    /**
+     * Native Admin Stream Box Verifier (`probeSingleStreamBoxAsync`):
+     * Scrapes a single quality box URL (Server 1 Upnshare / VOE / Server 2 Filemoon / Byse / direct .m3u8),
+     * falls back to Stage 2 Headless WebView Sniffer if needed, parses the HLS Master & Media playlist,
+     * extracts real #EXT-X-MEDIA:TYPE=AUDIO languages, sums exact #EXTINF segment durations,
+     * and computes 100% REAL MB size by sampling actual segment Content-Length / Content-Range or BANDWIDTH.
+     */
+    @JavascriptInterface
+    fun probeSingleStreamBoxAsync(sourceUrl: String, forcedQuality: String?, callbackId: String) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val cleanSource = sourceUrl.trim()
+            val qualityHint = (forcedQuality ?: "").trim()
+
+            fun finishWithResult(resObj: JSONObject) {
+                val escapedJson = JSONObject.quote(resObj.toString())
+                val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+                activity.runOnUiThread {
+                    try {
+                        webView.evaluateJavascript(jsCode, null)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            if (cleanSource.isEmpty()) {
+                finishWithResult(JSONObject().apply {
+                    put("ok", false)
+                    put("error", "Empty stream URL")
+                })
+                return@execute
+            }
+
+            try {
+                // Step 1: Try fast OkHttp Stage 1 Scraper
+                val stage1 = scraper.scrapeStreamSync(cleanSource, emptyMap())
+                if (stage1.optBoolean("ok") && stage1.optString("m3u8Url").isNotEmpty()) {
+                    val m3u8Url = stage1.optString("m3u8Url")
+                    val ref = stage1.optJSONObject("headers")?.optString("Referer") ?: ""
+                    if (ref.isNotEmpty()) {
+                        CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                    }
+                    val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
+                    finishWithResult(enriched)
+                    return@execute
+                }
+
+                // Step 2: Fallback to Offscreen Headless WebView Sniffer (for JS-packed Filemoon/Byse/Upnshare pages)
+                scraper.sniffStreamWithHeadlessWebView(cleanSource, 14000L) { stage2 ->
+                    InbuiltStreamScraper.backgroundExecutor.execute {
+                        try {
+                            if (stage2.optBoolean("ok") && stage2.optString("m3u8Url").isNotEmpty()) {
+                                val m3u8Url = stage2.optString("m3u8Url")
+                                val ref = stage2.optJSONObject("headers")?.optString("Referer") ?: cleanSource
+                                CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                                val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
+                                finishWithResult(enriched)
+                            } else {
+                                finishWithResult(JSONObject().apply {
+                                    put("ok", false)
+                                    put("error", stage2.optString("error", stage1.optString("error", "Could not extract .m3u8 stream")))
+                                })
+                            }
+                        } catch (e: Exception) {
+                            finishWithResult(JSONObject().apply {
+                                put("ok", false)
+                                put("error", e.message ?: "Stream verification failed")
+                            })
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                finishWithResult(JSONObject().apply {
+                    put("ok", false)
+                    put("error", e.message ?: "Native stream probe error")
+                })
+            }
+        }
+    }
+
+    private fun resolveRelativeHlsUrl(baseUrl: String, rel: String): String {
+        val cleanRel = rel.trim()
+        if (cleanRel.startsWith("http://", ignoreCase = true) || cleanRel.startsWith("https://", ignoreCase = true)) {
+            return cleanRel
+        }
+        return try {
+            java.net.URL(java.net.URL(baseUrl), cleanRel).toString()
+        } catch (_: Exception) {
+            cleanRel
+        }
+    }
+
+    private fun normalizeHlsLanguage(rawName: String, rawLang: String): String {
+        val combined = "$rawLang $rawName".lowercase().trim()
+        if (combined.isEmpty()) return ""
+        if (combined.contains("hin") || Regex("\\bhi\\b").containsMatchIn(combined)) return "Hindi"
+        if (combined.contains("eng") || Regex("\\ben\\b").containsMatchIn(combined)) return "English"
+        if (combined.contains("jpn") || combined.contains("jap") || Regex("\\bja\\b").containsMatchIn(combined)) return "Japanese"
+        if (combined.contains("tam") || Regex("\\bta\\b").containsMatchIn(combined)) return "Tamil"
+        if (combined.contains("tel") || Regex("\\bte\\b").containsMatchIn(combined)) return "Telugu"
+        if (combined.contains("mal") || Regex("\\bml\\b").containsMatchIn(combined)) return "Malayalam"
+        if (combined.contains("kan") || Regex("\\bkn\\b").containsMatchIn(combined)) return "Kannada"
+        if (combined.contains("kor") || Regex("\\bko\\b").containsMatchIn(combined)) return "Korean"
+        if (combined.contains("spa") || Regex("\\bes\\b").containsMatchIn(combined)) return "Spanish"
+        if (combined.contains("fre") || combined.contains("fra") || Regex("\\bfr\\b").containsMatchIn(combined)) return "French"
+        if (combined.contains("rus") || Regex("\\bru\\b").containsMatchIn(combined)) return "Russian"
+        if (combined.contains("ind") || Regex("\\bid\\b").containsMatchIn(combined)) return "Indonesian"
+        if (combined.contains("ara") || Regex("\\bar\\b").containsMatchIn(combined)) return "Arabic"
+        if (combined.contains("por") || Regex("\\bpt\\b").containsMatchIn(combined)) return "Portuguese"
+        if (combined.contains("ger") || combined.contains("deu") || Regex("\\bde\\b").containsMatchIn(combined)) return "German"
+        if (combined.contains("ita") || Regex("\\bit\\b").containsMatchIn(combined)) return "Italian"
+        return rawName.ifBlank { rawLang }.trim()
+    }
+
+    private fun classifyHlsQuality(width: Int, height: Int, bandwidth: Long): String {
+        if (height >= 1400 || width >= 2500) return "1440p"
+        if (height >= 900 || width >= 1800) return "1080p"
+        if (height >= 580 || width >= 1200) return "720p"
+        if (height >= 400 || width >= 800) return "480p"
+        if (height > 0 || width > 0) return "360p"
+        if (bandwidth >= 2000000L) return "1080p"
+        if (bandwidth >= 950000L) return "720p"
+        if (bandwidth >= 500000L) return "480p"
+        return "360p"
+    }
+
+    private fun fetchHlsTextSync(url: String, referer: String): String {
+        val host = try { java.net.URL(url).host } catch (_: Exception) { "" }
+        val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+            .header("Accept", "*/*")
+            .header("Referer", effRef)
+            .build()
+        InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return ""
+            return resp.body?.string() ?: ""
+        }
+    }
+
+    private fun probeSingleSegmentByteSize(segUrl: String, referer: String): Long {
+        val host = try { java.net.URL(segUrl).host } catch (_: Exception) { "" }
+        val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
+        try {
+            // Try fast HEAD request first
+            val headReq = Request.Builder()
+                .url(segUrl)
+                .head()
+                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("Referer", effRef)
+                .build()
+            InbuiltStreamScraper.okHttpClient.newCall(headReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                    if (cl > 500L) return cl
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            // Fallback: Range bytes=0-0 to inspect Content-Range: bytes 0-0/TOTAL_BYTES
+            val rangeReq = Request.Builder()
+                .url(segUrl)
+                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("Referer", effRef)
+                .header("Range", "bytes=0-0")
+                .build()
+            InbuiltStreamScraper.okHttpClient.newCall(rangeReq).execute().use { resp ->
+                val cr = resp.header("Content-Range") ?: ""
+                val slashIdx = cr.lastIndexOf('/')
+                if (slashIdx != -1) {
+                    val total = cr.substring(slashIdx + 1).trim().toLongOrNull() ?: -1L
+                    if (total > 500L) return total
+                }
+                val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                if (cl > 500L) return cl
+            }
+        } catch (_: Exception) {}
+        return 0L
+    }
+
+    private fun measureMediaPlaylistSizeAndDuration(
+        mediaPlaylistUrl: String,
+        mediaText: String,
+        referer: String,
+        fallbackBandwidth: Long
+    ): Pair<Int, Int> {
+        val lines = mediaText.lines().map { it.trim() }
+        var totalDurSec = 0.0
+        var totalByteRangeBytes = 0L
+        val segments = mutableListOf<Pair<String, Double>>()
+        var pendingDur = 0.0
+
+        val extinfRegex = Regex("#EXTINF:([\\d.]+)")
+        val byterangeRegex = Regex("#EXT-X-BYTERANGE:(\\d+)")
+
+        for (line in lines) {
+            if (line.isEmpty()) continue
+            if (line.startsWith("#EXTINF:")) {
+                val m = extinfRegex.find(line)
+                val d = m?.groupValues?.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+                totalDurSec += d
+                pendingDur = d
+                continue
+            }
+            if (line.startsWith("#EXT-X-BYTERANGE:")) {
+                val bm = byterangeRegex.find(line)
+                val bLen = bm?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+                totalByteRangeBytes += bLen
+                continue
+            }
+            if (line.startsWith("#")) continue
+            val segUrl = resolveRelativeHlsUrl(mediaPlaylistUrl, line)
+            segments.add(Pair(segUrl, if (pendingDur > 0.0) pendingDur else 4.0))
+            pendingDur = 0.0
+        }
+
+        val finalDuration = if (totalDurSec > 1.0) Math.round(totalDurSec).toInt() else (segments.size * 4)
+
+        // 1. If playlist uses exact #EXT-X-BYTERANGE tags, sum is 100% exact!
+        if (totalByteRangeBytes > 1024 * 1024) {
+            val mb = Math.max(1, Math.round(totalByteRangeBytes.toDouble() / (1024.0 * 1024.0)).toInt())
+            return Pair(finalDuration, mb)
+        }
+
+        // 2. If fallbackBandwidth is known from #EXT-X-STREAM-INF, compute from real stream bandwidth + duration
+        if (fallbackBandwidth > 50000L && finalDuration > 0) {
+            val bytes = (fallbackBandwidth.toDouble() * finalDuration.toDouble()) / 8.0
+            val mb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt())
+            return Pair(finalDuration, mb)
+        }
+
+        // 3. Otherwise sample up to 3 real segments (20%, 50%, 80%) via HEAD / Range to measure real bytes/sec
+        if (segments.isNotEmpty() && finalDuration > 0) {
+            val sampleIndices = listOf(
+                (segments.size * 0.2).toInt().coerceIn(0, segments.size - 1),
+                (segments.size * 0.5).toInt().coerceIn(0, segments.size - 1),
+                (segments.size * 0.8).toInt().coerceIn(0, segments.size - 1)
+            ).distinct()
+
+            var sampledBytes = 0L
+            var sampledDur = 0.0
+            for (idx in sampleIndices) {
+                val (sUrl, sDur) = segments[idx]
+                val b = probeSingleSegmentByteSize(sUrl, referer)
+                if (b > 0L && sDur > 0.0) {
+                    sampledBytes += b
+                    sampledDur += sDur
+                }
+            }
+            if (sampledBytes > 0L && sampledDur > 0.0) {
+                val bytesPerSec = sampledBytes.toDouble() / sampledDur
+                val totalEstBytes = bytesPerSec * finalDuration.toDouble()
+                val mb = Math.max(1, Math.round(totalEstBytes / (1024.0 * 1024.0)).toInt())
+                return Pair(finalDuration, mb)
+            }
+        }
+
+        return Pair(finalDuration, 0)
+    }
+
+    private fun probeHlsPlaylistDetailsSync(
+        sourceUrl: String,
+        m3u8Url: String,
+        referer: String,
+        forcedQuality: String
+    ): JSONObject {
+        val out = JSONObject()
+        val masterText = fetchHlsTextSync(m3u8Url, referer)
+        if (masterText.isBlank() || !masterText.contains("#EXTM3U")) {
+            out.put("ok", false)
+            out.put("error", "Fetched stream was not a valid #EXTM3U playlist")
+            return out
+        }
+
+        val lines = masterText.lines().map { it.trim() }
+        val audioTracks = mutableListOf<String>()
+        var audioPlaylistsFirstUrl = ""
+
+        // 1. Extract #EXT-X-MEDIA:TYPE=AUDIO languages
+        for (line in lines) {
+            if (line.startsWith("#EXT-X-MEDIA:") && line.contains("TYPE=AUDIO")) {
+                val nameMatch = Regex("NAME=\"([^\"]+)\"|NAME=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
+                val langMatch = Regex("LANGUAGE=\"([^\"]+)\"|LANGUAGE=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
+                val uriMatch = Regex("URI=\"([^\"]+)\"|URI=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
+                val rawName = (nameMatch?.groupValues?.getOrNull(1)?.ifEmpty { nameMatch.groupValues.getOrNull(2) } ?: "").trim()
+                val rawLang = (langMatch?.groupValues?.getOrNull(1)?.ifEmpty { langMatch.groupValues.getOrNull(2) } ?: "").trim()
+                val rawUri = (uriMatch?.groupValues?.getOrNull(1)?.ifEmpty { uriMatch.groupValues.getOrNull(2) } ?: "").trim()
+                if (rawUri.isNotEmpty() && audioPlaylistsFirstUrl.isEmpty()) {
+                    audioPlaylistsFirstUrl = resolveRelativeHlsUrl(m3u8Url, rawUri)
+                }
+                val friendly = normalizeHlsLanguage(rawName, rawLang)
+                if (friendly.isNotEmpty() && !audioTracks.contains(friendly)) {
+                    audioTracks.add(friendly)
+                }
+            }
+        }
+
+        data class VariantInfo(val quality: String, val url: String, val bandwidth: Long)
+        val variants = mutableListOf<VariantInfo>()
+
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                val resMatch = Regex("RESOLUTION=(\\d+)x(\\d+)", RegexOption.IGNORE_CASE).find(line)
+                val width = resMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                val height = resMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+                val avgBwMatch = Regex("AVERAGE-BANDWIDTH=(\\d+)", RegexOption.IGNORE_CASE).find(line)
+                val bwMatch = Regex("BANDWIDTH=(\\d+)", RegexOption.IGNORE_CASE).find(line)
+                val bw = avgBwMatch?.groupValues?.getOrNull(1)?.toLongOrNull()
+                    ?: bwMatch?.groupValues?.getOrNull(1)?.toLongOrNull()
+                    ?: 0L
+
+                var nextUri = ""
+                for (j in (i + 1) until lines.size) {
+                    if (lines[j].isNotEmpty() && !lines[j].startsWith("#")) {
+                        nextUri = lines[j]
+                        break
+                    }
+                }
+                if (nextUri.isNotEmpty()) {
+                    val vUrl = resolveRelativeHlsUrl(m3u8Url, nextUri)
+                    val qLabel = classifyHlsQuality(width, height, bw)
+                    if (variants.none { it.quality.equals(qLabel, ignoreCase = true) }) {
+                        variants.add(VariantInfo(qLabel, vUrl, bw))
+                    }
+                }
+            }
+        }
+
+        // Measure audio rendition overhead if separate audio tracks exist (typically ~128kbps -> ~1MB per min)
+        var separateAudioMb = 0
+        var detectedDuration = 0
+        val downloadQualitiesArr = org.json.JSONArray()
+        val qualitiesArr = org.json.JSONArray()
+        val qualityLinksObj = JSONObject()
+
+        if (masterText.contains("#EXTINF:")) {
+            // Direct single-quality media playlist
+            val qLabel = forcedQuality.ifBlank { "1080p" }
+            val (dur, sizeMb) = measureMediaPlaylistSizeAndDuration(m3u8Url, masterText, referer, 0L)
+            detectedDuration = dur
+            qualitiesArr.put(qLabel)
+            qualityLinksObj.put(qLabel, sourceUrl)
+            downloadQualitiesArr.put(JSONObject().apply {
+                put("id", qLabel)
+                put("label", "$qLabel ${if (qLabel.contains("1080")) "Full HD" else if (qLabel.contains("720")) "HD" else "Standard"}")
+                put("sizeMb", sizeMb)
+                put("url", sourceUrl)
+                put("resolvedM3u8Url", m3u8Url)
+                put("bandwidth", if (dur > 0 && sizeMb > 0) ((sizeMb.toLong() * 8L * 1024L * 1024L) / dur.toLong()) else 0L)
+            })
+        } else if (variants.isNotEmpty()) {
+            // If forcedQuality was specified (e.g., Admin put a separate link in the 360p box) and there is only 1 variant in this master playlist,
+            // tag it with forcedQuality so the 360p box records its exact 360p size!
+            val effectiveVariants = if (forcedQuality.isNotBlank() && variants.size == 1) {
+                listOf(VariantInfo(forcedQuality, variants[0].url, variants[0].bandwidth))
+            } else {
+                variants
+            }
+
+            // Probe first variant's media playlist to get exact duration (and segment sizes if bandwidth wasn't in master)
+            val firstVar = effectiveVariants[0]
+            val firstSubText = fetchHlsTextSync(firstVar.url, referer)
+            val (firstDur, firstMeasuredMb) = if (firstSubText.contains("#EXTINF:")) {
+                measureMediaPlaylistSizeAndDuration(firstVar.url, firstSubText, referer, firstVar.bandwidth)
+            } else {
+                Pair(0, 0)
+            }
+            detectedDuration = firstDur
+
+            if (audioPlaylistsFirstUrl.isNotEmpty() && detectedDuration > 0) {
+                // Separate audio track typically ~128 kbps
+                separateAudioMb = Math.max(2, Math.round((128000.0 * detectedDuration.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
+            }
+
+            for ((idx, v) in effectiveVariants.withIndex()) {
+                var vSizeMb = 0
+                if (idx == 0 && firstMeasuredMb > 0) {
+                    vSizeMb = firstMeasuredMb + separateAudioMb
+                } else if (v.bandwidth > 50000L && detectedDuration > 0) {
+                    val bytes = (v.bandwidth.toDouble() * detectedDuration.toDouble()) / 8.0
+                    vSizeMb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt()) + separateAudioMb
+                } else {
+                    val subTxt = fetchHlsTextSync(v.url, referer)
+                    if (subTxt.contains("#EXTINF:")) {
+                        val (d, m) = measureMediaPlaylistSizeAndDuration(v.url, subTxt, referer, v.bandwidth)
+                        if (detectedDuration == 0 && d > 0) detectedDuration = d
+                        if (m > 0) vSizeMb = m + separateAudioMb
+                    }
+                }
+
+                // If Admin put this link in a specific quality box (e.g. 720p), store sourceUrl for that quality
+                val assignedUrl = if (effectiveVariants.size == 1) sourceUrl else v.url
+                qualitiesArr.put(v.quality)
+                qualityLinksObj.put(v.quality, assignedUrl)
+                downloadQualitiesArr.put(JSONObject().apply {
+                    put("id", v.quality)
+                    put("label", "${v.quality} ${if (v.quality.contains("1080")) "Full HD" else if (v.quality.contains("720")) "HD" else "Standard"}")
+                    put("sizeMb", vSizeMb)
+                    put("url", assignedUrl)
+                    put("resolvedM3u8Url", v.url)
+                    put("bandwidth", v.bandwidth)
+                })
+            }
+        }
+
+        val audioArr = org.json.JSONArray()
+        for (a in audioTracks) audioArr.put(a)
+
+        out.put("ok", true)
+        out.put("sourceUrl", sourceUrl)
+        out.put("m3u8Url", m3u8Url)
+        out.put("referer", referer)
+        out.put("duration", detectedDuration)
+        out.put("audioTracks", audioArr)
+        out.put("qualities", qualitiesArr)
+        out.put("qualityLinks", qualityLinksObj)
+        out.put("downloadQualities", downloadQualitiesArr)
+        return out
+    }
+
     @JavascriptInterface
     fun fetchBytesBase64CorsFree(targetUrl: String, headersJson: String?): String {
         return try {
