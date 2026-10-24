@@ -45,23 +45,25 @@ jobs:
         working-directory: ./android-kotlin
         run: |
           rm -f app/release.keystore
+          rm -rf dist-apks
+          mkdir -p dist-apks
           keytool -genkeypair -v -keystore app/release.keystore -alias maxplay -keyalg RSA -keysize 2048 -validity 10000 -storepass maxplay123 -keypass maxplay123 -dname "CN=MaxPlay, OU=App, O=MaxPlay, L=Mumbai, S=MH, C=IN"
           gradle assembleRelease --no-daemon
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/MaxPlay.apk
+          cp app/build/outputs/apk/release/app-release.apk dist-apks/MaxPlay.apk
           gradle assembleRelease -PadminApp=true --no-daemon
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/MaxPlay-Admin.apk
+          cp app/build/outputs/apk/release/app-release.apk dist-apks/MaxPlay-Admin.apk
+          ls -lh dist-apks/
 
       - name: Upload Ready-to-Install MaxPlay APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MaxPlay-Android-Kotlin-APK
-          path: android-kotlin/app/build/outputs/apk/release/MaxPlay.apk
+          path: android-kotlin/dist-apks/MaxPlay.apk
+          if-no-files-found: error
 
       - name: Upload Ready-to-Install MaxPlay Admin APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MaxPlay-Admin-Kotlin-APK
-          path: android-kotlin/app/build/outputs/apk/release/MaxPlay-Admin.apk
-
-
-
+          path: android-kotlin/dist-apks/MaxPlay-Admin.apk
+          if-no-files-found: error

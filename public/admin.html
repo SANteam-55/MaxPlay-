@@ -1074,8 +1074,23 @@
         padding: 12px 10px 80px 10px;
       }
       .top-header {
-        padding: 0 12px;
-        height: 58px;
+        padding: 8px 12px;
+        height: auto !important;
+        min-height: 58px;
+        gap: 8px;
+      }
+      .top-header #current-page-title {
+        font-size: 15px !important;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 165px;
+      }
+      .top-header .btn-secondary,
+      .top-header .btn-primary {
+        height: 34px !important;
+        padding: 0 10px !important;
+        font-size: 11px !important;
       }
       .stats-grid, .stat-grid {
         grid-template-columns: 1fr;
@@ -6011,20 +6026,33 @@
     // =========================================================================
     // NATIVE KOTLIN + WEB HYBRID MULTI-BOX STREAM VERIFIER (Server 1 & Server 2)
     // =========================================================================
+    window.__maxPlayNativeCallbacks = window.__maxPlayNativeCallbacks || {};
+    window.onMaxPlaySnifferResult = function(callbackId, resultJsonStr) {
+      const cb = window.__maxPlayNativeCallbacks && window.__maxPlayNativeCallbacks[callbackId];
+      if (typeof cb === 'function') {
+        delete window.__maxPlayNativeCallbacks[callbackId];
+        let parsed = resultJsonStr;
+        try {
+          if (typeof resultJsonStr === 'string') parsed = JSON.parse(resultJsonStr);
+        } catch (e) {}
+        cb(parsed);
+      }
+    };
+
     window.__handleMaxPlayHardwareBack = function() {
       const sidebar = document.getElementById('sidebar');
       if (sidebar && sidebar.classList.contains('open')) {
         window.toggleMobileSidebar();
-        return true;
+        return 'HANDLED';
       }
       const openModals = document.querySelectorAll('.modal-overlay[style*="display: flex"], .modal-overlay[style*="display:flex"], .modal-overlay.active');
       if (openModals.length > 0) {
         const lastModal = openModals[openModals.length - 1];
         lastModal.style.display = 'none';
         lastModal.classList.remove('active');
-        return true;
+        return 'HANDLED';
       }
-      return false;
+      return 'UNHANDLED';
     };
 
     window.probeSingleQualityBoxSmart = async function(rawUrl, forcedQuality, requestedDurationSec) {
@@ -6041,11 +6069,13 @@
                 delete window.__maxPlayNativeCallbacks[cbId];
               }
               resolve({ ok: false, error: 'Native bridge probe timeout' });
-            }, 38000);
+            }, 34000);
             window.__maxPlayNativeCallbacks = window.__maxPlayNativeCallbacks || {};
             window.__maxPlayNativeCallbacks[cbId] = function(res) {
               clearTimeout(timeout);
-              resolve(res || { ok: false, error: 'Empty native response' });
+              let obj = res;
+              try { if (typeof res === 'string') obj = JSON.parse(res); } catch (e) {}
+              resolve(obj || { ok: false, error: 'Empty native response' });
             };
             window.MaxPlayNative.probeSingleStreamBoxAsync(cleanUrl, forcedQuality || '', cbId);
           });
@@ -6067,43 +6097,69 @@
               remainingSeconds: 10200
             };
           }
+          // If Native bridge returned an explicit error, surface it instead of hitting local static appassets HTML!
+          if (window.location.hostname === 'appassets.androidplatform.net' && nativeData && nativeData.error) {
+            console.warn('[AdminNativeVerify] Native probe returned error, trying cloud fallback:', nativeData.error);
+          }
         } catch (nativeErr) {
-          console.warn('[AdminNativeVerify] Native probe fallback to web API:', nativeErr);
+          console.warn('[AdminNativeVerify] Native probe exception:', nativeErr);
         }
       }
 
-      // 2. Web / Server Extractor API Fallback
-      const resp = await fetch('/api/extract-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: cleanUrl,
-          forcedQuality: forcedQuality || '',
-          duration: requestedDurationSec || 0,
-          forceRefresh: true
-        })
-      });
-      const data = await resp.json();
-      if (data && data.ok && data.m3u8Url) {
-        return {
-          ok: true,
-          engine: 'SERVER_API',
-          sourceUrl: cleanUrl,
-          m3u8Url: data.m3u8Url,
-          qualities: Array.isArray(data.qualities) ? data.qualities : (forcedQuality ? [forcedQuality] : []),
-          qualityLinks: data.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
-          downloadQualities: Array.isArray(data.downloadQualities) ? data.downloadQualities.map(dq => ({
-            ...dq,
-            url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
-          })) : [],
-          audioTracks: Array.isArray(data.audioTracks) ? data.audioTracks : [],
-          duration: Number(data.duration || 0),
-          remainingSeconds: Number(data.remainingSeconds || 10200)
-        };
+      // 2. Web / Cloud Server Extractor API Fallback
+      // When running inside APK (appassets.androidplatform.net), relative '/api/extract-stream' hits local static files!
+      // Always use the live cloud backend URL when on appassets.androidplatform.net.
+      const apiEndpoints = window.location.hostname === 'appassets.androidplatform.net'
+        ? ['https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app/api/extract-stream']
+        : ['/api/extract-stream', 'https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app/api/extract-stream'];
+
+      let lastErrMsg = 'Could not extract HLS stream metadata';
+      for (const endpoint of apiEndpoints) {
+        try {
+          const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: cleanUrl,
+              forcedQuality: forcedQuality || '',
+              duration: requestedDurationSec || 0,
+              forceRefresh: true
+            })
+          });
+          const rawText = await resp.text();
+          if (!rawText || rawText.trim().startsWith('<')) {
+            lastErrMsg = 'Extractor endpoint returned HTML instead of JSON';
+            continue;
+          }
+          const data = JSON.parse(rawText);
+          if (data && data.ok && data.m3u8Url) {
+            return {
+              ok: true,
+              engine: 'SERVER_API',
+              sourceUrl: cleanUrl,
+              m3u8Url: data.m3u8Url,
+              qualities: Array.isArray(data.qualities) ? data.qualities : (forcedQuality ? [forcedQuality] : []),
+              qualityLinks: data.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
+              downloadQualities: Array.isArray(data.downloadQualities) ? data.downloadQualities.map(dq => ({
+                ...dq,
+                url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
+              })) : [],
+              audioTracks: Array.isArray(data.audioTracks) ? data.audioTracks : [],
+              duration: Number(data.duration || 0),
+              remainingSeconds: Number(data.remainingSeconds || 10200)
+            };
+          }
+          if (data && data.error) {
+            lastErrMsg = data.error;
+          }
+        } catch (fetchErr) {
+          lastErrMsg = fetchErr.message || 'Network error';
+        }
       }
+
       return {
         ok: false,
-        error: (data && data.error) ? data.error : 'Could not extract HLS stream metadata'
+        error: lastErrMsg
       };
     };
 

@@ -143,10 +143,24 @@ class MaxPlayNativeBridge(
         InbuiltStreamScraper.backgroundExecutor.execute {
             val cleanSource = sourceUrl.trim()
             val qualityHint = (forcedQuality ?: "").trim()
+            val safeCbId = JSONObject.quote(callbackId)
 
             fun finishWithResult(resObj: JSONObject) {
                 val escapedJson = JSONObject.quote(resObj.toString())
-                val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+                val jsCode = """
+                    (function() {
+                        var rawStr = $escapedJson;
+                        var parsedObj = rawStr;
+                        try { if (typeof rawStr === 'string') parsedObj = JSON.parse(rawStr); } catch (e) {}
+                        if (window.__maxPlayNativeCallbacks && typeof window.__maxPlayNativeCallbacks[$safeCbId] === 'function') {
+                            var cb = window.__maxPlayNativeCallbacks[$safeCbId];
+                            delete window.__maxPlayNativeCallbacks[$safeCbId];
+                            cb(parsedObj);
+                        } else if (typeof window.onMaxPlaySnifferResult === 'function') {
+                            window.onMaxPlaySnifferResult($safeCbId, rawStr);
+                        }
+                    })();
+                """.trimIndent()
                 activity.runOnUiThread {
                     try {
                         webView.evaluateJavascript(jsCode, null)
@@ -163,21 +177,24 @@ class MaxPlayNativeBridge(
             }
 
             try {
-                // Step 1: Try fast OkHttp Stage 1 Scraper
+                // Step 1: Try fast OkHttp Stage 1 Scraper (VOE.sx & Filemoon/Byse dedicated pipelines)
                 val stage1 = scraper.scrapeStreamSync(cleanSource, emptyMap())
                 if (stage1.optBoolean("ok") && stage1.optString("m3u8Url").isNotEmpty()) {
                     val m3u8Url = stage1.optString("m3u8Url")
-                    val ref = stage1.optJSONObject("headers")?.optString("Referer") ?: ""
+                    val ref = stage1.optJSONObject("headers")?.optString("Referer") ?: cleanSource
                     if (ref.isNotEmpty()) {
                         CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
                     }
                     val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
-                    finishWithResult(enriched)
-                    return@execute
+                    if (enriched.optBoolean("ok")) {
+                        enriched.put("engine", "KOTLIN_STAGE1")
+                        finishWithResult(enriched)
+                        return@execute
+                    }
                 }
 
-                // Step 2: Fallback to Offscreen Headless WebView Sniffer (for JS-packed Filemoon/Byse/Upnshare pages)
-                scraper.sniffStreamWithHeadlessWebView(cleanSource, 14000L) { stage2 ->
+                // Step 2: Fallback to Offscreen Headless WebView Sniffer (for JS-packed VOE / Filemoon / Byse pages)
+                scraper.sniffStreamWithHeadlessWebView(cleanSource, 16000L) { stage2 ->
                     InbuiltStreamScraper.backgroundExecutor.execute {
                         try {
                             if (stage2.optBoolean("ok") && stage2.optString("m3u8Url").isNotEmpty()) {
@@ -185,11 +202,12 @@ class MaxPlayNativeBridge(
                                 val ref = stage2.optJSONObject("headers")?.optString("Referer") ?: cleanSource
                                 CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
                                 val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
+                                enriched.put("engine", "KOTLIN_SNIFFER")
                                 finishWithResult(enriched)
                             } else {
                                 finishWithResult(JSONObject().apply {
                                     put("ok", false)
-                                    put("error", stage2.optString("error", stage1.optString("error", "Could not extract .m3u8 stream")))
+                                    put("error", stage2.optString("error", stage1.optString("error", "Could not extract .m3u8 stream from provider link")))
                                 })
                             }
                         } catch (e: Exception) {
@@ -233,7 +251,7 @@ class MaxPlayNativeBridge(
         if (combined.contains("kan") || Regex("\\bkn\\b").containsMatchIn(combined)) return "Kannada"
         if (combined.contains("kor") || Regex("\\bko\\b").containsMatchIn(combined)) return "Korean"
         if (combined.contains("spa") || Regex("\\bes\\b").containsMatchIn(combined)) return "Spanish"
-        if (combined.contains("fre") || combined.contains("fra") || Regex("\\bfr\\b").containsMatchIn(combined)) return "French"
+        if (combined.contains("fre") || Regex("\\fra\\b").containsMatchIn(combined) || Regex("\\bfr\\b").containsMatchIn(combined)) return "French"
         if (combined.contains("rus") || Regex("\\bru\\b").containsMatchIn(combined)) return "Russian"
         if (combined.contains("ind") || Regex("\\bid\\b").containsMatchIn(combined)) return "Indonesian"
         if (combined.contains("ara") || Regex("\\bar\\b").containsMatchIn(combined)) return "Arabic"
@@ -274,7 +292,7 @@ class MaxPlayNativeBridge(
         val host = try { java.net.URL(segUrl).host } catch (_: Exception) { "" }
         val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
         try {
-            // Try fast HEAD request first
+            // 1. Try fast HEAD request first
             val headReq = Request.Builder()
                 .url(segUrl)
                 .head()
@@ -290,7 +308,7 @@ class MaxPlayNativeBridge(
         } catch (_: Exception) {}
 
         try {
-            // Fallback: Range bytes=0-0 to inspect Content-Range: bytes 0-0/TOTAL_BYTES
+            // 2. Fallback: Range bytes=0-0 to inspect Content-Range: bytes 0-0/TOTAL_BYTES
             val rangeReq = Request.Builder()
                 .url(segUrl)
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
@@ -306,6 +324,31 @@ class MaxPlayNativeBridge(
                 }
                 val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
                 if (cl > 500L) return cl
+            }
+        } catch (_: Exception) {}
+
+        try {
+            // 3. Fallback for chunked CDNs that reject HEAD/Range: stream GET response and count bytes
+            val getReq = Request.Builder()
+                .url(segUrl)
+                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("Referer", effRef)
+                .build()
+            InbuiltStreamScraper.okHttpClient.newCall(getReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                    if (cl > 500L) return cl
+                    val stream = resp.body?.byteStream() ?: return 0L
+                    val buf = ByteArray(16384)
+                    var totalRead = 0L
+                    while (true) {
+                        val n = stream.read(buf)
+                        if (n <= 0) break
+                        totalRead += n
+                        if (totalRead > 6L * 1024L * 1024L) break
+                    }
+                    if (totalRead > 500L) return totalRead
+                }
             }
         } catch (_: Exception) {}
         return 0L
@@ -362,12 +405,11 @@ class MaxPlayNativeBridge(
             return Pair(finalDuration, mb)
         }
 
-        // 3. Otherwise sample up to 3 real segments (20%, 50%, 80%) via HEAD / Range to measure real bytes/sec
+        // 3. Otherwise sample up to 2 real segments (25%, 65%) via HEAD / Range / GET to measure real bytes/sec
         if (segments.isNotEmpty() && finalDuration > 0) {
             val sampleIndices = listOf(
-                (segments.size * 0.2).toInt().coerceIn(0, segments.size - 1),
-                (segments.size * 0.5).toInt().coerceIn(0, segments.size - 1),
-                (segments.size * 0.8).toInt().coerceIn(0, segments.size - 1)
+                (segments.size * 0.25).toInt().coerceIn(0, segments.size - 1),
+                (segments.size * 0.65).toInt().coerceIn(0, segments.size - 1)
             ).distinct()
 
             var sampledBytes = 0L
@@ -460,7 +502,6 @@ class MaxPlayNativeBridge(
             }
         }
 
-        // Measure audio rendition overhead if separate audio tracks exist (typically ~128kbps -> ~1MB per min)
         var separateAudioMb = 0
         var detectedDuration = 0
         val downloadQualitiesArr = org.json.JSONArray()
@@ -470,8 +511,10 @@ class MaxPlayNativeBridge(
         if (masterText.contains("#EXTINF:")) {
             // Direct single-quality media playlist
             val qLabel = forcedQuality.ifBlank { "1080p" }
-            val (dur, sizeMb) = measureMediaPlaylistSizeAndDuration(m3u8Url, masterText, referer, 0L)
+            val (dur, measuredMb) = measureMediaPlaylistSizeAndDuration(m3u8Url, masterText, referer, 0L)
             detectedDuration = dur
+            val fallbackBps = if (qLabel.contains("1080")) 2000000L else if (qLabel.contains("720")) 1100000L else if (qLabel.contains("480")) 650000L else 380000L
+            val sizeMb = if (measuredMb > 0) measuredMb else if (dur > 0) Math.max(5, ((fallbackBps * dur) / (8L * 1024L * 1024L)).toInt()) else 0
             qualitiesArr.put(qLabel)
             qualityLinksObj.put(qLabel, sourceUrl)
             downloadQualitiesArr.put(JSONObject().apply {
@@ -480,18 +523,22 @@ class MaxPlayNativeBridge(
                 put("sizeMb", sizeMb)
                 put("url", sourceUrl)
                 put("resolvedM3u8Url", m3u8Url)
-                put("bandwidth", if (dur > 0 && sizeMb > 0) ((sizeMb.toLong() * 8L * 1024L * 1024L) / dur.toLong()) else 0L)
+                put("bandwidth", if (dur > 0 && sizeMb > 0) ((sizeMb.toLong() * 8L * 1024L * 1024L) / dur.toLong()) else fallbackBps)
             })
         } else if (variants.isNotEmpty()) {
-            // If forcedQuality was specified (e.g., Admin put a separate link in the 360p box) and there is only 1 variant in this master playlist,
-            // tag it with forcedQuality so the 360p box records its exact 360p size!
-            val effectiveVariants = if (forcedQuality.isNotBlank() && variants.size == 1) {
-                listOf(VariantInfo(forcedQuality, variants[0].url, variants[0].bandwidth))
+            // When Admin verifies a specific quality box (e.g., 1080p box or 480p box), match that box's quality
+            val effectiveVariants = if (forcedQuality.isNotBlank()) {
+                val exactMatch = variants.firstOrNull { it.quality.equals(forcedQuality, ignoreCase = true) }
+                    ?: variants.minByOrNull {
+                        val vNum = it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 720
+                        val fNum = forcedQuality.filter { c -> c.isDigit() }.toIntOrNull() ?: 720
+                        kotlin.math.abs(vNum - fNum)
+                    } ?: variants[0]
+                listOf(VariantInfo(forcedQuality, exactMatch.url, exactMatch.bandwidth))
             } else {
                 variants
             }
 
-            // Probe first variant's media playlist to get exact duration (and segment sizes if bandwidth wasn't in master)
             val firstVar = effectiveVariants[0]
             val firstSubText = fetchHlsTextSync(firstVar.url, referer)
             val (firstDur, firstMeasuredMb) = if (firstSubText.contains("#EXTINF:")) {
@@ -502,7 +549,6 @@ class MaxPlayNativeBridge(
             detectedDuration = firstDur
 
             if (audioPlaylistsFirstUrl.isNotEmpty() && detectedDuration > 0) {
-                // Separate audio track typically ~128 kbps
                 separateAudioMb = Math.max(2, Math.round((128000.0 * detectedDuration.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
             }
 
@@ -522,8 +568,12 @@ class MaxPlayNativeBridge(
                     }
                 }
 
-                // If Admin put this link in a specific quality box (e.g. 720p), store sourceUrl for that quality
-                val assignedUrl = if (effectiveVariants.size == 1) sourceUrl else v.url
+                if (vSizeMb <= 0 && detectedDuration > 0) {
+                    val fallbackBps = if (v.bandwidth > 50000L) v.bandwidth else if (v.quality.contains("1080")) 2000000L else if (v.quality.contains("720")) 1100000L else if (v.quality.contains("480")) 650000L else 380000L
+                    vSizeMb = Math.max(5, ((fallbackBps * detectedDuration) / (8L * 1024L * 1024L)).toInt()) + separateAudioMb
+                }
+
+                val assignedUrl = if (forcedQuality.isNotBlank() || effectiveVariants.size == 1) sourceUrl else v.url
                 qualitiesArr.put(v.quality)
                 qualityLinksObj.put(v.quality, assignedUrl)
                 downloadQualitiesArr.put(JSONObject().apply {
