@@ -39,6 +39,8 @@ class MainActivity : AppCompatActivity() {
     var autoPipEnabled: Boolean = true
     @Volatile
     var isVideoCurrentlyPlaying: Boolean = false
+    private var popunderDialog: android.app.Dialog? = null
+    private var popunderWebView: WebView? = null
 
     fun getScraperContainer(): ViewGroup = rootContainer
 
@@ -111,6 +113,10 @@ class MainActivity : AppCompatActivity() {
         // Handle Android hardware Back button (Triangle button) smoothly via React SPA handler first
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (isNativePopunderAdOpen()) {
+                    closeNativePopunderAd()
+                    return
+                }
                 if (customFullscreenView != null) {
                     webView.webChromeClient?.onHideCustomView()
                     return
@@ -917,8 +923,211 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    fun isNativePopunderAdOpen(): Boolean {
+        return try {
+            popunderDialog?.isShowing == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun closeNativePopunderAd(): Boolean {
+        runOnUiThread {
+            try {
+                popunderWebView?.apply {
+                    stopLoading()
+                    loadUrl("about:blank")
+                    destroy()
+                }
+            } catch (_: Exception) {}
+            popunderWebView = null
+            try {
+                if (popunderDialog?.isShowing == true) {
+                    popunderDialog?.dismiss()
+                }
+            } catch (_: Exception) {}
+            popunderDialog = null
+        }
+        return true
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun openNativePopunderAd(adUrl: String): Boolean {
+        val cleanUrl = adUrl.trim()
+        if (cleanUrl.isBlank()) return false
+        runOnUiThread {
+            try {
+                if (popunderDialog?.isShowing == true) return@runOnUiThread
+
+                val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar)
+                dialog.setCancelable(true)
+                dialog.setOnCancelListener {
+                    closeNativePopunderAd()
+                }
+                dialog.setOnKeyListener { _, keyCode, event ->
+                    if (keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                        closeNativePopunderAd()
+                        true
+                    } else {
+                        false
+                    }
+                }
+
+                val density = resources.displayMetrics.density
+                val container = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setBackgroundColor(Color.parseColor("#0A0A0A"))
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+
+                val topBar = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setBackgroundColor(Color.parseColor("#121216"))
+                    val padH = (14 * density).toInt()
+                    val padV = (10 * density).toInt()
+                    setPadding(padH, padV, padH, padV)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+
+                val labelView = android.widget.TextView(this).apply {
+                    text = "Sponsored • Press Back to return to MaxPlay"
+                    setTextColor(Color.parseColor("#A1A1AA"))
+                    textSize = 12f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f
+                    )
+                }
+
+                val closeBtn = android.widget.TextView(this).apply {
+                    text = "✕ Return to Video"
+                    setTextColor(Color.WHITE)
+                    textSize = 12f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    val padBtnH = (14 * density).toInt()
+                    val padBtnV = (6 * density).toInt()
+                    setPadding(padBtnH, padBtnV, padBtnH, padBtnV)
+                    background = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        intArrayOf(Color.parseColor("#8B5CF6"), Color.parseColor("#6366F1"))
+                    ).apply {
+                        cornerRadius = 999f
+                    }
+                    setOnClickListener {
+                        closeNativePopunderAd()
+                    }
+                }
+
+                topBar.addView(labelView)
+                topBar.addView(closeBtn)
+
+                val adWeb = WebView(this).apply {
+                    setBackgroundColor(Color.WHITE)
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    )
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        databaseEnabled = true
+                        mediaPlaybackRequiresUserGesture = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        userAgentString = InbuiltStreamScraper.DEFAULT_USER_AGENT
+                        setSupportMultipleWindows(false)
+                        javaScriptCanOpenWindowsAutomatically = true
+                    }
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                    webViewClient = object : android.webkit.WebViewClient() {
+                        private fun handleAdUrl(view: WebView?, rawTarget: String?): Boolean {
+                            val target = rawTarget?.trim() ?: return true
+                            if (target.startsWith("http://", ignoreCase = true) ||
+                                target.startsWith("https://", ignoreCase = true)
+                            ) {
+                                return false
+                            }
+                            if (target.startsWith("intent://", ignoreCase = true)) {
+                                try {
+                                    val parsedIntent = android.content.Intent.parseUri(
+                                        target,
+                                        android.content.Intent.URI_INTENT_SCHEME
+                                    )
+                                    val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
+                                    if (!fallbackUrl.isNullOrBlank() &&
+                                        (fallbackUrl.startsWith("http://", ignoreCase = true) ||
+                                            fallbackUrl.startsWith("https://", ignoreCase = true))
+                                    ) {
+                                        view?.loadUrl(fallbackUrl)
+                                        return true
+                                    }
+                                    if (parsedIntent.resolveActivity(packageManager) != null) {
+                                        parsedIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        startActivity(parsedIntent)
+                                    }
+                                } catch (_: Exception) {}
+                                return true
+                            }
+                            if (target.startsWith("market://", ignoreCase = true)) {
+                                try {
+                                    val playHttp = "https://play.google.com/store/apps/" + target.removePrefix("market://")
+                                    view?.loadUrl(playHttp)
+                                } catch (_: Exception) {}
+                                return true
+                            }
+                            // Suppress unknown custom protocols (e.g. tg://, whatsapp://, fb://) from showing WebView error page
+                            return true
+                        }
+
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?
+                        ): Boolean {
+                            return handleAdUrl(view, request?.url?.toString())
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                            return handleAdUrl(view, url)
+                        }
+
+                        @SuppressLint("WebViewClientOnReceivedSslError")
+                        override fun onReceivedSslError(
+                            view: WebView?,
+                            handler: android.webkit.SslErrorHandler?,
+                            error: android.net.http.SslError?
+                        ) {
+                            handler?.proceed()
+                        }
+                    }
+                }
+
+                container.addView(topBar)
+                container.addView(adWeb)
+                dialog.setContentView(container)
+
+                popunderDialog = dialog
+                popunderWebView = adWeb
+                dialog.show()
+                adWeb.loadUrl(cleanUrl)
+            } catch (_: Exception) {}
+        }
+        return true
+    }
+
     override fun onDestroy() {
         try {
+            closeNativePopunderAd()
             bgNotificationScheduler.shutdownNow()
             MaxPlayOfflineVault.stopDirectTransferServer()
         } catch (_: Exception) {}

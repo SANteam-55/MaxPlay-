@@ -86,12 +86,40 @@ class DownloadManagerService {
       if (rawCompleted) {
         const parsed = JSON.parse(rawCompleted);
         if (Array.isArray(parsed)) {
-          this.completedFiles = parsed;
+          this.completedFiles = this.deduplicateCompletedList(parsed);
         }
       }
     } catch (e) {
       console.warn('[DownloadManager] Failed to load completed files:', e);
     }
+  }
+
+  private deduplicateCompletedList(list: DownloadedFile[]): DownloadedFile[] {
+    const seenKeys = new Set<string>();
+    const result: DownloadedFile[] = [];
+    for (const item of list) {
+      if (!item || !item.title) continue;
+      const cat = item.category || 'moviebox';
+      const normTitle = item.title.trim().toLowerCase();
+      const sIdx = item.seasonIndex ?? 0;
+      const eIdx = item.episodeIndex ?? -1;
+      const epId = item.episodeId || '';
+      const identityKey =
+        cat === 'local'
+          ? `${cat}|${item.storageKey || item.id}`
+          : item.contentId && !item.contentId.startsWith('imp_')
+          ? `${cat}|cid:${item.contentId}|s:${sIdx}|e:${eIdx}|ep:${epId}`
+          : `${cat}|title:${normTitle}|s:${sIdx}|e:${eIdx}|ep:${epId}`;
+
+      const storageIdentity = item.storageKey ? `${cat}|sk:${item.storageKey}` : '';
+      if (seenKeys.has(identityKey) || (storageIdentity && seenKeys.has(storageIdentity))) {
+        continue;
+      }
+      seenKeys.add(identityKey);
+      if (storageIdentity) seenKeys.add(storageIdentity);
+      result.push(item);
+    }
+    return result;
   }
 
   private saveState() {
@@ -633,7 +661,7 @@ class DownloadManagerService {
 
   /**
    * Registers an imported `.maxplay` transfer package (`category: 'received'`) or local video (`category: 'local'`)
-   * directly into `completedFiles` so it appears in the Downloads screen tabs immediately.
+   * directly into `completedFiles` with strict deduplication so duplicate cards never appear in Received or Local tabs.
    */
   public addImportedCompletedFile(params: {
     contentId?: string;
@@ -650,9 +678,48 @@ class DownloadManagerService {
     storageKey: string;
     isVertical?: boolean;
   }): DownloadedFile {
+    const normTitle = (params.title || '').trim().toLowerCase();
+    const sIdx = params.seasonIndex ?? 0;
+    const eIdx = params.episodeIndex ?? -1;
+    const epId = params.episodeId || '';
+
+    const isSameEntry = (f: DownloadedFile): boolean => {
+      if (f.storageKey && params.storageKey && f.storageKey === params.storageKey) {
+        return true;
+      }
+      if ((f.category || 'moviebox') !== params.category) {
+        return false;
+      }
+      if (params.category === 'local') {
+        return (f.title || '').trim().toLowerCase() === normTitle && f.fileSizeMb === params.fileSizeMb;
+      }
+      if (
+        params.contentId &&
+        !params.contentId.startsWith('imp_') &&
+        f.contentId === params.contentId &&
+        (f.seasonIndex ?? 0) === sIdx &&
+        (f.episodeIndex ?? -1) === eIdx &&
+        (f.episodeId || '') === epId
+      ) {
+        return true;
+      }
+      if (
+        normTitle &&
+        (f.title || '').trim().toLowerCase() === normTitle &&
+        (f.seasonIndex ?? 0) === sIdx &&
+        (f.episodeIndex ?? -1) === eIdx &&
+        (f.episodeId || '') === epId
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    const existingMatch = this.completedFiles.find(isSameEntry);
+
     const newItem: DownloadedFile = {
-      id: `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      contentId: params.contentId || `imp_${Date.now()}`,
+      id: existingMatch?.id || `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      contentId: params.contentId || existingMatch?.contentId || `imp_${Date.now()}`,
       episodeId: params.episodeId,
       seasonIndex: params.seasonIndex,
       episodeIndex: params.episodeIndex,
@@ -662,6 +729,7 @@ class DownloadManagerService {
         `${params.fileSizeMb} MB • ${params.language || 'Default'} • ${(params.quality || 'HD').toUpperCase()}`,
       posterUrl:
         params.posterUrl ||
+        existingMatch?.posterUrl ||
         (params.category === 'local'
           ? ''
           : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&auto=format&fit=crop&q=80'),
@@ -671,15 +739,15 @@ class DownloadManagerService {
       status: `${params.fileSizeMb} MB • ${params.category === 'received' ? 'Received via MaxPlay' : 'Local Video'}`,
       category: params.category,
       storageKey: params.storageKey,
-      isVertical: params.isVertical,
+      isVertical: params.isVertical ?? existingMatch?.isVertical,
       hasError: false,
       completedAt: Date.now(),
     };
 
-    this.completedFiles = [
+    this.completedFiles = this.deduplicateCompletedList([
       newItem,
-      ...this.completedFiles.filter((f) => f.storageKey !== params.storageKey),
-    ];
+      ...this.completedFiles.filter((f) => !isSameEntry(f)),
+    ]);
     this.saveState();
     return newItem;
   }

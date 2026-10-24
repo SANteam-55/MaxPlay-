@@ -472,6 +472,21 @@ class MaxPlayNativeBridge(
         activity.startNativeApkUpdate(apkUrl, versionName, title)
     }
 
+    @JavascriptInterface
+    fun openPopunderAd(adUrl: String): Boolean {
+        return activity.openNativePopunderAd(adUrl)
+    }
+
+    @JavascriptInterface
+    fun closePopunderAd(): Boolean {
+        return activity.closeNativePopunderAd()
+    }
+
+    @JavascriptInterface
+    fun isPopunderAdOpen(): Boolean {
+        return activity.isNativePopunderAdOpen()
+    }
+
     private fun parseHeadersJson(headersJson: String?): Map<String, String> {
         if (headersJson.isNullOrBlank()) return emptyMap()
         val map = mutableMapOf<String, String>()

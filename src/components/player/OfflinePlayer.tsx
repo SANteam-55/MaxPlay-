@@ -114,7 +114,10 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
     };
   }, []);
 
-  // Attach Hls.js for virtual local HLS playlists (https://maxplay.local/offline-vault/.../index.m3u8 or Blob m3u8)
+  const errorRecoveryAttemptsRef = useRef<number>(0);
+
+  // Attach Hls.js ONLY for virtual local HLS playlists (https://maxplay.local/offline-vault/.../index.m3u8 or HLS Blob m3u8)
+  // Direct local phone videos (/device-video/ or category === 'local') play directly in native HTML5 <video>
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !blobUrl) return;
@@ -124,13 +127,23 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
       hlsRef.current = null;
     }
 
+    errorRecoveryAttemptsRef.current = 0;
     setIsLoading(true);
     setPlaybackError(null);
 
+    const isLocalDirectVideo =
+      file.category === 'local' ||
+      blobUrl.includes('/device-video/') ||
+      Boolean(
+        file.storageKey &&
+          (file.storageKey.startsWith('dl_local_') || file.storageKey.startsWith('dev_vid_'))
+      );
+
     const isHlsPlaylist =
-      blobUrl.includes('.m3u8') ||
-      blobUrl.includes('/offline-vault/') ||
-      blobUrl.startsWith('blob:');
+      !isLocalDirectVideo &&
+      (blobUrl.includes('.m3u8') ||
+        blobUrl.includes('/offline-vault/') ||
+        blobUrl.startsWith('blob:'));
 
     if (isHlsPlaylist && Hls.isSupported()) {
       const hls = new Hls({
@@ -176,7 +189,7 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [blobUrl]);
+  }, [blobUrl, file.category, file.storageKey]);
 
   // Update fullscreen state when parent changes or fullscreen event fires
   useEffect(() => {
@@ -503,8 +516,39 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
             }}
             onError={() => {
               if (!hlsRef.current) {
+                const video = videoRef.current;
+                const savedTime = video?.currentTime || currentTime || 0;
+                if (video && blobUrl && errorRecoveryAttemptsRef.current < 3) {
+                  errorRecoveryAttemptsRef.current += 1;
+                  setIsLoading(true);
+                  setTimeout(() => {
+                    try {
+                      if (!videoRef.current) return;
+                      videoRef.current.src = blobUrl;
+                      videoRef.current.load();
+                      const onMeta = () => {
+                        if (videoRef.current && savedTime > 0) {
+                          try {
+                            videoRef.current.currentTime = savedTime;
+                          } catch {}
+                        }
+                        videoRef.current?.play().catch(() => {});
+                      };
+                      videoRef.current.addEventListener('loadedmetadata', onMeta, { once: true });
+                    } catch {}
+                  }, 250);
+                  return;
+                }
+
                 setIsLoading(false);
-                setPlaybackError('Offline video stream error. Please re-download or check storage.');
+                const isLocalItem =
+                  file.category === 'local' ||
+                  Boolean(blobUrl && blobUrl.includes('/device-video/'));
+                setPlaybackError(
+                  isLocalItem
+                    ? 'Local video playback interrupted. Tap Retry Playback to continue.'
+                    : 'Offline video stream interrupted. Tap Retry Playback to continue.'
+                );
               }
             }}
             className="w-full h-full object-contain pointer-events-none"
@@ -512,7 +556,7 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 p-4 text-center">
             <Loader2 className="w-10 h-10 text-purple-500 animate-spin mb-2" />
-            <span className="text-xs font-bold text-white/80">Loading offline file...</span>
+            <span className="text-xs font-bold text-white/80">Loading video...</span>
           </div>
         )}
 
@@ -531,9 +575,25 @@ export const OfflinePlayer: React.FC<OfflinePlayerProps> = ({
             <p className="font-semibold text-sm mb-3">{playbackError}</p>
             <button
               onClick={() => {
+                const resumeSec = videoRef.current?.currentTime || currentTime || 0;
+                errorRecoveryAttemptsRef.current = 0;
                 setPlaybackError(null);
-                if (videoRef.current) {
+                setIsLoading(true);
+                if (videoRef.current && blobUrl) {
+                  videoRef.current.src = blobUrl;
                   videoRef.current.load();
+                  videoRef.current.addEventListener(
+                    'loadedmetadata',
+                    () => {
+                      if (videoRef.current && resumeSec > 0) {
+                        try {
+                          videoRef.current.currentTime = resumeSec;
+                        } catch {}
+                      }
+                      videoRef.current?.play().catch(() => {});
+                    },
+                    { once: true }
+                  );
                 }
               }}
               className="px-4 py-2 bg-[#8B5CF6] hover:bg-[#7C3AED] rounded-xl text-xs font-bold transition active:scale-95 cursor-pointer shadow-lg shadow-purple-900/40"

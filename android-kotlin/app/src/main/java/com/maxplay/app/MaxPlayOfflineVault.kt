@@ -787,7 +787,8 @@ object MaxPlayOfflineVault {
 
     /**
      * Streams any local video from Android MediaStore (`https://maxplay.local/device-video/{id}`)
-     * with full HTTP Range seeking support so users can scrub anywhere in 0ms without copying the file into RAM.
+     * with exact FileChannel HTTP Range seeking and bounded stream delivery so local videos play
+     * continuously from start to finish without stopping after 5-6 seconds.
      */
     fun interceptDeviceVideoRequest(
         context: Context,
@@ -807,35 +808,84 @@ object MaxPlayOfflineVault {
                 videoId
             )
 
-            val mimeType = context.contentResolver.getType(contentUri) ?: "video/mp4"
-            val afd = context.contentResolver.openAssetFileDescriptor(contentUri, "r") ?: return null
-            val totalLength = afd.length
+            val rawMime = (context.contentResolver.getType(contentUri) ?: "video/mp4").lowercase()
+            val mimeType = when {
+                rawMime.contains("webm") -> "video/webm"
+                rawMime.contains("ogg") -> "video/ogg"
+                else -> "video/mp4"
+            }
+
+            val pfd = context.contentResolver.openFileDescriptor(contentUri, "r") ?: return null
+            val totalLength = pfd.statSize
+            val fis = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
 
             val baseHeaders = mutableMapOf(
                 "Access-Control-Allow-Origin" to "*",
                 "Access-Control-Allow-Methods" to "GET, HEAD, OPTIONS",
-                "Access-Control-Allow-Headers" to "*",
+                "Access-Control-Allow-Headers" to "Range, Content-Type, Accept, Origin",
                 "Access-Control-Expose-Headers" to "Content-Length, Content-Range, Accept-Ranges",
-                "Accept-Ranges" to "bytes"
+                "Accept-Ranges" to "bytes",
+                "Cache-Control" to "no-store"
             )
 
-            if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=") && totalLength > 0) {
-                val rangeSpec = rangeHeader.removePrefix("bytes=").substringBefore(",")
+            if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=") && totalLength > 0L) {
+                val rangeSpec = rangeHeader.removePrefix("bytes=").substringBefore(",").trim()
                 val parts = rangeSpec.split("-")
-                val start = parts.getOrNull(0)?.trim()?.toLongOrNull() ?: 0L
-                val end = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.toLongOrNull()
-                    ?: (totalLength - 1L)
-                val clampedStart = start.coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
-                val clampedEnd = end.coerceIn(clampedStart, (totalLength - 1L).coerceAtLeast(clampedStart))
+                val startPart = parts.getOrNull(0)?.trim() ?: ""
+                val endPart = parts.getOrNull(1)?.trim() ?: ""
+
+                val clampedStart: Long
+                val clampedEnd: Long
+
+                if (startPart.isEmpty() && endPart.isNotEmpty()) {
+                    // Suffix byte range: bytes=-500
+                    val suffixLen = endPart.toLongOrNull() ?: 0L
+                    clampedStart = (totalLength - suffixLen).coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
+                    clampedEnd = (totalLength - 1L).coerceAtLeast(clampedStart)
+                } else {
+                    val parsedStart = startPart.toLongOrNull() ?: 0L
+                    val parsedEnd = endPart.takeIf { it.isNotEmpty() }?.toLongOrNull() ?: (totalLength - 1L)
+                    clampedStart = parsedStart.coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
+                    clampedEnd = parsedEnd.coerceIn(clampedStart, (totalLength - 1L).coerceAtLeast(clampedStart))
+                }
+
                 val contentLength = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
 
-                val fis = afd.createInputStream()
-                if (clampedStart > 0L) {
+                try {
+                    fis.channel.position(clampedStart)
+                } catch (_: Exception) {
                     var skipped = 0L
                     while (skipped < clampedStart) {
                         val s = fis.skip(clampedStart - skipped)
                         if (s <= 0L) break
                         skipped += s
+                    }
+                }
+
+                val boundedStream = object : java.io.InputStream() {
+                    private var remaining = contentLength
+
+                    override fun read(): Int {
+                        if (remaining <= 0L) return -1
+                        val b = fis.read()
+                        if (b != -1) remaining--
+                        return b
+                    }
+
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (remaining <= 0L) return -1
+                        val toRead = minOf(len.toLong(), remaining).toInt()
+                        val count = fis.read(b, off, toRead)
+                        if (count > 0) {
+                            remaining -= count.toLong()
+                        }
+                        return count
+                    }
+
+                    override fun close() {
+                        try {
+                            fis.close()
+                        } catch (_: Exception) {}
                     }
                 }
 
@@ -848,10 +898,10 @@ object MaxPlayOfflineVault {
                     206,
                     "Partial Content",
                     baseHeaders,
-                    fis
+                    boundedStream
                 )
             } else {
-                if (totalLength > 0) {
+                if (totalLength > 0L) {
                     baseHeaders["Content-Length"] = totalLength.toString()
                 }
                 return WebResourceResponse(
@@ -860,7 +910,7 @@ object MaxPlayOfflineVault {
                     200,
                     "OK",
                     baseHeaders,
-                    afd.createInputStream()
+                    fis
                 )
             }
         } catch (_: Exception) {
@@ -879,6 +929,16 @@ object MaxPlayOfflineVault {
     private var p2pActiveStorageKey: String = ""
     @Volatile
     private var p2pActiveMetadataJson: String = "{}"
+
+    private val p2pLanHttpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .connectionPool(okhttp3.ConnectionPool(16, 2, java.util.concurrent.TimeUnit.MINUTES))
+            .retryOnConnectionFailure(true)
+            .build()
+    }
 
     private fun getLocalLanIpAddress(context: Context): String {
         try {
@@ -917,7 +977,7 @@ object MaxPlayOfflineVault {
 
     /**
      * Starts an embedded HTTP ServerSocket on port 48821 (or dynamic fallback port) so another
-     * MaxPlay app on the same Wi-Fi / Hotspot can stream segments directly App-to-App.
+     * MaxPlay app on the same Wi-Fi / Hotspot can stream segments directly App-to-App at high speed.
      */
     fun startDirectTransferServer(
         context: Context,
@@ -960,9 +1020,9 @@ object MaxPlayOfflineVault {
             audFiles.forEach { totalBytes += it.length() }
 
             val server = try {
-                java.net.ServerSocket(48821)
+                java.net.ServerSocket(48821, 64)
             } catch (_: Exception) {
-                java.net.ServerSocket(0)
+                java.net.ServerSocket(0, 64)
             }
 
             p2pServerSocket = server
@@ -1008,14 +1068,16 @@ object MaxPlayOfflineVault {
     ) {
         socket.use { s ->
             try {
-                s.soTimeout = 15000
+                s.soTimeout = 20000
+                s.tcpNoDelay = true
+                s.sendBufferSize = 256 * 1024
                 val reader = java.io.BufferedReader(java.io.InputStreamReader(s.getInputStream()))
                 val requestLine = reader.readLine() ?: return
                 val parts = requestLine.split(" ")
                 if (parts.size < 2) return
                 val reqPath = parts[1].substringBefore("?")
 
-                val outStream = s.getOutputStream()
+                val outStream = java.io.BufferedOutputStream(s.getOutputStream(), 256 * 1024)
                 val prefix = "/maxplay-p2p/$p2pActiveCode/"
                 if (!reqPath.startsWith(prefix)) {
                     val errBytes = "Not Found".toByteArray()
@@ -1070,7 +1132,7 @@ object MaxPlayOfflineVault {
                         "Connection: close\r\n\r\n"
                     outStream.write(headers.toByteArray(Charsets.UTF_8))
                     FileInputStream(targetFile).use { fis ->
-                        val buf = ByteArray(64 * 1024)
+                        val buf = ByteArray(256 * 1024)
                         var r: Int
                         while (fis.read(buf).also { r = it } != -1) {
                             outStream.write(buf, 0, r)
@@ -1087,7 +1149,7 @@ object MaxPlayOfflineVault {
 
     /**
      * Streams all segments directly from another MaxPlay device over LAN HTTP (`http://senderIp:senderPort/maxplay-p2p/{code}/...`)
-     * into this device's native offline vault (`targetStorageKey`).
+     * into this device's native offline vault (`targetStorageKey`) using an 8-thread parallel high-speed worker pool.
      */
     fun receiveDirectTransferFromPeer(
         context: Context,
@@ -1103,7 +1165,7 @@ object MaxPlayOfflineVault {
             onProgress(5, "Connecting to sender MaxPlay app ($senderIp)...")
 
             val manifestReq = Request.Builder().url("$baseUrl/manifest.json").build()
-            val manifestObj = downloadHttpClient.newCall(manifestReq).execute().use { resp ->
+            val manifestObj = p2pLanHttpClient.newCall(manifestReq).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     throw Exception("Could not connect to sender phone over Wi-Fi/Hotspot (HTTP ${resp.code})")
                 }
@@ -1122,61 +1184,82 @@ object MaxPlayOfflineVault {
             }
 
             val itemDir = getItemDir(context, targetStorageKey)
-            var receivedBytes = 0L
+            val receivedBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val completedUnits = java.util.concurrent.atomic.AtomicInteger(0)
             val totalUnits = (totalSegs + totalAudSegs).coerceAtLeast(1)
-            var completedUnits = 0
+            val startTimeMs = System.currentTimeMillis()
+            val lastEmitTimeMs = java.util.concurrent.atomic.AtomicLong(0L)
+            val firstError = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
 
-            for (i in 0 until totalSegs) {
-                val segUrl = "$baseUrl/seg_${i}.ts"
-                val segFile = File(itemDir, "seg_${i}.ts")
-                val req = Request.Builder().url(segUrl).build()
-                downloadHttpClient.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) throw Exception("Segment $i transfer interrupted")
-                    val body = resp.body ?: throw Exception("Empty segment $i")
-                    FileOutputStream(segFile).use { fos ->
-                        body.byteStream().use { input ->
-                            val buf = ByteArray(64 * 1024)
-                            var r: Int
-                            while (input.read(buf).also { r = it } != -1) {
-                                fos.write(buf, 0, r)
-                                receivedBytes += r
-                            }
-                        }
-                    }
-                }
-                completedUnits++
-                val pct = (10 + ((completedUnits.toDouble() / totalUnits.toDouble()) * 85.0)).toInt().coerceIn(10, 95)
-                if (i % 3 == 0 || i == totalSegs - 1) {
-                    val mbNow = String.format(java.util.Locale.US, "%.1f", receivedBytes / (1024.0 * 1024.0))
-                    onProgress(pct, "Receiving directly from MaxPlay ($mbNow MB)...")
-                }
-            }
+            data class P2pJob(val isAudio: Boolean, val index: Int)
+            val jobs = java.util.concurrent.ConcurrentLinkedQueue<P2pJob>()
+            for (i in 0 until totalSegs) jobs.add(P2pJob(false, i))
+            for (i in 0 until totalAudSegs) jobs.add(P2pJob(true, i))
 
-            for (i in 0 until totalAudSegs) {
-                val audUrl = "$baseUrl/aud_${i}.ts"
-                val audFile = File(itemDir, "aud_${i}.ts")
-                val req = Request.Builder().url(audUrl).build()
-                downloadHttpClient.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful && resp.body != null) {
-                        FileOutputStream(audFile).use { fos ->
-                            resp.body!!.byteStream().use { input ->
-                                val buf = ByteArray(64 * 1024)
-                                var r: Int
-                                while (input.read(buf).also { r = it } != -1) {
-                                    fos.write(buf, 0, r)
-                                    receivedBytes += r
+            val workerCount = minOf(8, totalUnits)
+            val latch = java.util.concurrent.CountDownLatch(workerCount)
+
+            for (w in 0 until workerCount) {
+                InbuiltStreamScraper.backgroundExecutor.execute {
+                    val buf = ByteArray(256 * 1024)
+                    try {
+                        while (firstError.get() == null) {
+                            val job = jobs.poll() ?: break
+                            val fileName = if (job.isAudio) "aud_${job.index}.ts" else "seg_${job.index}.ts"
+                            val segUrl = "$baseUrl/$fileName"
+                            val destFile = File(itemDir, fileName)
+
+                            var downloadedOk = false
+                            for (attempt in 0 until 3) {
+                                if (firstError.get() != null) break
+                                try {
+                                    val req = Request.Builder().url(segUrl).build()
+                                    p2pLanHttpClient.newCall(req).execute().use { resp ->
+                                        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                                        val body = resp.body ?: throw Exception("Empty body")
+                                        var segBytes = 0L
+                                        FileOutputStream(destFile).use { fos ->
+                                            body.byteStream().use { input ->
+                                                var r: Int
+                                                while (input.read(buf).also { r = it } != -1) {
+                                                    fos.write(buf, 0, r)
+                                                    segBytes += r
+                                                }
+                                            }
+                                        }
+                                        receivedBytes.addAndGet(segBytes)
+                                        downloadedOk = true
+                                    }
+                                    if (downloadedOk) break
+                                } catch (e: Exception) {
+                                    if (attempt == 2 && !job.isAudio) {
+                                        firstError.compareAndSet(null, Exception("Segment ${job.index} transfer failed: ${e.message}"))
+                                    } else {
+                                        try { Thread.sleep(120L * (attempt + 1)) } catch (_: Exception) {}
+                                    }
                                 }
                             }
+
+                            val doneNow = completedUnits.incrementAndGet()
+                            val nowMs = System.currentTimeMillis()
+                            val prevEmit = lastEmitTimeMs.get()
+                            if (doneNow == totalUnits || (nowMs - prevEmit >= 180L && lastEmitTimeMs.compareAndSet(prevEmit, nowMs))) {
+                                val bytesNow = receivedBytes.get()
+                                val pct = (8 + ((doneNow.toDouble() / totalUnits.toDouble()) * 88.0)).toInt().coerceIn(8, 96)
+                                val mbNow = String.format(java.util.Locale.US, "%.1f", bytesNow / (1024.0 * 1024.0))
+                                val elapsedSec = ((nowMs - startTimeMs) / 1000.0).coerceAtLeast(0.25)
+                                val speedMb = String.format(java.util.Locale.US, "%.1f", (bytesNow / (1024.0 * 1024.0)) / elapsedSec)
+                                onProgress(pct, "Receiving directly ($mbNow MB • $speedMb MB/s)...")
+                            }
                         }
+                    } finally {
+                        latch.countDown()
                     }
                 }
-                completedUnits++
-                val pct = (10 + ((completedUnits.toDouble() / totalUnits.toDouble()) * 85.0)).toInt().coerceIn(10, 96)
-                if (i % 4 == 0 || i == totalAudSegs - 1) {
-                    val mbNow = String.format(java.util.Locale.US, "%.1f", receivedBytes / (1024.0 * 1024.0))
-                    onProgress(pct, "Receiving audio track ($mbNow MB)...")
-                }
             }
+
+            latch.await()
+            firstError.get()?.let { throw it }
 
             saveDownloadManifest(
                 context = context,
@@ -1190,7 +1273,7 @@ object MaxPlayOfflineVault {
 
             onProgress(100, "Transfer Complete!")
             out.put("ok", true)
-            out.put("totalBytes", receivedBytes)
+            out.put("totalBytes", receivedBytes.get())
             out.put("metadata", metaObj)
         } catch (e: Exception) {
             out.put("ok", false)

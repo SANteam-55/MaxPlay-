@@ -20,9 +20,8 @@ import { SuspendedAccountModal } from '../components/common/SuspendedAccountModa
 import { subscribeToAnnouncements } from '../services/contentService';
 import { NativeBridgeService } from '../services/nativeBridgeService';
 import { adManager } from '../services/adService';
-import Hls from 'hls.js';
 import { motion, AnimatePresence } from 'motion/react';
-import { WifiOff, X, Download, ShieldAlert, ArrowUp, Maximize2, Play, Pause, Bell } from 'lucide-react';
+import { WifiOff, X, Download, ShieldAlert, ArrowUp, Bell } from 'lucide-react';
 
 export const RootNavigator: React.FC = () => {
   const { user, isAuthenticated, logout, isLoading: isAuthLoading } = useAuth();
@@ -304,104 +303,6 @@ export const RootNavigator: React.FC = () => {
   const handleSearchDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('search', isOpen), [handleDetailOpenChange]);
   const handleAnimeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('anime', isOpen), [handleDetailOpenChange]);
   const handleMeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('me', isOpen), [handleDetailOpenChange]);
-
-  // Floating In-App Auto-Miniplayer (PiP Mode) State & Handlers
-  const [miniplayerData, setMiniplayerData] = useState<{
-    content: any;
-    streamUrl: string;
-    currentTime: number;
-    title: string;
-    posterUrl?: string;
-  } | null>(null);
-  const [isMiniPlaying, setIsMiniPlaying] = useState<boolean>(true);
-  const miniVideoRef = useRef<HTMLVideoElement | null>(null);
-  const miniHlsRef = useRef<Hls | null>(null);
-
-  useEffect(() => {
-    const handleActivateMini = (e: any) => {
-      const detail = e?.detail;
-      if (!detail || !detail.streamUrl || !detail.content) return;
-      setMiniplayerData(detail);
-      setIsMiniPlaying(true);
-    };
-    const handleCloseMini = () => {
-      setMiniplayerData(null);
-    };
-    window.addEventListener('MAXPLAY_ACTIVATE_MINIPLAYER', handleActivateMini);
-    window.addEventListener('MAXPLAY_CLOSE_MINIPLAYER', handleCloseMini);
-    return () => {
-      window.removeEventListener('MAXPLAY_ACTIVATE_MINIPLAYER', handleActivateMini);
-      window.removeEventListener('MAXPLAY_CLOSE_MINIPLAYER', handleCloseMini);
-    };
-  }, []);
-
-  useEffect(() => {
-    const video = miniVideoRef.current;
-    if (miniHlsRef.current) {
-      miniHlsRef.current.destroy();
-      miniHlsRef.current = null;
-    }
-    if (!miniplayerData || isCurrentDetailOpen || !video) return;
-
-    const url = miniplayerData.streamUrl;
-    const startSec = Number(miniplayerData.currentTime) || 0;
-    const isHls = url.toLowerCase().includes('.m3u8') || url.includes('/proxy/m3u8');
-
-    if (isHls && Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true,
-        startPosition: startSec > 0 ? startSec : -1,
-      });
-      miniHlsRef.current = hls;
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (startSec > 0) {
-          try {
-            video.currentTime = startSec;
-          } catch {}
-        }
-        video.play().then(() => setIsMiniPlaying(true)).catch(() => setIsMiniPlaying(false));
-      });
-    } else {
-      video.src = url;
-      const onLoaded = () => {
-        if (startSec > 0) {
-          try {
-            video.currentTime = startSec;
-          } catch {}
-        }
-        video.play().then(() => setIsMiniPlaying(true)).catch(() => setIsMiniPlaying(false));
-      };
-      video.addEventListener('loadedmetadata', onLoaded, { once: true });
-    }
-
-    return () => {
-      if (miniHlsRef.current) {
-        miniHlsRef.current.destroy();
-        miniHlsRef.current = null;
-      }
-    };
-  }, [miniplayerData, isCurrentDetailOpen]);
-
-  const handleExpandMiniplayer = useCallback(() => {
-    if (!miniplayerData?.content) return;
-    const liveTime = miniVideoRef.current?.currentTime || miniplayerData.currentTime || 0;
-    const resumedItem = {
-      ...miniplayerData.content,
-      _historyResume: {
-        ...(miniplayerData.content._historyResume || {}),
-        watchedSeconds: liveTime,
-        currentTime: liveTime,
-      },
-    };
-    setMiniplayerData(null);
-    setActiveTabState('home');
-    localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('MAXPLAY_SELECT_CONTENT', { detail: resumedItem }));
-    }, 30);
-  }, [miniplayerData]);
 
   // Universal Hardware/Phone Triangle Back Button Interceptor (Web/PWA popstate + Native Android APK Bridge)
   useEffect(() => {
@@ -752,88 +653,6 @@ export const RootNavigator: React.FC = () => {
           >
             <span>📱</span>
             <span>Press back again to exit MaxPlay</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Floating Auto-Miniplayer (PiP Overlay) when leaving Details Screen */}
-      <AnimatePresence>
-        {miniplayerData && !isCurrentDetailOpen && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.85, y: 24 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.85, y: 24 }}
-            transition={{ duration: 0.22 }}
-            className="fixed right-3 bottom-[calc(70px+max(env(safe-area-inset-bottom,0px),8px))] z-[9995] w-60 sm:w-72 rounded-2xl overflow-hidden bg-[#0D0D12] border border-purple-500/40 shadow-[0_12px_40px_rgba(0,0,0,0.85)] select-none"
-          >
-            <div className="relative w-full aspect-video bg-black">
-              <video
-                ref={miniVideoRef}
-                poster={miniplayerData.posterUrl}
-                playsInline
-                className="w-full h-full object-contain bg-black"
-                onClick={handleExpandMiniplayer}
-              />
-
-              {/* Top-Right Close & Fullscreen Controls */}
-              <div className="absolute top-1.5 right-1.5 flex items-center gap-1.5 z-20">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleExpandMiniplayer();
-                  }}
-                  title="Return to Fullscreen Details"
-                  className="p-1.5 rounded-full bg-black/70 hover:bg-purple-600/90 text-white border border-white/15 backdrop-blur-md transition active:scale-90 cursor-pointer"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMiniplayerData(null);
-                  }}
-                  title="Close Miniplayer"
-                  className="p-1.5 rounded-full bg-black/70 hover:bg-red-600/90 text-white border border-white/15 backdrop-blur-md transition active:scale-90 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Center Play/Pause Toggle */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const v = miniVideoRef.current;
-                  if (!v) return;
-                  if (v.paused) {
-                    v.play().catch(() => {});
-                    setIsMiniPlaying(true);
-                  } else {
-                    v.pause();
-                    setIsMiniPlaying(false);
-                  }
-                }}
-                className="absolute bottom-1.5 left-1.5 p-1.5 rounded-full bg-black/70 hover:bg-white/20 text-white border border-white/15 backdrop-blur-md transition active:scale-90 z-20 cursor-pointer"
-              >
-                {isMiniPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-white" />}
-              </button>
-            </div>
-
-            {/* Bottom Title Bar (Click to Expand back to Details Screen) */}
-            <div
-              onClick={handleExpandMiniplayer}
-              className="px-2.5 py-1.5 bg-[#121218] border-t border-white/10 flex items-center justify-between gap-2 cursor-pointer hover:bg-[#1A1A24] transition"
-            >
-              <span className="text-[11px] font-bold text-white/90 truncate">
-                {miniplayerData.title}
-              </span>
-              <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
-                PiP
-              </span>
-            </div>
           </motion.div>
         )}
       </AnimatePresence>

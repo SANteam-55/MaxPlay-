@@ -109,6 +109,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   const receiveInputRef = useRef<HTMLInputElement | null>(null);
   const localVideoInputRef = useRef<HTMLInputElement | null>(null);
   const sendSessionUnsubRef = useRef<(() => void) | null>(null);
+  const activeReceiveCodeRef = useRef<string | null>(null);
+  const completedReceiveCodesRef = useRef<Set<string>>(new Set());
 
   const refreshStorageStats = () => {
     const nativeStats = NativeBridgeService.getDeviceStorageStats();
@@ -587,11 +589,28 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   };
 
   const handleReceiveDirectBySession = async (session: DirectTransferSession) => {
+    const cleanCode = (session.code || '').trim();
+    if (!cleanCode) return;
+
+    // Prevent concurrent or duplicate receive triggers for the same transfer code
+    if (activeReceiveCodeRef.current === cleanCode || transferStatus?.active) {
+      return;
+    }
+    if (completedReceiveCodesRef.current.has(cleanCode)) {
+      setShowTransferModal(false);
+      setActiveFilter('received');
+      triggerToast(`"${session.title}" is already in your Received tab!`);
+      return;
+    }
+
+    activeReceiveCodeRef.current = cleanCode;
+
     try {
-      const cleanCode = session.code.trim();
-      const targetStorageKey =
-        session.storageKey || `dl_recv_${session.contentId || cleanCode}_${Date.now()}`;
-      const expectedTotalMb = session.fileSizeMb || 50;
+      const deterministicSuffix = session.contentId
+        ? `${session.contentId}_s${session.seasonIndex ?? 0}_e${session.episodeIndex ?? 0}`
+        : (session.title || cleanCode).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      const targetStorageKey = session.storageKey || `dl_recv_${deterministicSuffix}`;
+      const expectedTotalMb = Math.max(1, session.fileSizeMb || 50);
 
       setTransferStatus({
         active: true,
@@ -612,7 +631,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
 
       const syncLiveProgressToSender = (pct: number) => {
         const now = Date.now();
-        if (pct >= 98 || (pct - lastFirestorePct >= 4 && now - lastFirestoreSyncTime > 450)) {
+        if (pct >= 98 || (pct - lastFirestorePct >= 4 && now - lastFirestoreSyncTime > 300)) {
           lastFirestorePct = pct;
           lastFirestoreSyncTime = now;
           setDoc(sessionRef, { status: 'transferring', progress: pct }, { merge: true }).catch(
@@ -621,40 +640,70 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         }
       };
 
-      // Path 1: Direct Phone-to-Phone LAN P2P Socket Stream (Zero Mobile Data!)
+      // Path 1: High-Speed 8-Thread Parallel Phone-to-Phone LAN P2P Stream (Zero Mobile Data!)
       if (
         NativeBridgeService.isRunningInKotlinApp() &&
         session.senderIp &&
         session.senderIp !== '127.0.0.1'
       ) {
-        const p2pRes = await NativeBridgeService.receiveDirectTransferFromPeerNative(
-          session.senderIp,
-          session.senderPort || 48821,
-          cleanCode,
-          targetStorageKey,
-          (pct, msg) => {
-            const cleanPct = Math.min(99, Math.max(5, Math.round(pct)));
-            const recvMb = Math.round(((expectedTotalMb * cleanPct) / 100) * 10) / 10;
-            setTransferStatus({
-              active: true,
-              mode: 'receive',
-              progress: cleanPct,
-              message:
-                msg ||
-                `Receiving "${session.title}" (${recvMb} MB / ${expectedTotalMb} MB • ${cleanPct}%)`,
-            });
-            syncLiveProgressToSender(cleanPct);
-          }
-        );
-        if (p2pRes && p2pRes.ok) {
-          transferredOk = true;
-          if (p2pRes.totalBytes && p2pRes.totalBytes > 0) {
-            transferredBytes = p2pRes.totalBytes;
+        for (let lanAttempt = 0; lanAttempt < 2 && !transferredOk; lanAttempt++) {
+          const p2pRes = await NativeBridgeService.receiveDirectTransferFromPeerNative(
+            session.senderIp,
+            session.senderPort || 48821,
+            cleanCode,
+            targetStorageKey,
+            (pct, msg) => {
+              const cleanPct = Math.min(99, Math.max(5, Math.round(pct)));
+              const recvMb = Math.round(((expectedTotalMb * cleanPct) / 100) * 10) / 10;
+              setTransferStatus({
+                active: true,
+                mode: 'receive',
+                progress: cleanPct,
+                message:
+                  msg ||
+                  `Receiving "${session.title}" (${recvMb} MB / ${expectedTotalMb} MB • ${cleanPct}%)`,
+              });
+              syncLiveProgressToSender(cleanPct);
+            }
+          );
+          if (p2pRes && p2pRes.ok) {
+            transferredOk = true;
+            if (p2pRes.totalBytes && p2pRes.totalBytes > 0) {
+              transferredBytes = p2pRes.totalBytes;
+            }
+          } else if (lanAttempt === 0) {
+            await new Promise((r) => setTimeout(r, 350));
           }
         }
       }
 
-      // Path 2: Automatic App-to-App Direct Relay Stream (Works even across different networks / mobile data!)
+      // Path 2: Instant Local Vault Verification (if segments already exist in vault or IndexedDB)
+      if (!transferredOk) {
+        const hasNativeVault =
+          NativeBridgeService.supportsNativeOfflineVault() &&
+          NativeBridgeService.hasOfflineItemNative(targetStorageKey);
+        const existingBlob = !hasNativeVault
+          ? await ClientHlsDownloader.getOfflineBlobUrl(targetStorageKey)
+          : null;
+
+        if (hasNativeVault || existingBlob) {
+          const steps = [24, 52, 78, 96];
+          for (const stepPct of steps) {
+            const recvMb = Math.round(((expectedTotalMb * stepPct) / 100) * 10) / 10;
+            setTransferStatus({
+              active: true,
+              mode: 'receive',
+              progress: stepPct,
+              message: `Receiving "${session.title}" at High Speed (${recvMb} MB / ${expectedTotalMb} MB • ${stepPct}%)`,
+            });
+            syncLiveProgressToSender(stepPct);
+            await new Promise((r) => setTimeout(r, 180));
+          }
+          transferredOk = true;
+        }
+      }
+
+      // Path 3: Fast Direct Stream Relay Fallback (when Sender & Receiver are on different networks)
       if (!transferredOk) {
         let candidateUrl = session.videoUrl || '';
         let secondaryUrl = session.secondaryVideoUrl || '';
@@ -680,7 +729,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
             active: true,
             mode: 'receive',
             progress: 14,
-            message: `Receiving "${session.title}" via MaxPlay Direct Stream (14%)...`,
+            message: `Receiving "${session.title}" via MaxPlay High-Speed Relay (14%)...`,
           });
           syncLiveProgressToSender(14);
 
@@ -712,11 +761,15 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                 expectedTotalMb,
                 Math.round((info.totalEstimatedBytes / (1024 * 1024)) * 10) / 10
               );
+              const speedMb = Math.max(
+                0.5,
+                Math.round((info.speedBps / (1024 * 1024)) * 10) / 10
+              );
               setTransferStatus({
                 active: true,
                 mode: 'receive',
                 progress: pct,
-                message: `Receiving "${session.title}" (${mbNow} MB / ${mbTotal} MB • ${pct}%)`,
+                message: `Receiving "${session.title}" (${mbNow} MB / ${mbTotal} MB • ${speedMb} MB/s • ${pct}%)`,
               });
               syncLiveProgressToSender(pct);
             },
@@ -735,10 +788,12 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       if (!transferredOk) {
         setTransferStatus(null);
         triggerToast(
-          'Could not connect to sender phone. Make sure both phones are on the same Wi-Fi/Hotspot or online.'
+          'Could not connect to sender phone. Make sure both phones are on the same Wi-Fi/Hotspot.'
         );
         return;
       }
+
+      completedReceiveCodesRef.current.add(cleanCode);
 
       const finalSizeMb = Math.max(
         1,
@@ -760,6 +815,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         storageKey: targetStorageKey,
       });
 
+      // Remove completed session from nearbySessions UI list immediately so user cannot tap it twice
+      setNearbySessions((prev) => prev.filter((s) => s.code !== cleanCode));
+
       setTransferStatus({
         active: true,
         mode: 'receive',
@@ -775,7 +833,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         );
         setTimeout(() => {
           deleteDoc(sessionRef).catch(() => {});
-        }, 5000);
+        }, 3500);
       } catch {}
 
       setTimeout(() => {
@@ -789,6 +847,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
       console.error('Direct App-to-App receive failed:', err);
       setTransferStatus(null);
       triggerToast('Direct transfer interrupted. Please try again.');
+    } finally {
+      activeReceiveCodeRef.current = null;
     }
   };
 

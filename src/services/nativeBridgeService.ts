@@ -97,6 +97,9 @@ interface MaxPlayKotlinBridge {
     callbackId: string
   ) => void;
   downloadAndInstallApk?: (apkUrl: string, versionName: string, title: string) => boolean;
+  openPopunderAd?: (adUrl: string) => boolean;
+  closePopunderAd?: () => boolean;
+  isPopunderAdOpen?: () => boolean;
 }
 
 export interface ApkUpdateProgressState {
@@ -1312,5 +1315,52 @@ export class NativeBridgeService {
         window.location.href = cleanUrl;
       }
     }, 1150);
+  }
+
+  /**
+   * Opens a protocol-safe Native Android WebView Dialog for Popunder Ads.
+   * Handles http://, https://, intent://, market://, and custom schemes without X-Frame-Options or protocol errors,
+   * and closes cleanly on hardware Back button press.
+   */
+  public static openNativePopunderAd(adUrl: string): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.openPopunderAd === 'function'
+      ) {
+        return Boolean(window.MaxPlayNative.openPopunderAd(adUrl));
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Closes the Native Android Popunder Ad Dialog if open.
+   */
+  public static closeNativePopunderAd(): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.closePopunderAd === 'function'
+      ) {
+        return Boolean(window.MaxPlayNative.closePopunderAd());
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Returns true if the Native Android Popunder Ad Dialog is currently showing.
+   */
+  public static isNativePopunderAdOpen(): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.isPopunderAdOpen === 'function'
+      ) {
+        return Boolean(window.MaxPlayNative.isPopunderAdOpen());
+      }
+    } catch {}
+    return false;
   }
 }

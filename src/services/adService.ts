@@ -1,3 +1,5 @@
+import { NativeBridgeService } from './nativeBridgeService';
+
 export const SMART_LINK = 'https://www.profitableratecpmnetwork.com/jzti8g4u0?key=e656e2aa9595a540eeb85090eea2154a';
 export const POPUNDER_SCRIPT_URL = 'https://pl31325136.profitableratecpmnetwork.com/1a/c8/8e/1ac88ea5a8cc8d5523ba3cd38b64b984.js';
 
@@ -37,6 +39,9 @@ class AdService {
    * Returns true if the Popunder Ad view is currently open on top of the player/details screen.
    */
   public isAdOverlayOpen(): boolean {
+    if (NativeBridgeService.isNativePopunderAdOpen()) {
+      return true;
+    }
     return Boolean(this.adOverlayElement && document.body.contains(this.adOverlayElement));
   }
 
@@ -45,27 +50,61 @@ class AdService {
    * without reloading the app or interrupting playback.
    */
   public closeAdOverlay(): boolean {
+    let closed = false;
+    if (NativeBridgeService.isNativePopunderAdOpen()) {
+      NativeBridgeService.closeNativePopunderAd();
+      closed = true;
+    }
     if (this.adOverlayElement) {
       try {
         this.adOverlayElement.remove();
       } catch (_) {}
       this.adOverlayElement = null;
-      return true;
+      closed = true;
     }
-    return false;
+    return closed;
   }
 
   /**
-   * Opens the Popunder Ad inside a Back-button shielded layer so:
-   * 1. It is never blocked by browser/WebView popup blockers.
-   * 2. Pressing the phone's Back button returns directly to the Video Player or Details Screen instead of exiting the app.
+   * Injects/refreshes the official Popunder ad script tag so ad network protocol handlers run cleanly.
+   */
+  private triggerPopunderScriptTag() {
+    if (typeof document === 'undefined') return;
+    try {
+      const existing = document.getElementById('maxplay-popunder-network-script');
+      if (existing) {
+        existing.remove();
+      }
+      const script = document.createElement('script');
+      script.id = 'maxplay-popunder-network-script';
+      script.type = 'text/javascript';
+      script.async = true;
+      script.src = POPUNDER_SCRIPT_URL;
+      (document.body || document.head).appendChild(script);
+    } catch (_) {}
+  }
+
+  /**
+   * Opens the Popunder Ad inside a protocol-safe, Back-button shielded layer:
+   * 1. Inside the Android APK: Opens a dedicated Native Android WebView Dialog (`openNativePopunderAd`)
+   *    that supports http://, https://, intent://, and market:// redirects without X-Frame-Options or
+   *    ERR_UNKNOWN_URL_SCHEME errors, and closes immediately on hardware Back press.
+   * 2. In Web Browsers: Triggers the official popunder script and renders a non-sandboxed Back-shielded
+   *    container so pressing Back returns directly to the Video Player or Details Screen.
    */
   private openPopunder(isPremium?: boolean) {
     if (isPremium || typeof document === 'undefined') return;
     if (this.isAdOverlayOpen()) return;
 
+    // 1. Native Android APK Protocol-Safe Ad Dialog (Zero iframe/X-Frame-Options/intent:// blocks!)
+    if (NativeBridgeService.openNativePopunderAd(SMART_LINK)) {
+      return;
+    }
+
+    // 2. Web Browser Fallback: Trigger official Popunder Script + Back-shielded container without restrictive sandbox
+    this.triggerPopunderScriptTag();
+
     try {
-      // Push a shield history state so browser/WebView back button closes the ad first
       try {
         window.history.pushState({ maxplayAdShield: true }, '');
       } catch (_) {}
@@ -97,8 +136,9 @@ class AdService {
 
       const iframe = document.createElement('iframe');
       iframe.src = SMART_LINK;
-      iframe.style.cssText = 'flex:1;width:100%;height:100%;border:none;background:#fff;';
-      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+      iframe.referrerPolicy = 'no-referrer-when-downgrade';
+      iframe.allow = 'autoplay; fullscreen; encrypted-media';
+      iframe.style.cssText = 'flex:1;width:100%;height:100%;border:none;background:#0A0A0A;';
 
       overlay.appendChild(topBar);
       overlay.appendChild(iframe);

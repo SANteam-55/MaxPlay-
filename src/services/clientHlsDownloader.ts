@@ -1667,6 +1667,12 @@ export class ClientHlsDownloader {
       // Persist in 4 MB chunks into IndexedDB so it stays available across sessions without OOM
       const CHUNK_SIZE = 4 * 1024 * 1024;
       const totalChunks = Math.max(1, Math.ceil(totalBytes / CHUNK_SIZE));
+      const rawMime = (file.type || '').toLowerCase();
+      const normalizedMime = rawMime.includes('webm')
+        ? 'video/webm'
+        : rawMime.includes('ogg')
+        ? 'video/ogg'
+        : 'video/mp4';
 
       // Cap persistent IndexedDB copy at 350 MB to avoid browser quota errors while keeping directUrl playable for any size
       if (totalBytes > 0 && totalBytes <= 350 * 1024 * 1024) {
@@ -1680,6 +1686,7 @@ export class ClientHlsDownloader {
         }
         await putChunk(`${storageKey}_totalChunks`, totalChunks);
         await putChunk(`${storageKey}_isSingleFile`, 1);
+        await putChunk(`${storageKey}_mimeType`, normalizedMime);
         await putChunk(`${storageKey}_durationSec`, meta.durationSec || 1440);
       } else {
         onProgress?.(85, 'Indexing large local video for direct hardware playback...');

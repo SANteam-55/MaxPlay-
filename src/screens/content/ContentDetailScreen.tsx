@@ -2456,67 +2456,25 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [playbackPosition, selectedSeasonIndex, partProgressMap, saveProgressNow]);
 
-  // Close any active floating Miniplayer when ContentDetailScreen opens
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('MAXPLAY_CLOSE_MINIPLAYER'));
-  }, [content?.id]);
-
-  const triggerMiniplayerOnLeave = useCallback(() => {
+  const saveProgressOnLeave = useCallback(() => {
     try {
-      const autoPipEnabled = localStorage.getItem('maxplay_auto_miniplayer') !== 'false';
-      if (!autoPipEnabled || !content) return;
+      if (!content) return;
       const activeState = (window as any).__maxplayActivePlaybackState;
-      const streamUrl = activeState?.streamUrl;
-      if (!streamUrl || activeState?.isIframe) return;
       const resumeSec = Math.max(Number(activeState?.currentTime) || 0, playbackPosition || 0);
-      saveProgressNow(resumeSec, false, true);
-
-      const resumeContent = {
-        ...content,
-        _historyResume: {
-          seasonIndex: selectedSeasonIndex,
-          episodeIndex: selectedEpisodeIndex,
-          partIndex: selectedPartIndex,
-          watchedSeconds: resumeSec,
-          currentTime: resumeSec,
-          activeLanguage,
-          activeQuality,
-        },
-      };
-
-      window.dispatchEvent(
-        new CustomEvent('MAXPLAY_ACTIVATE_MINIPLAYER', {
-          detail: {
-            content: resumeContent,
-            streamUrl,
-            currentTime: resumeSec,
-            title: playerTitle || content.title || 'MaxPlay Video',
-            posterUrl: posterOrBackdrop,
-          },
-        })
-      );
+      if (resumeSec > 0) {
+        saveProgressNow(resumeSec, false, true);
+      }
     } catch {}
-  }, [
-    content,
-    playbackPosition,
-    selectedSeasonIndex,
-    selectedEpisodeIndex,
-    selectedPartIndex,
-    activeLanguage,
-    activeQuality,
-    playerTitle,
-    posterOrBackdrop,
-    saveProgressNow,
-  ]);
+  }, [content, playbackPosition, saveProgressNow]);
 
   const handleBackWithMiniplayer = useCallback(() => {
-    triggerMiniplayerOnLeave();
+    saveProgressOnLeave();
     onBack();
-  }, [triggerMiniplayerOnLeave, onBack]);
+  }, [saveProgressOnLeave, onBack]);
 
   useEffect(() => {
     const onHardwarePop = () => {
-      triggerMiniplayerOnLeave();
+      saveProgressOnLeave();
     };
     window.addEventListener('MAXPLAY_POP_STACK_HOME', onHardwarePop, { capture: true });
     window.addEventListener('MAXPLAY_POP_STACK_SEARCH', onHardwarePop, { capture: true });
@@ -2528,7 +2486,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       window.removeEventListener('MAXPLAY_POP_STACK_ANIME', onHardwarePop, { capture: true });
       window.removeEventListener('MAXPLAY_POP_STACK_ME', onHardwarePop, { capture: true });
     };
-  }, [triggerMiniplayerOnLeave]);
+  }, [saveProgressOnLeave]);
 
   return (
     <div className="relative flex flex-col h-full w-full overflow-hidden bg-[#09090b]">
