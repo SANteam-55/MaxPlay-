@@ -6137,9 +6137,9 @@
               remainingSeconds: 10200
             };
           }
-          // If Native bridge returned an explicit error, surface it instead of hitting local static appassets HTML!
-          if (window.location.hostname === 'appassets.androidplatform.net' && nativeData && nativeData.error) {
-            console.warn('[AdminNativeVerify] Native probe returned error, trying cloud fallback:', nativeData.error);
+          if (nativeData && nativeData.error) {
+            window.__lastNativeVerifyError = nativeData.error;
+            console.warn('[AdminNativeVerify] Native probe returned error:', nativeData.error);
           }
         } catch (nativeErr) {
           console.warn('[AdminNativeVerify] Native probe exception:', nativeErr);
@@ -6147,13 +6147,12 @@
       }
 
       // 2. Web / Cloud Server Extractor API Fallback
-      // When running inside APK (appassets.androidplatform.net), relative '/api/extract-stream' hits local static files!
-      // Always use the live cloud backend URL when on appassets.androidplatform.net.
       const apiEndpoints = window.location.hostname === 'appassets.androidplatform.net'
         ? ['https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app/api/extract-stream']
         : ['/api/extract-stream', 'https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app/api/extract-stream'];
 
-      let lastErrMsg = 'Could not extract HLS stream metadata';
+      let lastErrMsg = window.__lastNativeVerifyError || 'Could not extract HLS stream metadata';
+      window.__lastNativeVerifyError = '';
       for (const endpoint of apiEndpoints) {
         try {
           const resp = await fetch(endpoint, {
@@ -6168,7 +6167,9 @@
           });
           const rawText = await resp.text();
           if (!rawText || rawText.trim().startsWith('<')) {
-            lastErrMsg = 'Extractor endpoint returned HTML instead of JSON';
+            if (!lastErrMsg || lastErrMsg === 'Could not extract HLS stream metadata') {
+              lastErrMsg = 'Extractor endpoint returned HTML instead of JSON';
+            }
             continue;
           }
           const data = JSON.parse(rawText);
@@ -6193,7 +6194,9 @@
             lastErrMsg = data.error;
           }
         } catch (fetchErr) {
-          lastErrMsg = fetchErr.message || 'Network error';
+          if (!lastErrMsg || lastErrMsg === 'Could not extract HLS stream metadata') {
+            lastErrMsg = fetchErr.message || 'Network error';
+          }
         }
       }
 

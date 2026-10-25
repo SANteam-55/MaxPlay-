@@ -248,6 +248,26 @@ export class SmartStreamService {
     }
   }
 
+  private static streamHostRefererMap = new Map<string, string>();
+
+  /**
+   * Registers an explicit Referer for a resolved stream URL and its CDN host/root domain.
+   */
+  public static registerStreamHostReferer(streamUrl: string, refererUrl: string): void {
+    if (!streamUrl || !refererUrl) return;
+    try {
+      const u = new URL(streamUrl);
+      const host = u.hostname.toLowerCase();
+      if (!host) return;
+      this.streamHostRefererMap.set(host, refererUrl);
+      const parts = host.split(".");
+      if (parts.length >= 2) {
+        const root = parts.slice(-2).join(".");
+        this.streamHostRefererMap.set(root, refererUrl);
+      }
+    } catch {}
+  }
+
   /**
    * Stores stream URL and optional extracted metadata in client session & local storage.
    */
@@ -262,11 +282,20 @@ export class SmartStreamService {
       if (!cleanUrl) return;
       const key = this.getCacheKey(cleanUrl);
       const existing = this.getClientCache(cleanUrl);
+      const mergedMeta = meta || existing?.meta;
+      const ref =
+        mergedMeta?.referer ||
+        mergedMeta?.headers?.Referer ||
+        mergedMeta?.headers?.referer ||
+        "";
+      if (ref && m3u8Url) {
+        this.registerStreamHostReferer(m3u8Url, ref);
+      }
       const data: ClientCachedStream = {
         m3u8Url,
         expiresAt,
         cachedAt: Date.now(),
-        meta: meta || existing?.meta,
+        meta: mergedMeta,
       };
       sessionStorage.setItem(key, JSON.stringify(data));
       localStorage.setItem(key, JSON.stringify(data));
@@ -315,29 +344,43 @@ export class SmartStreamService {
       return cachedMeta.headers.Referer || cachedMeta.headers.referer || "";
     }
 
+    try {
+      const parsedHost = new URL(trimmed).hostname.toLowerCase();
+      if (parsedHost) {
+        const directHostRef = this.streamHostRefererMap.get(parsedHost);
+        if (directHostRef) return directHostRef;
+        const parts = parsedHost.split(".");
+        if (parts.length >= 2) {
+          const root = parts.slice(-2).join(".");
+          const rootRef = this.streamHostRefererMap.get(root);
+          if (rootRef) return rootRef;
+        }
+      }
+    } catch {}
+
     const lower = trimmed.toLowerCase();
     if (
+      lower.includes("sprintcdn") ||
+      lower.includes("owphbf") ||
+      lower.includes("n1mwq") ||
+      lower.includes("bysedikamoum") ||
+      lower.includes("byseraguci") ||
+      lower.includes("byse") ||
+      lower.includes("filemoon")
+    ) {
+      return "https://n1mwq.org/";
+    }
+    if (
       lower.includes("f16px.") ||
-      lower.includes("filemoon") ||
       lower.includes("moonmov") ||
       lower.includes("kerapoxy") ||
       lower.includes("1azayf9w") ||
       lower.includes("8mhlloqo") ||
       lower.includes("96ar.com") ||
       lower.includes("xcoic.com") ||
-      lower.includes("l1afav.net") ||
-      lower.includes("sprintcdn") ||
-      lower.includes("owphbf")
+      lower.includes("l1afav.net")
     ) {
       return "https://f16px.com/";
-    }
-    if (
-      lower.includes("bysedikamoum") ||
-      lower.includes("byseraguci") ||
-      lower.includes("byse") ||
-      lower.includes("n1mwq")
-    ) {
-      return "https://bysedikamoum.com/";
     }
     if (
       lower.includes("voe.") ||

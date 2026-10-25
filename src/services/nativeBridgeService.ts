@@ -591,6 +591,8 @@ export class NativeBridgeService {
     }
   }
 
+  private static inFlightNativeExtractions = new Map<string, Promise<NativeScrapeResult | null>>();
+
   /**
    * Runs the inbuilt Kotlin stream scraper (OkHttp + Deterministic Packer Unpacker + Headless WebView Sniffer fallback)
    * completely asynchronously so the UI never freezes.
@@ -603,90 +605,106 @@ export class NativeBridgeService {
       return null;
     }
 
-    try {
-      // Step 1: Non-blocking Native OkHttp + Deterministic Packer Unpacker Scrape (1-3s)
-      let scrapeData: any = null;
-      if (typeof window.MaxPlayNative.extractStreamNativeAsync === 'function') {
-        scrapeData = await new Promise<any>((resolve) => {
-          const cbId = 's1_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-          const timer = setTimeout(() => {
-            if (window.__maxplaySnifferCallbacks?.[cbId]) {
-              delete window.__maxplaySnifferCallbacks[cbId];
-            }
-            resolve(null);
-          }, 9000);
+    const cleanKey = (sourceUrl || '').trim();
+    if (!cleanKey) return null;
 
-          window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
-            clearTimeout(timer);
-            try {
-              resolve(JSON.parse(resultJson));
-            } catch {
-              resolve(null);
-            }
-          };
-
-          window.MaxPlayNative!.extractStreamNativeAsync!(sourceUrl, '{}', cbId);
-        });
-      } else if (window.MaxPlayNative.extractStreamNative) {
-        const rawJson = window.MaxPlayNative.extractStreamNative(sourceUrl, '{}');
-        if (rawJson) {
-          scrapeData = JSON.parse(rawJson);
-        }
-      }
-
-      // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution (capped at 9s)
-      if ((!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) && window.MaxPlayNative.sniffStreamAsync) {
-        scrapeData = await new Promise<any>((resolve) => {
-          const cbId = 'sniff_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-          const timer = setTimeout(() => {
-            if (window.__maxplaySnifferCallbacks?.[cbId]) {
-              delete window.__maxplaySnifferCallbacks[cbId];
-            }
-            resolve(null);
-          }, 9500);
-
-          window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
-            clearTimeout(timer);
-            try {
-              resolve(JSON.parse(resultJson));
-            } catch {
-              resolve(null);
-            }
-          };
-
-          window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 9000);
-        });
-      }
-
-      if (!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) {
-        return null;
-      }
-
-      const masterUrl: string = scrapeData.m3u8Url;
-      const customHeaders: Record<string, string> = scrapeData.headers || {};
-
-      // Step 3: Parse Master HLS Playlist directly via Native CORS-free stream
-      const meta = await this.parseHlsManifestOnDevice(
-        masterUrl,
-        customHeaders,
-        requestedDurationSec
-      );
-
-      return {
-        ok: true,
-        m3u8Url: masterUrl,
-        qualities: meta.qualities,
-        qualityLinks: meta.qualityLinks,
-        downloadQualities: meta.downloadQualities,
-        audioTracks: meta.audioTracks,
-        duration: meta.duration,
-        headers: customHeaders,
-        method: scrapeData.method || 'kotlin_okhttp',
-      };
-    } catch (err) {
-      console.warn('[NativeBridge] extractStreamNative error:', err);
-      return null;
+    const existingPromise = this.inFlightNativeExtractions.get(cleanKey);
+    if (existingPromise) {
+      return existingPromise;
     }
+
+    const taskPromise = (async (): Promise<NativeScrapeResult | null> => {
+      try {
+        // Step 1: Non-blocking Native OkHttp + Deterministic Packer Unpacker Scrape
+        let scrapeData: any = null;
+        if (typeof window.MaxPlayNative?.extractStreamNativeAsync === 'function') {
+          scrapeData = await new Promise<any>((resolve) => {
+            const cbId = 's1_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            const timer = setTimeout(() => {
+              if (window.__maxplaySnifferCallbacks?.[cbId]) {
+                delete window.__maxplaySnifferCallbacks[cbId];
+              }
+              resolve(null);
+            }, 22000);
+
+            window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
+              clearTimeout(timer);
+              try {
+                resolve(JSON.parse(resultJson));
+              } catch {
+                resolve(null);
+              }
+            };
+
+            window.MaxPlayNative!.extractStreamNativeAsync!(sourceUrl, '{}', cbId);
+          });
+        } else if (window.MaxPlayNative?.extractStreamNative) {
+          const rawJson = window.MaxPlayNative.extractStreamNative(sourceUrl, '{}');
+          if (rawJson) {
+            scrapeData = JSON.parse(rawJson);
+          }
+        }
+
+        // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution
+        if ((!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) && window.MaxPlayNative?.sniffStreamAsync) {
+          scrapeData = await new Promise<any>((resolve) => {
+            const cbId = 'sniff_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            const timer = setTimeout(() => {
+              if (window.__maxplaySnifferCallbacks?.[cbId]) {
+                delete window.__maxplaySnifferCallbacks[cbId];
+              }
+              resolve(null);
+            }, 16500);
+
+            window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
+              clearTimeout(timer);
+              try {
+                resolve(JSON.parse(resultJson));
+              } catch {
+                resolve(null);
+              }
+            };
+
+            window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 16000);
+          });
+        }
+
+        if (!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) {
+          return null;
+        }
+
+        const masterUrl: string = scrapeData.m3u8Url;
+        const customHeaders: Record<string, string> = scrapeData.headers || {};
+
+        // Step 3: Parse Master HLS Playlist directly via Native CORS-free stream
+        const meta = await this.parseHlsManifestOnDevice(
+          masterUrl,
+          customHeaders,
+          requestedDurationSec,
+          scrapeData.byseMeta
+        );
+
+        return {
+          ok: true,
+          m3u8Url: masterUrl,
+          qualities: meta.qualities,
+          qualityLinks: meta.qualityLinks,
+          downloadQualities: meta.downloadQualities,
+          audioTracks: meta.audioTracks,
+          duration: meta.duration,
+          headers: customHeaders,
+          method: scrapeData.method || 'kotlin_okhttp',
+        };
+      } catch (err) {
+        console.warn('[NativeBridge] extractStreamNative error:', err);
+        return null;
+      } finally {
+        this.inFlightNativeExtractions.delete(cleanKey);
+      }
+    })();
+
+    this.inFlightNativeExtractions.set(cleanKey, taskPromise);
+    return taskPromise;
   }
 
   /**
@@ -695,7 +713,8 @@ export class NativeBridgeService {
   public static async parseHlsManifestOnDevice(
     m3u8Url: string,
     headers: Record<string, string> = {},
-    durationSec: number = 0
+    durationSec: number = 0,
+    byseMeta?: any
   ): Promise<{
     qualities: string[];
     qualityLinks: Record<string, string>;
@@ -709,22 +728,44 @@ export class NativeBridgeService {
     audioTracks: string[];
     duration: number;
   }> {
-    const fallbackQualities = ['1080p', '720p'];
-    const fallbackDownloadQualities = [
-      { id: '1080p', label: '1080p Full HD', sizeMb: 450, url: m3u8Url, bandwidth: 2200000 },
-      { id: '720p', label: '720p HD', sizeMb: 240, url: m3u8Url, bandwidth: 1100000 },
-    ];
-    const fallbackAudios = ['Hindi', 'English'];
+    const metaHeight = Number(byseMeta?.height || 0);
+    const metaBitrateKbps = Number(byseMeta?.bitrateKbps || 0);
+    const metaAudios: string[] = Array.isArray(byseMeta?.audioTracks) && byseMeta.audioTracks.length > 0
+      ? byseMeta.audioTracks
+      : ['Hindi', 'English'];
+    const primaryQ =
+      metaHeight >= 1000 ? '1080p' : metaHeight >= 700 ? '720p' : metaHeight >= 450 ? '480p' : '1080p';
+    const primaryBw = metaBitrateKbps > 0 ? metaBitrateKbps * 1000 : 2200000;
+    const effDur = durationSec || 1440;
+    const primaryMb = Math.max(20, Math.round((primaryBw * effDur) / (8 * 1024 * 1024)));
+
+    const fallbackQualities = metaHeight > 0 ? [primaryQ] : ['1080p', '720p'];
+    const fallbackDownloadQualities =
+      metaHeight > 0
+        ? [
+            {
+              id: primaryQ,
+              label: `${primaryQ} ${primaryQ === '1080p' ? 'Full HD' : primaryQ === '720p' ? 'HD' : 'Standard'}`,
+              sizeMb: primaryMb,
+              url: m3u8Url,
+              bandwidth: primaryBw,
+            },
+          ]
+        : [
+            { id: '1080p', label: '1080p Full HD', sizeMb: 450, url: m3u8Url, bandwidth: 2200000 },
+            { id: '720p', label: '720p HD', sizeMb: 240, url: m3u8Url, bandwidth: 1100000 },
+          ];
+    const fallbackAudios = metaAudios;
 
     try {
       const text = await this.fetchTextCorsFree(m3u8Url, headers);
       if (!text) {
         return {
           qualities: fallbackQualities,
-          qualityLinks: { '1080p': m3u8Url, '720p': m3u8Url },
+          qualityLinks: metaHeight > 0 ? { [primaryQ]: m3u8Url } : { '1080p': m3u8Url, '720p': m3u8Url },
           downloadQualities: fallbackDownloadQualities,
           audioTracks: fallbackAudios,
-          duration: durationSec || 1440,
+          duration: effDur,
         };
       }
 

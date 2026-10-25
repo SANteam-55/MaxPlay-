@@ -527,20 +527,25 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     const defaultSingleQ = cleanForcedQ || '1080p';
 
     try {
-      let referer = customReferer || 'https://byseraguci.com/';
+      let referer = customReferer || 'https://n1mwq.org/';
       if (!customReferer) {
         try {
           const u = new URL(m3u8Url);
-          if (!u.hostname.includes('sprintcdn') && !u.hostname.includes('owphbf') && !u.hostname.includes('filemoon') && !u.hostname.includes('byse')) {
+          if (!u.hostname.includes('sprintcdn') && !u.hostname.includes('owphbf') && !u.hostname.includes('filemoon') && !u.hostname.includes('byse') && !u.hostname.includes('n1mwq')) {
             referer = `${u.origin}/`;
           }
         } catch {}
       }
+      let originHeader = '';
+      try {
+        originHeader = new URL(referer).origin;
+      } catch {}
 
       const resp = await fetch(m3u8Url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           'Referer': referer,
+          ...(originHeader ? { 'Origin': originHeader } : {}),
           'Accept': '*/*'
         },
         signal: AbortSignal.timeout(5000)
@@ -1061,10 +1066,18 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     getOrAttestByseFingerprint("https://n1mwq.org", "https://n1mwq.org/30s/wm894ng2635g", defaultByseUa).catch(() => {});
   }, 8 * 60 * 1000);
 
+  const bysePlaybackCache = new Map<string, { result: any; expiresAt: number }>();
+
   async function extractFilemoonByseStream(sourceUrl: string): Promise<{
     ok: boolean;
     m3u8Url?: string;
     headers?: Record<string, string>;
+    byseMeta?: {
+      height: number;
+      bitrateKbps: number;
+      label: string;
+      audioTracks: string[];
+    };
     error?: string;
   }> {
     const ua = defaultByseUa;
@@ -1078,27 +1091,55 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       // STAGE 1: Byse / F16Px API + Pre-Warmed ECDSA P-256 Attestation + Fast PoW Captcha + AES-256-GCM Decryption
       if (code && code.length >= 6) {
+        const cachedPb = bysePlaybackCache.get(code);
+        if (cachedPb && cachedPb.expiresAt > Date.now()) {
+          return cachedPb.result;
+        }
+
         try {
           let embedOrigin = byseEmbedOriginCache.get(origin) || "";
           let embedFrameUrl = embedOrigin ? `${embedOrigin}/30s/${code}` : "";
+          let videoTitle = "";
+          let defaultLangCode = "";
 
-          if (!embedOrigin) {
-            const detailsRes = await fetch(`${origin}/api/videos/${code}/embed/details`, {
+          const [detailsRes, settingsRes] = await Promise.all([
+            fetch(`${origin}/api/videos/${code}/embed/details`, {
               headers: {
                 "User-Agent": ua,
                 "Accept": "application/json",
                 "Referer": `${origin}/e/${code}`
               },
               signal: AbortSignal.timeout(5000)
-            });
+            }).catch(() => null),
+            fetch(`${origin}/api/videos/${code}/settings`, {
+              headers: {
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Referer": `${origin}/e/${code}`
+              },
+              signal: AbortSignal.timeout(4000)
+            }).catch(() => null)
+          ]);
 
-            if (detailsRes.ok) {
-              const details = await detailsRes.json();
-              embedFrameUrl = details?.embed_frame_url || `${origin}/e/${code}`;
+          if (detailsRes && detailsRes.ok) {
+            const details = await detailsRes.json().catch(() => ({}));
+            videoTitle = details?.title || "";
+            if (details?.embed_frame_url) {
+              embedFrameUrl = details.embed_frame_url;
               const embedParsed = new URL(embedFrameUrl);
               embedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
               byseEmbedOriginCache.set(origin, embedOrigin);
             }
+          }
+
+          if (settingsRes && settingsRes.ok) {
+            const settings = await settingsRes.json().catch(() => ({}));
+            defaultLangCode = settings?.default_language || "";
+          }
+
+          if (!embedOrigin) {
+            embedOrigin = "https://n1mwq.org";
+            embedFrameUrl = `${embedOrigin}/30s/${code}`;
           }
 
           if (embedOrigin) {
@@ -1193,21 +1234,30 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                 };
 
                 const sourcesList: string[] = [];
-                if (pb.payload && pb.iv && Array.isArray(pb.key_parts) && pb.key_parts.length >= 2) {
-                  const dec1 = decryptPayload(pb.payload, pb.iv, pb.key_parts, pb.version);
-                  if (Array.isArray(dec1?.sources)) {
-                    for (const s of dec1.sources) {
-                      if (s?.url && typeof s.url === "string") sourcesList.push(s.url);
+                let bestHeight = 0;
+                let bestBitrateKbps = 0;
+                let bestLabel = "";
+                const collectSources = (decObj: any) => {
+                  if (Array.isArray(decObj?.sources)) {
+                    for (const s of decObj.sources) {
+                      if (s?.url && typeof s.url === "string") {
+                        sourcesList.push(s.url);
+                        const h = Number(s.height || 0);
+                        const br = Number(s.bitrate_kbps || 0);
+                        const lbl = String(s.label || "");
+                        if (h > bestHeight) bestHeight = h;
+                        if (br > bestBitrateKbps) bestBitrateKbps = br;
+                        if (!bestLabel && lbl) bestLabel = lbl;
+                      }
                     }
                   }
+                };
+
+                if (pb.payload && pb.iv && Array.isArray(pb.key_parts) && pb.key_parts.length >= 2) {
+                  collectSources(decryptPayload(pb.payload, pb.iv, pb.key_parts, pb.version));
                 }
                 if (pb.payload2 && pb.iv2 && Array.isArray(pb.key_parts2) && pb.key_parts2.length >= 2) {
-                  const dec2 = decryptPayload(pb.payload2, pb.iv2, pb.key_parts2, pb.version2 || pb.version);
-                  if (Array.isArray(dec2?.sources)) {
-                    for (const s of dec2.sources) {
-                      if (s?.url && typeof s.url === "string") sourcesList.push(s.url);
-                    }
-                  }
+                  collectSources(decryptPayload(pb.payload2, pb.iv2, pb.key_parts2, pb.version2 || pb.version));
                 }
 
                 // Prefer edge sprintcdn / owphbf / master.m3u8 URL
@@ -1217,15 +1267,40 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                   sourcesList[0];
 
                 if (bestM3u8) {
-                  return {
+                  const detectedAudios: string[] = [];
+                  const combinedMeta = `${defaultLangCode} ${videoTitle}`.toLowerCase();
+                  const addLang = (l: string) => {
+                    if (l && !detectedAudios.includes(l)) detectedAudios.push(l);
+                  };
+                  if (combinedMeta.includes("hin") || /\bhi\b/.test(combinedMeta)) addLang("Hindi");
+                  if (combinedMeta.includes("eng") || /\ben\b/.test(combinedMeta)) addLang("English");
+                  if (combinedMeta.includes("tam") || /\bta\b/.test(combinedMeta)) addLang("Tamil");
+                  if (combinedMeta.includes("tel") || /\bte\b/.test(combinedMeta)) addLang("Telugu");
+                  if (combinedMeta.includes("mal") || /\bml\b/.test(combinedMeta)) addLang("Malayalam");
+                  if (combinedMeta.includes("kan") || /\bkn\b/.test(combinedMeta)) addLang("Kannada");
+                  if (combinedMeta.includes("jpn") || combinedMeta.includes("jap")) addLang("Japanese");
+                  if (combinedMeta.includes("kor")) addLang("Korean");
+
+                  const resultObj = {
                     ok: true,
                     m3u8Url: bestM3u8,
                     headers: {
                       "Referer": `${embedOrigin}/`,
                       "Origin": embedOrigin,
                       "User-Agent": ua
+                    },
+                    byseMeta: {
+                      height: bestHeight,
+                      bitrateKbps: bestBitrateKbps,
+                      label: bestLabel,
+                      audioTracks: detectedAudios
                     }
                   };
+                  bysePlaybackCache.set(code, {
+                    result: resultObj,
+                    expiresAt: Date.now() + 10 * 60 * 1000
+                  });
+                  return resultObj;
                 }
               }
             }
@@ -1388,7 +1463,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         if (fmResult.ok && fmResult.m3u8Url) {
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = now + ttlMs;
-          const customRef = fmResult.headers?.["Referer"] || "https://byseraguci.com/";
+          const customRef = fmResult.headers?.["Referer"] || "https://n1mwq.org/";
           const streamMeta = await parseHlsManifestMetadata(
             fmResult.m3u8Url,
             requestedDuration,
@@ -1397,6 +1472,36 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             forcedQuality || undefined,
             trimmedUrl
           );
+
+          // Enrich streamMeta with decrypted Byse API metadata if CDN playlist probe timed out or lacked audio tags
+          if (fmResult.byseMeta) {
+            if (Array.isArray(fmResult.byseMeta.audioTracks) && fmResult.byseMeta.audioTracks.length > 0) {
+              for (const lang of fmResult.byseMeta.audioTracks) {
+                if (!streamMeta.audioTracks.includes(lang)) {
+                  streamMeta.audioTracks.push(lang);
+                }
+              }
+            }
+            if (!streamMeta.downloadQualities || streamMeta.downloadQualities.length === 0) {
+              const h = fmResult.byseMeta.height || 0;
+              const qLabel = forcedQuality || (h >= 1000 ? "1080p" : h >= 700 ? "720p" : h >= 450 ? "480p" : "1080p");
+              const bw = fmResult.byseMeta.bitrateKbps > 0 ? fmResult.byseMeta.bitrateKbps * 1000 : 2200000;
+              const dur = streamMeta.duration || requestedDuration || 1440;
+              const estMb = Math.max(15, Math.round((bw * dur) / (8 * 1024 * 1024)));
+              if (!streamMeta.qualities || streamMeta.qualities.length === 0) {
+                streamMeta.qualities = [qLabel];
+              }
+              streamMeta.downloadQualities = [
+                {
+                  id: qLabel,
+                  label: `${qLabel} ${qLabel.includes("1080") ? "Full HD" : qLabel.includes("720") ? "HD" : "Standard"}`,
+                  sizeMb: estMb,
+                  url: trimmedUrl,
+                  bandwidth: bw
+                }
+              ];
+            }
+          }
 
           const host = req.get('host') || 'localhost:3000';
           const proto = (req.secure || req.headers['x-forwarded-proto'] === 'https' || host.includes('hf.space')) ? 'https' : 'http';
@@ -1836,20 +1941,25 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       if (!referer) {
         try {
           const u = new URL(targetUrl);
-          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse")) {
-            referer = "https://byseraguci.com/";
+          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse") || u.hostname.includes("n1mwq")) {
+            referer = "https://n1mwq.org/";
           } else {
             referer = `${u.origin}/`;
           }
         } catch {
-          referer = "https://byseraguci.com/";
+          referer = "https://n1mwq.org/";
         }
       }
+      let originHeader = "";
+      try {
+        originHeader = new URL(referer).origin;
+      } catch {}
 
       const upstream = await fetch(targetUrl, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           "Referer": referer,
+          ...(originHeader ? { "Origin": originHeader } : {}),
           "Accept": "*/*"
         },
         signal: AbortSignal.timeout(15000)
@@ -1939,19 +2049,24 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       if (!referer) {
         try {
           const u = new URL(targetUrl);
-          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse")) {
-            referer = "https://byseraguci.com/";
+          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse") || u.hostname.includes("n1mwq")) {
+            referer = "https://n1mwq.org/";
           } else {
             referer = `${u.origin}/`;
           }
         } catch {
-          referer = "https://byseraguci.com/";
+          referer = "https://n1mwq.org/";
         }
       }
+      let originHeader = "";
+      try {
+        originHeader = new URL(referer).origin;
+      } catch {}
 
       const headers: Record<string, string> = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": referer,
+        ...(originHeader ? { "Origin": originHeader } : {}),
         "Accept": "*/*"
       };
 
@@ -2013,9 +2128,29 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         res.status(400).json({ error: "Missing or invalid url parameter" });
         return;
       }
+      let referer = (req.query.referer as string || "").trim();
+      if (!referer) {
+        try {
+          const u = new URL(targetUrl);
+          if (u.hostname.includes("sprintcdn") || u.hostname.includes("owphbf") || u.hostname.includes("filemoon") || u.hostname.includes("byse") || u.hostname.includes("n1mwq")) {
+            referer = "https://n1mwq.org/";
+          } else {
+            referer = `${u.origin}/`;
+          }
+        } catch {
+          referer = "https://n1mwq.org/";
+        }
+      }
+      let originHeader = "";
+      try {
+        originHeader = new URL(referer).origin;
+      } catch {}
+
       const upstream = await fetch(targetUrl, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": referer,
+          ...(originHeader ? { "Origin": originHeader } : {}),
           "Accept": "*/*"
         }
       });

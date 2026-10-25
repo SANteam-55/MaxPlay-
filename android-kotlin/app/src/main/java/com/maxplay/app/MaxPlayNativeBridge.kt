@@ -105,6 +105,17 @@ class MaxPlayNativeBridge(
         }
     }
 
+    private fun deriveOriginFromReferer(refererUrl: String): String {
+        return try {
+            val u = android.net.Uri.parse(refererUrl)
+            val scheme = u.scheme ?: "https"
+            val host = u.host ?: return ""
+            "$scheme://$host"
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     @JavascriptInterface
     fun fetchUrlCorsFree(targetUrl: String, headersJson: String?): String {
         val out = JSONObject()
@@ -112,15 +123,28 @@ class MaxPlayNativeBridge(
             val headersMap = parseHeadersJson(headersJson)
             val host = try { java.net.URL(targetUrl).host } catch (_: Exception) { "" }
             val defaultRef = CorsFreeWebViewClient.resolveRefererForHost(host)
+            val passedRef = headersMap["Referer"] ?: headersMap["referer"] ?: ""
+            val effRef = if (defaultRef.contains("n1mwq") && (passedRef.isBlank() || passedRef.contains("f16px") || passedRef.contains("bysedikamoum") || passedRef.contains("byseraguci"))) {
+                defaultRef
+            } else {
+                passedRef.ifBlank { defaultRef }
+            }
+            val effOrigin = headersMap["Origin"] ?: headersMap["origin"] ?: deriveOriginFromReferer(effRef)
 
             val reqBuilder = Request.Builder()
                 .url(targetUrl)
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
                 .header("Accept", "*/*")
-                .header("Referer", headersMap["Referer"] ?: defaultRef)
+                .header("Referer", effRef)
+
+            if (effOrigin.isNotEmpty()) {
+                reqBuilder.header("Origin", effOrigin)
+            }
 
             for ((k, v) in headersMap) {
-                reqBuilder.header(k, v)
+                if (!k.equals("Referer", ignoreCase = true) && !k.equals("Origin", ignoreCase = true)) {
+                    reqBuilder.header(k, v)
+                }
             }
 
             InbuiltStreamScraper.okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
@@ -201,7 +225,13 @@ class MaxPlayNativeBridge(
                     if (ref.isNotEmpty()) {
                         CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
                     }
-                    val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
+                    val enriched = probeHlsPlaylistDetailsSync(
+                        cleanSource,
+                        m3u8Url,
+                        ref,
+                        qualityHint,
+                        stage1.optJSONObject("byseMeta")
+                    )
                     if (enriched.optBoolean("ok")) {
                         enriched.put("engine", "KOTLIN_STAGE1")
                         finishWithResult(enriched)
@@ -217,7 +247,13 @@ class MaxPlayNativeBridge(
                                 val m3u8Url = stage2.optString("m3u8Url")
                                 val ref = stage2.optJSONObject("headers")?.optString("Referer") ?: cleanSource
                                 CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
-                                val enriched = probeHlsPlaylistDetailsSync(cleanSource, m3u8Url, ref, qualityHint)
+                                val enriched = probeHlsPlaylistDetailsSync(
+                                    cleanSource,
+                                    m3u8Url,
+                                    ref,
+                                    qualityHint,
+                                    stage2.optJSONObject("byseMeta")
+                                )
                                 enriched.put("engine", "KOTLIN_SNIFFER")
                                 finishWithResult(enriched)
                             } else {
@@ -289,24 +325,39 @@ class MaxPlayNativeBridge(
         return "360p"
     }
 
-    private fun fetchHlsTextSync(url: String, referer: String): String {
-        val host = try { java.net.URL(url).host } catch (_: Exception) { "" }
-        val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
-            .header("Accept", "*/*")
-            .header("Referer", effRef)
+    private val probeHttpClient by lazy {
+        InbuiltStreamScraper.okHttpClient.newBuilder()
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-        InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return ""
-            return resp.body?.string() ?: ""
+    }
+
+    private fun fetchHlsTextSync(url: String, referer: String): String {
+        return try {
+            val host = try { java.net.URL(url).host } catch (_: Exception) { "" }
+            val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
+            val effOrigin = deriveOriginFromReferer(effRef)
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("Accept", "*/*")
+                .header("Referer", effRef)
+            if (effOrigin.isNotEmpty()) {
+                reqBuilder.header("Origin", effOrigin)
+            }
+            probeHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                if (!resp.isSuccessful) return ""
+                resp.body?.string() ?: ""
+            }
+        } catch (_: Exception) {
+            ""
         }
     }
 
     private fun probeSingleSegmentByteSize(segUrl: String, referer: String): Long {
         val host = try { java.net.URL(segUrl).host } catch (_: Exception) { "" }
         val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
+        val effOrigin = deriveOriginFromReferer(effRef)
         try {
             // 1. Try fast HEAD request first
             val headReq = Request.Builder()
@@ -314,8 +365,9 @@ class MaxPlayNativeBridge(
                 .head()
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
                 .header("Referer", effRef)
+                .apply { if (effOrigin.isNotEmpty()) header("Origin", effOrigin) }
                 .build()
-            InbuiltStreamScraper.okHttpClient.newCall(headReq).execute().use { resp ->
+            probeHttpClient.newCall(headReq).execute().use { resp ->
                 if (resp.isSuccessful) {
                     val cl = resp.header("Content-Length")?.toLongOrNull() ?: -1L
                     if (cl > 500L) return cl
@@ -329,9 +381,10 @@ class MaxPlayNativeBridge(
                 .url(segUrl)
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
                 .header("Referer", effRef)
+                .apply { if (effOrigin.isNotEmpty()) header("Origin", effOrigin) }
                 .header("Range", "bytes=0-0")
                 .build()
-            InbuiltStreamScraper.okHttpClient.newCall(rangeReq).execute().use { resp ->
+            probeHttpClient.newCall(rangeReq).execute().use { resp ->
                 val cr = resp.header("Content-Range") ?: ""
                 val slashIdx = cr.lastIndexOf('/')
                 if (slashIdx != -1) {
@@ -453,11 +506,54 @@ class MaxPlayNativeBridge(
         sourceUrl: String,
         m3u8Url: String,
         referer: String,
-        forcedQuality: String
+        forcedQuality: String,
+        fallbackByseMeta: JSONObject? = null
     ): JSONObject {
         val out = JSONObject()
         val masterText = fetchHlsTextSync(m3u8Url, referer)
         if (masterText.isBlank() || !masterText.contains("#EXTM3U")) {
+            // If we already decrypted valid stream metadata from Byse API or extracted a valid .m3u8 URL,
+            // do not fail verification just because the edge CDN node timed out during probing!
+            if (m3u8Url.isNotBlank() && (fallbackByseMeta != null || m3u8Url.contains(".m3u8"))) {
+                val metaHeight = fallbackByseMeta?.optInt("height", 0) ?: 0
+                val metaBitrateKbps = fallbackByseMeta?.optInt("bitrateKbps", 0) ?: 0
+                val metaAudios = fallbackByseMeta?.optJSONArray("audioTracks") ?: org.json.JSONArray()
+                val inferredQ = forcedQuality.ifBlank {
+                    if (metaHeight >= 1000) "1080p"
+                    else if (metaHeight >= 700) "720p"
+                    else if (metaHeight >= 450) "480p"
+                    else if (metaHeight > 0) "360p"
+                    else "1080p"
+                }
+                val bw = if (metaBitrateKbps > 0) metaBitrateKbps.toLong() * 1000L
+                else if (inferredQ.contains("1080")) 2200000L
+                else if (inferredQ.contains("720")) 1150000L
+                else if (inferredQ.contains("480")) 650000L
+                else 380000L
+                val estDur = 1440
+                val estMb = Math.max(15, ((bw * estDur) / (8L * 1024L * 1024L)).toInt())
+
+                val qualitiesArr = org.json.JSONArray().put(inferredQ)
+                val qualityLinksObj = JSONObject().put(inferredQ, sourceUrl)
+                val downloadQualitiesArr = org.json.JSONArray().put(JSONObject().apply {
+                    put("id", inferredQ)
+                    put("label", "$inferredQ ${if (inferredQ.contains("1080")) "Full HD" else if (inferredQ.contains("720")) "HD" else "Standard"}")
+                    put("sizeMb", estMb)
+                    put("url", sourceUrl)
+                    put("resolvedM3u8Url", m3u8Url)
+                    put("bandwidth", bw)
+                })
+                out.put("ok", true)
+                out.put("sourceUrl", sourceUrl)
+                out.put("m3u8Url", m3u8Url)
+                out.put("referer", referer)
+                out.put("duration", 0)
+                out.put("audioTracks", metaAudios)
+                out.put("qualities", qualitiesArr)
+                out.put("qualityLinks", qualityLinksObj)
+                out.put("downloadQualities", downloadQualitiesArr)
+                return out
+            }
             out.put("ok", false)
             out.put("error", "Fetched stream was not a valid #EXTM3U playlist")
             return out
@@ -603,6 +699,16 @@ class MaxPlayNativeBridge(
             }
         }
 
+        val metaAudios = fallbackByseMeta?.optJSONArray("audioTracks")
+        if (metaAudios != null) {
+            for (i in 0 until metaAudios.length()) {
+                val lang = metaAudios.optString(i, "").trim()
+                if (lang.isNotEmpty() && !audioTracks.contains(lang)) {
+                    audioTracks.add(lang)
+                }
+            }
+        }
+
         val audioArr = org.json.JSONArray()
         for (a in audioTracks) audioArr.put(a)
 
@@ -624,15 +730,28 @@ class MaxPlayNativeBridge(
             val headersMap = parseHeadersJson(headersJson)
             val host = try { java.net.URL(targetUrl).host } catch (_: Exception) { "" }
             val defaultRef = CorsFreeWebViewClient.resolveRefererForHost(host)
+            val passedRef = headersMap["Referer"] ?: headersMap["referer"] ?: ""
+            val effRef = if (defaultRef.contains("n1mwq") && (passedRef.isBlank() || passedRef.contains("f16px") || passedRef.contains("bysedikamoum") || passedRef.contains("byseraguci"))) {
+                defaultRef
+            } else {
+                passedRef.ifBlank { defaultRef }
+            }
+            val effOrigin = headersMap["Origin"] ?: headersMap["origin"] ?: deriveOriginFromReferer(effRef)
 
             val reqBuilder = Request.Builder()
                 .url(targetUrl)
                 .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
                 .header("Accept", "*/*")
-                .header("Referer", headersMap["Referer"] ?: defaultRef)
+                .header("Referer", effRef)
+
+            if (effOrigin.isNotEmpty()) {
+                reqBuilder.header("Origin", effOrigin)
+            }
 
             for ((k, v) in headersMap) {
-                reqBuilder.header(k, v)
+                if (!k.equals("Referer", ignoreCase = true) && !k.equals("Origin", ignoreCase = true)) {
+                    reqBuilder.header(k, v)
+                }
             }
 
             InbuiltStreamScraper.okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->

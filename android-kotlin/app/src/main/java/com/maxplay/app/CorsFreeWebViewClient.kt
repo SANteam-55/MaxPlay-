@@ -33,11 +33,19 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
         fun registerStreamReferer(streamUrl: String, refererUrl: String) {
             if (refererUrl.isBlank()) return
-            lastActiveReferer = refererUrl
             try {
                 val host = android.net.Uri.parse(streamUrl).host?.lowercase() ?: return
-                hostRefererMap[host] = refererUrl
                 val root = extractRootDomain(host)
+                val existing = hostRefererMap[host] ?: hostRefererMap[root]
+                // Protect active n1mwq.org referer on sprintcdn/owphbf from being overwritten by generic f16px/byse fallbacks
+                val refLower = refererUrl.lowercase()
+                if (!existing.isNullOrBlank() && existing.lowercase().contains("n1mwq") &&
+                    (refLower.contains("f16px") || refLower.contains("bysedikamoum") || refLower.contains("byseraguci"))
+                ) {
+                    return
+                }
+                lastActiveReferer = refererUrl
+                hostRefererMap[host] = refererUrl
                 if (root.isNotEmpty()) {
                     hostRefererMap[root] = refererUrl
                 }
@@ -51,6 +59,15 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val root = extractRootDomain(cleanHost)
             if (root.isNotEmpty()) {
                 hostRefererMap[root]?.let { return it }
+            }
+            if (cleanHost.contains("sprintcdn") || cleanHost.contains("owphbf") ||
+                cleanHost.contains("n1mwq") || cleanHost.contains("byseraguci") ||
+                cleanHost.contains("bysedikamoum") || cleanHost.contains("filemoon")
+            ) {
+                return "https://n1mwq.org/"
+            }
+            if (cleanHost.contains("voe")) {
+                return "https://voe.sx/"
             }
             return lastActiveReferer ?: "$fallbackScheme://$host/"
         }
