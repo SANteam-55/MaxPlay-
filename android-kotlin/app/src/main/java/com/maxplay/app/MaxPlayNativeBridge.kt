@@ -33,6 +33,22 @@ class MaxPlayNativeBridge(
     fun getAppVersion(): String = "1.1.0-kotlin-native"
 
     @JavascriptInterface
+    fun setDesktopMode(enabled: Boolean) {
+        activity.runOnUiThread {
+            try {
+                webView.settings.useWideViewPort = true
+                webView.settings.loadWithOverviewMode = enabled
+                webView.settings.setSupportZoom(true)
+                webView.settings.builtInZoomControls = enabled
+                webView.settings.displayZoomControls = false
+                if (!enabled) {
+                    webView.setInitialScale(0)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    @JavascriptInterface
     fun extractStreamNative(sourceUrl: String, headersJson: String?): String {
         val headersMap = parseHeadersJson(headersJson)
         val resultJson = scraper.scrapeStreamSync(sourceUrl, headersMap)

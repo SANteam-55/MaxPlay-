@@ -820,6 +820,7 @@ export const saveHeroBanner = async (banner: any) => {
       title: banner.title?.trim() || 'Featured Content',
       subtitle: banner.subtitle?.trim() || '',
       imageUrl: banner.imageUrl?.trim() || banner.backdropUrl?.trim() || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200',
+      fadeColor: banner.fadeColor?.trim() || '',
       contentId: banner.contentId || '',
       order: Number(banner.order) || 1,
       updatedAt: new Date().toISOString()

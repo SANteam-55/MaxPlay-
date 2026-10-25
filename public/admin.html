@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta id="admin-viewport-meta" name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MaxPlay Admin Portal</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="apple-touch-icon" href="https://i.ibb.co/G4bcVYwY/Picsart-26-07-03-00-56-20-216-removebg-preview.png">
@@ -1115,6 +1115,33 @@
         touch-action: manipulation;
       }
     }
+
+    /* 🖥️ CHROME-STYLE DESKTOP MODE OVERRIDE FOR ADMIN APK & MOBILE */
+    body.force-desktop-mode {
+      min-width: 1280px !important;
+      overflow-x: auto !important;
+    }
+    body.force-desktop-mode #admin-app {
+      min-width: 1280px !important;
+    }
+    body.force-desktop-mode .sidebar {
+      position: relative !important;
+      transform: none !important;
+      width: 260px !important;
+      min-width: 260px !important;
+      flex-shrink: 0 !important;
+    }
+    body.force-desktop-mode .mobile-menu-btn {
+      display: none !important;
+    }
+    body.force-desktop-mode .stats-grid,
+    body.force-desktop-mode .stat-grid {
+      grid-template-columns: repeat(4, 1fr) !important;
+    }
+    body.force-desktop-mode .top-header #current-page-title {
+      max-width: none !important;
+      font-size: 18px !important;
+    }
   </style>
 </head>
 <body>
@@ -1260,7 +1287,11 @@
           </button>
           <h1 id="current-page-title" style="font-size:18px; font-weight:800; color:#FFF;">Dashboard Overview</h1>
         </div>
-        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button type="button" id="btn-toggle-desktop-mode" class="btn-secondary" onclick="window.toggleAdminDesktopMode()" title="Switch between Mobile View and Chrome-like Desktop Mode">
+            <i class="fa-solid fa-desktop"></i>
+            <span id="desktop-mode-btn-label">Desktop Mode</span>
+          </button>
           <a href="/" target="_blank" class="btn-secondary" style="text-decoration:none;">
             <i class="fa-solid fa-arrow-up-right-from-square"></i>
             <span>Open App</span>
@@ -5689,19 +5720,28 @@
           itemPrimaryUrl = '';
         }
 
-        const s1Quals = item.qualityLinks || item.videoSources?.Default || {};
-        const s2Quals = item.secondaryQualityLinks || {};
+        const s1Quals = { ...(item.qualityLinks || item.videoSources?.Default || {}) };
+        const s2Quals = { ...(item.secondaryQualityLinks || {}) };
+        // Heal accidental 1080p fallback clone if 1080p has the exact same URL as 720p/480p/360p
+        if (s1Quals['1080p'] && ['720p', '480p', '360p'].some(k => s1Quals[k] && s1Quals[k] === s1Quals['1080p'])) {
+          delete s1Quals['1080p'];
+        }
+        if (s2Quals['1080p'] && ['720p', '480p', '360p'].some(k => s2Quals[k] && s2Quals[k] === s2Quals['1080p'])) {
+          delete s2Quals['1080p'];
+        }
+        const hasS1QualKeys = Object.keys(s1Quals).length > 0;
+        const hasS2QualKeys = Object.keys(s2Quals).length > 0;
         ['1080p', '720p', '480p', '360p'].forEach(q => {
           const s1Inp = document.getElementById(`movie-s1-q-${q}`);
           const s1Row = s1Inp ? s1Inp.closest('.server-q-row') : null;
           if (s1Inp) {
-            s1Inp.value = s1Quals[q] || (q === '1080p' ? itemPrimaryUrl : '') || '';
+            s1Inp.value = s1Quals[q] || (!hasS1QualKeys && q === '1080p' ? itemPrimaryUrl : '') || '';
             if (s1Row) s1Row.style.display = 'flex';
           }
           const s2Inp = document.getElementById(`movie-s2-q-${q}`);
           const s2Row = s2Inp ? s2Inp.closest('.server-q-row') : null;
           if (s2Inp) {
-            s2Inp.value = s2Quals[q] || (q === '1080p' ? itemSecUrl : '') || '';
+            s2Inp.value = s2Quals[q] || (!hasS2QualKeys && q === '1080p' ? itemSecUrl : '') || '';
             if (s2Row) s2Row.style.display = 'flex';
           }
         });
@@ -7790,6 +7830,17 @@
             delete ep.secondaryServerQualityLinks;
           }
 
+          // Prune downloadQualities & qualities to strictly match configured s1Links / s2Links boxes
+          if (Object.keys(s1Links).length > 0) {
+            ep.qualities = Object.keys(s1Links);
+            if (Array.isArray(ep.downloadQualities)) {
+              ep.downloadQualities = ep.downloadQualities.filter(q => q && s1Links[q.id]);
+            }
+          }
+          if (Object.keys(s2Links).length > 0 && Array.isArray(ep.secondaryDownloadQualities)) {
+            ep.secondaryDownloadQualities = ep.secondaryDownloadQualities.filter(q => q && s2Links[q.id]);
+          }
+
           // Preserve & sync episode download sizes if edited (Server 1 & Server 2)
           const sizeInputs = card.querySelectorAll('.ep-dl-size-input');
           if (sizeInputs.length > 0 && ep.downloadQualities) {
@@ -8120,9 +8171,17 @@
             </div>
 
             ${window.isSmartHlsMode ? (() => {
-              const s1Links = ep.qualityLinks || ep.videoSources?.Default || {};
+              const s1Links = { ...(ep.qualityLinks || ep.videoSources?.Default || {}) };
+              if (s1Links['1080p'] && ['720p', '480p', '360p'].some(k => s1Links[k] && s1Links[k] === s1Links['1080p'])) {
+                delete s1Links['1080p'];
+              }
+              const hasEpS1Keys = Object.keys(s1Links).length > 0;
               const s1Fallback = ep.videoUrl || s1Links['1080p'] || '';
-              const s2Links = ep.secondaryQualityLinks || {};
+              const s2Links = { ...(ep.secondaryQualityLinks || {}) };
+              if (s2Links['1080p'] && ['720p', '480p', '360p'].some(k => s2Links[k] && s2Links[k] === s2Links['1080p'])) {
+                delete s2Links['1080p'];
+              }
+              const hasEpS2Keys = Object.keys(s2Links).length > 0;
               const s2Fallback = ep.secondaryVideoUrl || ep.secondaryUrl || s2Links['1080p'] || '';
               const qMeta = [
                 { q: '1080p', badge: '🟣 1080p', color: '#A78BFA', bg: 'rgba(168,85,247,0.15)', border: 'rgba(168,85,247,0.35)' },
@@ -8131,7 +8190,7 @@
                 { q: '360p',  badge: '🟡 360p',  color: '#FBBF24', bg: 'rgba(251,191,36,0.15)', border: 'rgba(251,191,36,0.35)' }
               ];
               const s1RowsHtml = qMeta.map(m => {
-                const val = s1Links[m.q] || (m.q === '1080p' ? s1Fallback : '') || '';
+                const val = s1Links[m.q] || (!hasEpS1Keys && m.q === '1080p' ? s1Fallback : '') || '';
                 return `
                   <div class="server-q-row ep-s1-q-row" data-quality="${m.q}" style="display:flex; align-items:center; gap:8px;">
                     <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
@@ -8142,7 +8201,7 @@
               }).join('');
 
               const s2RowsHtml = qMeta.map(m => {
-                const val = s2Links[m.q] || (m.q === '1080p' ? s2Fallback : '') || '';
+                const val = s2Links[m.q] || (!hasEpS2Keys && m.q === '1080p' ? s2Fallback : '') || '';
                 return `
                   <div class="server-q-row ep-s2-q-row" data-quality="${m.q}" style="display:flex; align-items:center; gap:8px;">
                     <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
@@ -8551,6 +8610,18 @@
             }
             const s1QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(1) : {};
             const s2QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(2) : {};
+
+            // Strictly filter movie downloadQualities to match configured quality boxes
+            if (Object.keys(s1QualityMap).length > 0) {
+              window.extractedMovieQualities = Object.keys(s1QualityMap);
+              window.extractedMovieQualityLinks = s1QualityMap;
+              if (Array.isArray(window.extractedMovieDownloadQualities)) {
+                window.extractedMovieDownloadQualities = window.extractedMovieDownloadQualities.filter(q => q && s1QualityMap[q.id]);
+              }
+            }
+            if (Object.keys(s2QualityMap).length > 0 && Array.isArray(window.extractedMovieSecondaryDownloadQualities)) {
+              window.extractedMovieSecondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities.filter(q => q && s2QualityMap[q.id]);
+            }
 
             const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || s1QualityMap['1080p'] || s1QualityMap['720p'] || s1QualityMap['480p'] || s1QualityMap['360p'] || '';
             const secUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || s2QualityMap['1080p'] || s2QualityMap['720p'] || s2QualityMap['480p'] || s2QualityMap['360p'] || '';
@@ -9438,6 +9509,23 @@
       if (prevImg && imgEl && imgEl.value.trim()) {
         prevImg.src = imgEl.value.trim();
       }
+      const fadeInput = document.getElementById('hb-fadecolor-' + idx);
+      const topFadeEl = document.getElementById('hb-preview-topfade-' + idx);
+      const fadeBadgeEl = document.getElementById('hb-fadecolor-badge-' + idx);
+      const colorVal = fadeInput ? fadeInput.value.trim() : '';
+      if (window.heroBannersData && window.heroBannersData[idx]) {
+        window.heroBannersData[idx].fadeColor = colorVal;
+      }
+      if (topFadeEl) {
+        topFadeEl.style.background = colorVal
+          ? `linear-gradient(to bottom, ${colorVal} 0%, ${colorVal}B3 32%, transparent 72%)`
+          : 'linear-gradient(to bottom, rgba(18,18,28,0.55) 0%, transparent 45%)';
+      }
+      if (fadeBadgeEl) {
+        fadeBadgeEl.innerHTML = colorVal
+          ? `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${colorVal}; border:1px solid #fff;"></span> Custom Fade: ${colorVal.toUpperCase()}`
+          : `<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Match from Image`;
+      }
     };
 
     window.renderHeroBanners = function() {
@@ -9451,12 +9539,21 @@
           const isSel = b.contentId === c.id ? 'selected' : '';
           contentOptions += `<option value="${c.id}" ${isSel}>${c.data.title || c.id}</option>`;
         });
+        const fadeCol = (b.fadeColor || '').trim();
+        const topFadeStyle = fadeCol
+          ? `linear-gradient(to bottom, ${fadeCol} 0%, ${fadeCol}B3 32%, transparent 72%)`
+          : 'linear-gradient(to bottom, rgba(18,18,28,0.55) 0%, transparent 45%)';
+
         h += `
           <div style="background:var(--bg-tertiary); padding:16px; border-radius:14px; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:12px;">
              <!-- LIVE BANNER CARD PREVIEW -->
              <div style="position:relative; width:100%; height:140px; border-radius:10px; overflow:hidden; background:#0B0B0E; border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center;">
                <img id="hb-preview-img-${idx}" src="${b.imageUrl || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200'}" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200';" style="width:100%; height:100%; object-fit:cover; opacity:0.85; transition:all 0.3s ease;">
-               <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(10,10,12,0.95) 0%, rgba(10,10,12,0.3) 60%, transparent 100%);"></div>
+               <div id="hb-preview-topfade-${idx}" style="position:absolute; inset:0; background:${topFadeStyle}; pointer-events:none; transition:background 0.25s ease;"></div>
+               <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(10,10,12,0.95) 0%, rgba(10,10,12,0.3) 60%, transparent 100%); pointer-events:none;"></div>
+               <div id="hb-fadecolor-badge-${idx}" style="position:absolute; top:10px; left:10px; background:rgba(15,15,24,0.82); border:1px solid rgba(255,255,255,0.18); color:#fff; font-size:10px; font-weight:800; padding:4px 10px; border-radius:20px; backdrop-filter:blur(4px); display:flex; align-items:center; gap:5px; box-shadow:0 2px 8px rgba(0,0,0,0.4);">
+                 ${fadeCol ? `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${fadeCol}; border:1px solid #fff;"></span> Custom Fade: ${fadeCol.toUpperCase()}` : `<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Match from Image`}
+               </div>
                <div style="position:absolute; top:10px; right:10px; background:rgba(139,92,246,0.9); color:#fff; font-size:10px; font-weight:800; padding:4px 10px; border-radius:20px; text-transform:uppercase; letter-spacing:0.5px; backdrop-filter:blur(4px); display:flex; align-items:center; gap:5px; box-shadow:0 2px 8px rgba(0,0,0,0.4);">
                  <i class="fa-solid fa-eye"></i> Live Image Card Preview
                </div>
@@ -9489,6 +9586,27 @@
                  <input type="number" id="hb-order-${idx}" class="input-control" style="text-align:center;" value="${b.order || (idx + 1)}">
                </div>
              </div>
+
+             <!-- TOP-TO-BOTTOM FADE COLOR + IMAGE EYEDROPPER COLOR MATCHER -->
+             <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px 12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+               <div style="display:flex; align-items:center; gap:8px;">
+                 <i class="fa-solid fa-eye-dropper" style="color:#38BDF8; font-size:13px;"></i>
+                 <div>
+                   <div style="font-size:11px; font-weight:800; color:#FFF;">Top-to-Bottom Header Fade Color</div>
+                   <div style="font-size:10px; color:var(--text-tertiary);">Tap "Pick from Image" to click any area of the banner image, or leave empty for Auto-Match</div>
+                 </div>
+               </div>
+               <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                 <input type="color" id="hb-colorpicker-${idx}" value="${fadeCol && /^#[0-9A-Fa-f]{6}$/.test(fadeCol) ? fadeCol : '#7C3AED'}" oninput="document.getElementById('hb-fadecolor-${idx}').value = this.value; updateHeroBannerPreview(${idx});" style="width:34px; height:32px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; cursor:pointer; padding:2px;" title="Pick custom fade color">
+                 <input type="text" id="hb-fadecolor-${idx}" class="input-control" value="${fadeCol}" oninput="if(/^#[0-9A-Fa-f]{6}$/.test(this.value.trim())) document.getElementById('hb-colorpicker-${idx}').value = this.value.trim(); updateHeroBannerPreview(${idx});" placeholder="Auto-Match (or #HEX)" style="width:140px; height:32px; font-size:11px; font-family:monospace;">
+                 <button type="button" class="btn-secondary" style="height:32px; padding:0 12px; font-size:11px; font-weight:800; color:#38BDF8; border-color:rgba(56,189,248,0.4); background:rgba(56,189,248,0.12);" onclick="window.openBannerImageColorMatcher('hb', ${idx})">
+                   <i class="fa-solid fa-eye-dropper"></i> Pick from Image
+                 </button>
+                 <button type="button" class="btn-secondary" style="height:32px; padding:0 10px; font-size:11px; color:#A78BFA;" onclick="document.getElementById('hb-fadecolor-${idx}').value=''; updateHeroBannerPreview(${idx}); showToast('Reset to Auto-Match from Image');">
+                   <i class="fa-solid fa-wand-magic-sparkles"></i> Auto
+                 </button>
+               </div>
+             </div>
           </div>
         `;
       });
@@ -9496,7 +9614,7 @@
     };
 
     window.addNewBannerSlot = function() {
-      window.heroBannersData.push({ id: 'banner-' + Date.now(), title: 'New Banner', subtitle: 'Featured Content', imageUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200', order: window.heroBannersData.length + 1 });
+      window.heroBannersData.push({ id: 'banner-' + Date.now(), title: 'New Banner', subtitle: 'Featured Content', imageUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200', fadeColor: '', order: window.heroBannersData.length + 1 });
       renderHeroBanners();
     };
 
@@ -9518,6 +9636,7 @@
           const imageUrl = document.getElementById(`hb-img-${i}`)?.value || '';
           const contentId = document.getElementById(`hb-content-${i}`)?.value || '';
           const order = parseInt(document.getElementById(`hb-order-${i}`)?.value || (i + 1));
+          const fadeColor = (document.getElementById(`hb-fadecolor-${i}`)?.value || '').trim();
 
           let title = '';
           let subtitle = '';
@@ -9534,6 +9653,7 @@
             title,
             subtitle,
             imageUrl,
+            fadeColor,
             contentId,
             order,
             updatedAt: new Date().toISOString()
@@ -13498,13 +13618,21 @@ docs.forEach(docItem => {
            let sel = (b.contentId === c.id) ? 'selected' : '';
            contentOpts += `<option value="${c.id}" ${sel}>${c.data?.title || c.id}</option>`;
         });
+        const fadeCol = (b.fadeColor || '').trim();
+        const topFadeStyle = fadeCol
+          ? `linear-gradient(to bottom, ${fadeCol} 0%, ${fadeCol}B3 32%, transparent 72%)`
+          : 'linear-gradient(to bottom, rgba(18,18,28,0.55) 0%, transparent 45%)';
 
         h += `
           <div style="background:var(--bg-tertiary); padding:16px; border-radius:14px; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:12px; margin-bottom:12px;">
              <!-- LIVE BANNER CARD PREVIEW -->
              <div style="position:relative; width:100%; height:140px; border-radius:10px; overflow:hidden; background:#0B0B0E; border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center;">
                <img id="hot-hb-preview-img-${b.id}" src="${b.imageUrl || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200'}" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200';" style="width:100%; height:100%; object-fit:cover; opacity:0.85; transition:all 0.3s ease;">
-               <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(10,10,12,0.95) 0%, rgba(10,10,12,0.3) 60%, transparent 100%);"></div>
+               <div id="hot-hb-preview-topfade-${b.id}" style="position:absolute; inset:0; background:${topFadeStyle}; pointer-events:none; transition:background 0.25s ease;"></div>
+               <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(10,10,12,0.95) 0%, rgba(10,10,12,0.3) 60%, transparent 100%); pointer-events:none;"></div>
+               <div id="hot-hb-fadecolor-badge-${b.id}" style="position:absolute; top:10px; left:10px; background:rgba(15,15,24,0.82); border:1px solid rgba(255,255,255,0.18); color:#fff; font-size:10px; font-weight:800; padding:4px 10px; border-radius:20px; backdrop-filter:blur(4px); display:flex; align-items:center; gap:5px; box-shadow:0 2px 8px rgba(0,0,0,0.4);">
+                 ${fadeCol ? `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${fadeCol}; border:1px solid #fff;"></span> Custom Fade: ${fadeCol.toUpperCase()}` : `<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Match from Image`}
+               </div>
                <div style="position:absolute; top:10px; right:10px; background:rgba(139,92,246,0.9); color:#fff; font-size:10px; font-weight:800; padding:4px 10px; border-radius:20px; text-transform:uppercase; letter-spacing:0.5px; backdrop-filter:blur(4px); display:flex; align-items:center; gap:5px; box-shadow:0 2px 8px rgba(0,0,0,0.4);">
                  <i class="fa-solid fa-eye"></i> Live Image Card Preview
                </div>
@@ -13537,6 +13665,27 @@ docs.forEach(docItem => {
                  <input type="number" id="hot-hb-order-${b.id}" class="input-control" style="text-align:center;" value="${b.order || (idx + 1)}" onchange="updateHotBanner('${b.id}', 'order', this.value)">
                </div>
              </div>
+
+             <!-- TOP-TO-BOTTOM FADE COLOR + IMAGE EYEDROPPER COLOR MATCHER -->
+             <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px 12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+               <div style="display:flex; align-items:center; gap:8px;">
+                 <i class="fa-solid fa-eye-dropper" style="color:#38BDF8; font-size:13px;"></i>
+                 <div>
+                   <div style="font-size:11px; font-weight:800; color:#FFF;">Top-to-Bottom Header Fade Color</div>
+                   <div style="font-size:10px; color:var(--text-tertiary);">Tap "Pick from Image" to click any area of the banner image, or leave empty for Auto-Match</div>
+                 </div>
+               </div>
+               <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                 <input type="color" id="hot-hb-colorpicker-${b.id}" value="${fadeCol && /^#[0-9A-Fa-f]{6}$/.test(fadeCol) ? fadeCol : '#7C3AED'}" oninput="document.getElementById('hot-hb-fadecolor-${b.id}').value = this.value; updateHotBanner('${b.id}', 'fadeColor', this.value);" style="width:34px; height:32px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; cursor:pointer; padding:2px;" title="Pick custom fade color">
+                 <input type="text" id="hot-hb-fadecolor-${b.id}" class="input-control" value="${fadeCol}" oninput="if(/^#[0-9A-Fa-f]{6}$/.test(this.value.trim())) document.getElementById('hot-hb-colorpicker-${b.id}').value = this.value.trim(); updateHotBanner('${b.id}', 'fadeColor', this.value.trim());" placeholder="Auto-Match (or #HEX)" style="width:140px; height:32px; font-size:11px; font-family:monospace;">
+                 <button type="button" class="btn-secondary" style="height:32px; padding:0 12px; font-size:11px; font-weight:800; color:#38BDF8; border-color:rgba(56,189,248,0.4); background:rgba(56,189,248,0.12);" onclick="window.openBannerImageColorMatcher('hot', '${b.id}')">
+                   <i class="fa-solid fa-eye-dropper"></i> Pick from Image
+                 </button>
+                 <button type="button" class="btn-secondary" style="height:32px; padding:0 10px; font-size:11px; color:#A78BFA;" onclick="document.getElementById('hot-hb-fadecolor-${b.id}').value=''; updateHotBanner('${b.id}', 'fadeColor', ''); showToast('Reset to Auto-Match from Image');">
+                   <i class="fa-solid fa-wand-magic-sparkles"></i> Auto
+                 </button>
+               </div>
+             </div>
           </div>
         `;
       });
@@ -13545,7 +13694,7 @@ docs.forEach(docItem => {
     
     window.addNewHotBanner = function() {
       if(!window.hotScreensBanners[window.activeHotScreen]) window.hotScreensBanners[window.activeHotScreen] = [];
-      const newB = { id: 'banner-' + Date.now(), title: 'New Banner', subtitle: '', imageUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200', category: window.activeHotScreen, order: window.hotScreensBanners[window.activeHotScreen].length + 1 };
+      const newB = { id: 'banner-' + Date.now(), title: 'New Banner', subtitle: '', imageUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200', fadeColor: '', category: window.activeHotScreen, order: window.hotScreensBanners[window.activeHotScreen].length + 1 };
       window.hotScreensBanners[window.activeHotScreen].push(newB);
       renderHotBanners();
     };
@@ -13556,6 +13705,22 @@ docs.forEach(docItem => {
       if(idx > -1) {
         if(field === 'order') val = parseInt(val) || 1;
         banners[idx][field] = val;
+
+        if (field === 'fadeColor') {
+          const topFadeEl = document.getElementById('hot-hb-preview-topfade-' + id);
+          const badgeEl = document.getElementById('hot-hb-fadecolor-badge-' + id);
+          const cleanCol = (val || '').trim();
+          if (topFadeEl) {
+            topFadeEl.style.background = cleanCol
+              ? `linear-gradient(to bottom, ${cleanCol} 0%, ${cleanCol}B3 32%, transparent 72%)`
+              : 'linear-gradient(to bottom, rgba(18,18,28,0.55) 0%, transparent 45%)';
+          }
+          if (badgeEl) {
+            badgeEl.innerHTML = cleanCol
+              ? `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${cleanCol}; border:1px solid #fff;"></span> Custom Fade: ${cleanCol.toUpperCase()}`
+              : `<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Match from Image`;
+          }
+        }
 
         if (field === 'contentId') {
            const attachedDoc = (window.cachedContentDocs || []).find(d => d.id === val);
@@ -19235,6 +19400,407 @@ docs.forEach(docItem => {
       </div>
     </div>
   </div>
+
+  <!-- 🎯 INTERACTIVE HERO BANNER IMAGE COLOR MATCHER MODAL -->
+  <div id="banner-color-matcher-modal" class="modal-overlay" style="display:none; z-index:100005;">
+    <div class="modal-card" style="max-width:680px; width:95vw; padding:20px; display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div style="width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg, #06B6D4, #8B5CF6); display:flex; align-items:center; justify-content:center; color:#FFF;">
+            <i class="fa-solid fa-eye-dropper"></i>
+          </div>
+          <div>
+            <h3 style="margin:0; font-size:16px; font-weight:800; color:#FFF;">Hero Banner Image Color Matcher</h3>
+            <p style="margin:2px 0 0 0; font-size:11px; color:var(--text-secondary);">Tap or drag anywhere on the banner image below to sample that exact color for the top-to-bottom fade</p>
+          </div>
+        </div>
+        <button type="button" onclick="window.closeBannerImageColorMatcher()" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#FFF; width:32px; height:32px; border-radius:8px; cursor:pointer;">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- INTERACTIVE IMAGE CANVAS AREA -->
+      <div id="banner-matcher-canvas-wrap" style="position:relative; width:100%; border-radius:12px; overflow:hidden; border:2px solid rgba(56,189,248,0.45); background:#09090E; cursor:crosshair; touch-action:none; user-select:none; display:flex; align-items:center; justify-content:center; min-height:200px; max-height:340px;">
+        <canvas id="banner-color-matcher-canvas" style="width:100%; height:auto; max-height:340px; display:block;"></canvas>
+        <!-- Live Top-to-Bottom Fade Overlay Preview on the Canvas -->
+        <div id="banner-matcher-live-fade" style="position:absolute; inset:0; pointer-events:none; background:linear-gradient(to bottom, rgba(124,58,237,0.92) 0%, rgba(124,58,237,0.45) 30%, transparent 68%); transition:background 0.08s linear;"></div>
+        <!-- Crosshair Indicator -->
+        <div id="banner-matcher-crosshair" style="display:none; position:absolute; width:28px; height:28px; border-radius:50%; border:2.5px solid #FFFFFF; box-shadow:0 0 0 2px rgba(0,0,0,0.85), 0 4px 12px rgba(0,0,0,0.8); transform:translate(-50%, -50%); pointer-events:none; z-index:5;"></div>
+        <div style="position:absolute; bottom:8px; right:10px; background:rgba(0,0,0,0.75); border:1px solid rgba(255,255,255,0.15); color:#E4E4E7; font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; pointer-events:none;">
+          <i class="fa-solid fa-hand-pointer" style="color:#38BDF8;"></i> Tap anywhere on image to pick color
+        </div>
+      </div>
+
+      <!-- SAMPLED COLOR READOUT & QUICK ACTIONS -->
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:12px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div id="banner-matcher-swatch" style="width:44px; height:44px; border-radius:10px; background:#7C3AED; border:2px solid #FFFFFF; box-shadow:0 4px 12px rgba(0,0,0,0.5); flex-shrink:0;"></div>
+          <div>
+            <div style="font-size:11px; color:var(--text-tertiary); font-weight:700;">SELECTED TOP FADE COLOR</div>
+            <div style="display:flex; align-items:center; gap:8px; margin-top:3px;">
+              <input type="text" id="banner-matcher-hex-input" class="input-control" value="#7C3AED" oninput="window.setBannerMatcherColorHex(this.value)" style="width:110px; height:30px; font-family:monospace; font-weight:800; font-size:13px; color:#FFF;">
+              <span id="banner-matcher-rgb-text" style="font-size:11px; color:#A1A1AA; font-family:monospace;">rgb(124, 58, 237)</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn-secondary" style="height:34px; padding:0 12px; font-size:11px; color:#38BDF8;" onclick="window.sampleBannerTopEdgeAuto()">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Sample Top Edge Average
+          </button>
+        </div>
+      </div>
+
+      <!-- MODAL FOOTER -->
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding-top:4px;">
+        <button type="button" class="btn-secondary" style="height:38px; padding:0 14px; font-size:12px; color:#A78BFA;" onclick="window.clearBannerMatcherToAuto()">
+          <i class="fa-solid fa-rotate-left"></i> Use Auto-Match (No Custom Color)
+        </button>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn-secondary" style="height:38px; padding:0 16px; font-size:12px;" onclick="window.closeBannerImageColorMatcher()">
+            Cancel
+          </button>
+          <button type="button" class="btn-primary" style="height:38px; padding:0 20px; font-size:12px; font-weight:800;" onclick="window.applyPickedBannerColor()">
+            <i class="fa-solid fa-check"></i> Apply Selected Color
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================
+    // 🖥️ CHROME-STYLE DESKTOP MODE FOR ADMIN APK & MOBILE
+    // =========================================================
+    window.isAdminDesktopMode = false;
+
+    window.applyAdminDesktopMode = function(enabled, showMsg) {
+      window.isAdminDesktopMode = !!enabled;
+      const vpMeta = document.getElementById('admin-viewport-meta') || document.querySelector('meta[name="viewport"]');
+      const btn = document.getElementById('btn-toggle-desktop-mode');
+      const label = document.getElementById('desktop-mode-btn-label');
+
+      if (window.isAdminDesktopMode) {
+        if (vpMeta) {
+          vpMeta.setAttribute('content', 'width=1280, initial-scale=0.32, minimum-scale=0.2, maximum-scale=3.0, user-scalable=yes');
+        }
+        document.body.classList.add('force-desktop-mode');
+        if (btn) btn.classList.add('active');
+        if (label) label.textContent = 'Desktop: ON';
+        try {
+          if (window.MaxPlayNative && typeof window.MaxPlayNative.setDesktopMode === 'function') {
+            window.MaxPlayNative.setDesktopMode(true);
+          }
+        } catch (_) {}
+        if (showMsg && window.showToast) window.showToast('Desktop Mode enabled (Pinch to zoom supported)');
+      } else {
+        if (vpMeta) {
+          vpMeta.setAttribute('content', 'width=device-width, initial-scale=1.0');
+        }
+        document.body.classList.remove('force-desktop-mode');
+        if (btn) btn.classList.remove('active');
+        if (label) label.textContent = 'Desktop Mode';
+        try {
+          if (window.MaxPlayNative && typeof window.MaxPlayNative.setDesktopMode === 'function') {
+            window.MaxPlayNative.setDesktopMode(false);
+          }
+        } catch (_) {}
+        if (showMsg && window.showToast) window.showToast('Switched to Mobile View');
+      }
+      try {
+        localStorage.setItem('maxplay_admin_desktop_mode', window.isAdminDesktopMode ? 'true' : 'false');
+      } catch (_) {}
+    };
+
+    window.toggleAdminDesktopMode = function() {
+      window.applyAdminDesktopMode(!window.isAdminDesktopMode, true);
+    };
+
+    document.addEventListener('DOMContentLoaded', function() {
+      try {
+        if (localStorage.getItem('maxplay_admin_desktop_mode') === 'true') {
+          window.applyAdminDesktopMode(true, false);
+        }
+      } catch (_) {}
+    });
+
+    // =========================================================
+    // 🎯 HERO BANNER INTERACTIVE IMAGE EYEDROPPER COLOR MATCHER
+    // =========================================================
+    window._bannerMatcherTarget = null; // { mode: 'hb' | 'hot', key: idxOrId }
+
+    window.rgbToHexCode = function(r, g, b) {
+      const toHex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+      return ('#' + toHex(r) + toHex(g) + toHex(b)).toUpperCase();
+    };
+
+    window.setBannerMatcherColorHex = function(hexStr, xPx, yPx) {
+      if (!hexStr || typeof hexStr !== 'string') return;
+      let clean = hexStr.trim();
+      if (!clean.startsWith('#')) clean = '#' + clean;
+      if (!/^#[0-9A-Fa-f]{6}$/.test(clean)) return;
+      const r = parseInt(clean.slice(1, 3), 16);
+      const g = parseInt(clean.slice(3, 5), 16);
+      const b = parseInt(clean.slice(5, 7), 16);
+
+      const swatch = document.getElementById('banner-matcher-swatch');
+      const hexInp = document.getElementById('banner-matcher-hex-input');
+      const rgbTxt = document.getElementById('banner-matcher-rgb-text');
+      const liveFade = document.getElementById('banner-matcher-live-fade');
+      const crosshair = document.getElementById('banner-matcher-crosshair');
+
+      if (swatch) swatch.style.background = clean;
+      if (hexInp && document.activeElement !== hexInp) hexInp.value = clean.toUpperCase();
+      if (rgbTxt) rgbTxt.textContent = `rgb(${r}, ${g}, ${b})`;
+      if (liveFade) {
+        liveFade.style.background = `linear-gradient(to bottom, rgba(${r},${g},${b},0.92) 0%, rgba(${r},${g},${b},0.45) 30%, transparent 68%)`;
+      }
+      if (crosshair && typeof xPx === 'number' && typeof yPx === 'number') {
+        crosshair.style.display = 'block';
+        crosshair.style.left = xPx + 'px';
+        crosshair.style.top = yPx + 'px';
+        crosshair.style.background = clean;
+      }
+    };
+
+    window.loadBannerImageIntoCanvasCorsFree = async function(imgUrl, canvas) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const drawLoadedImg = (imgObj) => {
+        const w = 720;
+        const ratio = (imgObj.naturalHeight && imgObj.naturalWidth) ? (imgObj.naturalHeight / imgObj.naturalWidth) : 0.52;
+        const h = Math.max(220, Math.min(420, Math.round(w * ratio)));
+        canvas.width = w;
+        canvas.height = h;
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(imgObj, 0, 0, w, h);
+        // Verify canvas is not CORS-tainted
+        ctx.getImageData(Math.floor(w / 2), Math.floor(h / 4), 1, 1);
+      };
+
+      // 1. Try direct anonymous CORS load first
+      try {
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            try {
+              drawLoadedImg(img);
+              resolve(true);
+            } catch (err) {
+              reject(err);
+            }
+          };
+          img.onerror = reject;
+          img.src = imgUrl;
+        });
+        return true;
+      } catch (_) {}
+
+      // 2. Try Native Kotlin Bridge base64 fetch (100% CORS-free inside MaxPlay Admin APK)
+      if (window.MaxPlayNative && typeof window.MaxPlayNative.fetchBytesBase64CorsFree === 'function') {
+        try {
+          const rawRes = window.MaxPlayNative.fetchBytesBase64CorsFree(imgUrl, JSON.stringify({}));
+          const parsed = JSON.parse(rawRes || '{}');
+          if (parsed && parsed.ok && parsed.base64) {
+            const dataUri = 'data:image/jpeg;base64,' + parsed.base64;
+            await new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => { drawLoadedImg(img); resolve(true); };
+              img.onerror = reject;
+              img.src = dataUri;
+            });
+            return true;
+          }
+        } catch (_) {}
+      }
+
+      // 3. Fallback to backend /api/proxy
+      try {
+        const proxyUrl = '/api/proxy?url=' + encodeURIComponent(imgUrl);
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            try {
+              drawLoadedImg(img);
+              resolve(true);
+            } catch (err) {
+              reject(err);
+            }
+          };
+          img.onerror = reject;
+          img.src = proxyUrl;
+        });
+        return true;
+      } catch (_) {}
+
+      return false;
+    };
+
+    window.sampleBannerTopEdgeAuto = function() {
+      const canvas = document.getElementById('banner-color-matcher-canvas');
+      if (!canvas || !canvas.width || !canvas.height) return;
+      try {
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const sampleH = Math.max(10, Math.floor(canvas.height * 0.2));
+        const data = ctx.getImageData(0, 0, canvas.width, sampleH).data;
+        let rSum = 0, gSum = 0, bSum = 0, count = 0;
+        for (let i = 0; i < data.length; i += 16) {
+          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          if (a < 128) continue;
+          rSum += r; gSum += g; bSum += b; count++;
+        }
+        if (count > 0) {
+          const hex = window.rgbToHexCode(rSum / count, gSum / count, bSum / count);
+          const wrap = document.getElementById('banner-matcher-canvas-wrap');
+          const cx = wrap ? Math.round(wrap.clientWidth / 2) : 150;
+          window.setBannerMatcherColorHex(hex, cx, 24);
+        }
+      } catch (_) {}
+    };
+
+    window.openBannerImageColorMatcher = async function(mode, key) {
+      window._bannerMatcherTarget = { mode, key };
+      let imgUrl = '';
+      let existingColor = '';
+
+      if (mode === 'hb') {
+        imgUrl = (document.getElementById(`hb-img-${key}`)?.value || '').trim();
+        existingColor = (document.getElementById(`hb-fadecolor-${key}`)?.value || '').trim();
+      } else {
+        imgUrl = (document.getElementById(`hot-hb-img-${key}`)?.value || '').trim();
+        existingColor = (document.getElementById(`hot-hb-fadecolor-${key}`)?.value || '').trim();
+      }
+
+      if (!imgUrl) {
+        imgUrl = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200';
+      }
+
+      const modal = document.getElementById('banner-color-matcher-modal');
+      const canvas = document.getElementById('banner-color-matcher-canvas');
+      const crosshair = document.getElementById('banner-matcher-crosshair');
+      if (!modal || !canvas) return;
+
+      if (crosshair) crosshair.style.display = 'none';
+      modal.style.display = 'flex';
+
+      const ok = await window.loadBannerImageIntoCanvasCorsFree(imgUrl, canvas);
+      if (existingColor && /^#[0-9A-Fa-f]{6}$/.test(existingColor)) {
+        window.setBannerMatcherColorHex(existingColor);
+      } else if (ok) {
+        window.sampleBannerTopEdgeAuto();
+      }
+    };
+
+    window.closeBannerImageColorMatcher = function() {
+      const modal = document.getElementById('banner-color-matcher-modal');
+      if (modal) modal.style.display = 'none';
+      window._bannerMatcherTarget = null;
+    };
+
+    window.applyPickedBannerColor = function() {
+      const target = window._bannerMatcherTarget;
+      const hexInp = document.getElementById('banner-matcher-hex-input');
+      if (!target || !hexInp) return;
+      let hex = hexInp.value.trim();
+      if (!hex.startsWith('#')) hex = '#' + hex;
+      if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+        if (window.showToast) window.showToast('Please enter or pick a valid #RRGGBB hex color', 'warning');
+        return;
+      }
+      hex = hex.toUpperCase();
+
+      if (target.mode === 'hb') {
+        const fInp = document.getElementById(`hb-fadecolor-${target.key}`);
+        const cInp = document.getElementById(`hb-colorpicker-${target.key}`);
+        if (fInp) fInp.value = hex;
+        if (cInp) cInp.value = hex;
+        if (typeof window.updateHeroBannerPreview === 'function') {
+          window.updateHeroBannerPreview(target.key);
+        }
+      } else {
+        const fInp = document.getElementById(`hot-hb-fadecolor-${target.key}`);
+        const cInp = document.getElementById(`hot-hb-colorpicker-${target.key}`);
+        if (fInp) fInp.value = hex;
+        if (cInp) cInp.value = hex;
+        if (typeof window.updateHotBanner === 'function') {
+          window.updateHotBanner(target.key, 'fadeColor', hex);
+        }
+      }
+
+      if (window.showToast) window.showToast(`Applied ${hex} top fade color! Don't forget to Save Banners.`);
+      window.closeBannerImageColorMatcher();
+    };
+
+    window.clearBannerMatcherToAuto = function() {
+      const target = window._bannerMatcherTarget;
+      if (!target) return;
+      if (target.mode === 'hb') {
+        const fInp = document.getElementById(`hb-fadecolor-${target.key}`);
+        if (fInp) fInp.value = '';
+        if (typeof window.updateHeroBannerPreview === 'function') {
+          window.updateHeroBannerPreview(target.key);
+        }
+      } else {
+        const fInp = document.getElementById(`hot-hb-fadecolor-${target.key}`);
+        if (fInp) fInp.value = '';
+        if (typeof window.updateHotBanner === 'function') {
+          window.updateHotBanner(target.key, 'fadeColor', '');
+        }
+      }
+      if (window.showToast) window.showToast('Banner set to Auto-Match color from image!');
+      window.closeBannerImageColorMatcher();
+    };
+
+    // Bind pointer/touch pixel sampling on #banner-color-matcher-canvas
+    document.addEventListener('DOMContentLoaded', function() {
+      const canvas = document.getElementById('banner-color-matcher-canvas');
+      const wrap = document.getElementById('banner-matcher-canvas-wrap');
+      if (!canvas || !wrap) return;
+
+      let isDragging = false;
+
+      const sampleAtClientPos = (clientX, clientY) => {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const relX = Math.max(0, Math.min(rect.width - 1, clientX - rect.left));
+        const relY = Math.max(0, Math.min(rect.height - 1, clientY - rect.top));
+        const canvasX = Math.floor((relX / rect.width) * canvas.width);
+        const canvasY = Math.floor((relY / rect.height) * canvas.height);
+
+        try {
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          // Average a 3x3 pixel patch around the tapped point for smooth anti-noise color matching
+          let rSum = 0, gSum = 0, bSum = 0, cnt = 0;
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              const sx = Math.max(0, Math.min(canvas.width - 1, canvasX + dx));
+              const sy = Math.max(0, Math.min(canvas.height - 1, canvasY + dy));
+              const px = ctx.getImageData(sx, sy, 1, 1).data;
+              rSum += px[0];
+              gSum += px[1];
+              bSum += px[2];
+              cnt++;
+            }
+          }
+          const hex = window.rgbToHexCode(rSum / cnt, gSum / cnt, bSum / cnt);
+          const wrapRect = wrap.getBoundingClientRect();
+          window.setBannerMatcherColorHex(hex, clientX - wrapRect.left, clientY - wrapRect.top);
+        } catch (_) {}
+      };
+
+      canvas.addEventListener('pointerdown', (e) => {
+        isDragging = true;
+        sampleAtClientPos(e.clientX, e.clientY);
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        sampleAtClientPos(e.clientX, e.clientY);
+      });
+      window.addEventListener('pointerup', () => {
+        isDragging = false;
+      });
+    });
+  </script>
 </body>
 </html>
 

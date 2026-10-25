@@ -37,8 +37,44 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
   const currentItem = safeBanners[currentIndex] || safeBanners[0];
   const nextItem = safeBanners[(currentIndex + 1) % (safeBannersCount || 1)];
 
-  // Dynamic ambient color palette state extracted from the current image
+  const buildCustomFadePalette = (hexColor?: string): AmbientColorPalette | null => {
+    if (!hexColor || typeof hexColor !== 'string') return null;
+    const clean = hexColor.trim().replace(/^#/, '');
+    let r = 0, g = 0, b = 0;
+    if (/^[0-9a-fA-F]{6}$/.test(clean)) {
+      r = parseInt(clean.slice(0, 2), 16);
+      g = parseInt(clean.slice(2, 4), 16);
+      b = parseInt(clean.slice(4, 6), 16);
+    } else if (/^[0-9a-fA-F]{3}$/.test(clean)) {
+      r = parseInt(clean[0] + clean[0], 16);
+      g = parseInt(clean[1] + clean[1], 16);
+      b = parseInt(clean[2] + clean[2], 16);
+    } else {
+      return null;
+    }
+    const rgb: [number, number, number] = [r, g, b];
+    const secRgb: [number, number, number] = [
+      Math.max(0, Math.round(r * 0.75)),
+      Math.max(0, Math.round(g * 0.75)),
+      Math.max(0, Math.round(b * 0.75)),
+    ];
+    return {
+      primary: `rgb(${r}, ${g}, ${b})`,
+      primaryRgb: rgb,
+      secondary: `rgb(${secRgb[0]}, ${secRgb[1]}, ${secRgb[2]})`,
+      secondaryRgb: secRgb,
+      topLeftRgb: rgb,
+      topRightRgb: rgb,
+      topCenterRgb: rgb,
+      glowTop: `rgba(${r}, ${g}, ${b}, 0.55)`,
+      glowHalo: `rgba(${r}, ${g}, ${b}, 0.22)`,
+    };
+  };
+
+  // Dynamic ambient color palette state extracted from the current image (or Admin custom fadeColor)
   const [palette, setPalette] = useState<AmbientColorPalette>(() => {
+    const customPal = buildCustomFadePalette((currentItem as any)?.fadeColor);
+    if (customPal) return customPal;
     const imgUrl = currentItem?.backdropUrl || currentItem?.posterUrl || '';
     return getCachedPalette(imgUrl) || NEUTRAL_AMBIENT_PALETTE;
   });
@@ -48,9 +84,16 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
     onPaletteChangeRef.current = onPaletteChange;
   });
 
-  // Extract ambient color when current banner item changes
+  // Extract ambient color when current banner item changes (prioritizes Admin fadeColor if chosen, else auto-matches from image)
   useEffect(() => {
     if (!currentItem) return;
+    const customPal = buildCustomFadePalette((currentItem as any)?.fadeColor);
+    if (customPal) {
+      setPalette(customPal);
+      onPaletteChangeRef.current?.(customPal);
+      return;
+    }
+
     const imgUrl = currentItem.backdropUrl || currentItem.posterUrl || '';
     const genreHint =
       (Array.isArray(currentItem.genres) && currentItem.genres[0]) ||
@@ -78,7 +121,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [currentIndex, currentItem?.id, currentItem?.backdropUrl, currentItem?.posterUrl]);
+  }, [currentIndex, currentItem?.id, currentItem?.backdropUrl, currentItem?.posterUrl, (currentItem as any)?.fadeColor]);
 
   // Preload next image safely
   useEffect(() => {

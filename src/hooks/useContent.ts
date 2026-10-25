@@ -205,6 +205,7 @@ export function useContent() {
           description: b.subtitle && b.subtitle.trim() !== '' ? b.subtitle : target?.description || '',
           posterUrl: target?.posterUrl || target?.backdropUrl || b.imageUrl || bannerImg,
           backdropUrl: bannerImg,
+          fadeColor: b.fadeColor || '',
           rating: target?.rating || 9.8,
           year: target?.year || 2025,
           country: target?.country || 'India',

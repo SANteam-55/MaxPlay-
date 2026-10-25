@@ -631,6 +631,32 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
       (content as any)?.secondaryDownloadQualities ||
       contentPart0?.secondaryDownloadQualities;
 
+    const sanitizeQualityDict = (rawDict: Record<string, string> | undefined, savedArr: any[] | undefined): Record<string, string> => {
+      if (!rawDict || typeof rawDict !== 'object') return {};
+      const cleaned: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rawDict)) {
+        const cleanK = k.trim();
+        const cleanV = SmartStreamService.sanitizeStreamUrl(v);
+        if (cleanK && cleanV && isQualityKey(cleanK) && cleanK.toLowerCase() !== 'auto') {
+          cleaned[cleanK] = cleanV;
+        }
+      }
+      // Heal accidental 1080p fallback clone if 1080p has the exact same URL as 720p/480p/360p
+      // or if savedArr was verified by Admin and does NOT contain 1080p while other qualities exist
+      if (cleaned['1080p']) {
+        const otherKeys = Object.keys(cleaned).filter((k) => k !== '1080p');
+        const isDuplicateOfLower = otherKeys.some((k) => cleaned[k] === cleaned['1080p']);
+        const savedHasOtherOnly =
+          Array.isArray(savedArr) &&
+          savedArr.length > 0 &&
+          !savedArr.some((q: any) => String(q?.id || '').trim() === '1080p');
+        if (isDuplicateOfLower || (savedHasOtherOnly && otherKeys.length > 0)) {
+          delete cleaned['1080p'];
+        }
+      }
+      return cleaned;
+    };
+
     const buildServerQualityList = (
       serverId: 'server1' | 'server2',
       linksDict: Record<string, string> | undefined,
@@ -649,24 +675,23 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         serverSource: 'server1' | 'server2';
       }>();
 
+      const cleanedLinks = sanitizeQualityDict(linksDict, savedDlArr);
+      const hasExplicitBoxes = Object.keys(cleanedLinks).length > 0;
+
       // 1. Add Admin-configured explicit quality links (1080p, 720p, 480p, 360p)
-      if (linksDict && typeof linksDict === 'object') {
-        for (const [k, linkUrl] of Object.entries(linksDict)) {
-          const cleanKey = k.trim();
-          const cleanLink = SmartStreamService.sanitizeStreamUrl(linkUrl);
-          if (cleanLink && isQualityKey(cleanKey) && cleanKey.toLowerCase() !== 'auto') {
-            map.set(cleanKey, {
-              id: cleanKey,
-              label: `${cleanKey} ${cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver'}`,
-              badge: cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver',
-              movieSizeMb: 0,
-              epSizeMb: 0,
-              bandwidth: 0,
-              url: cleanLink,
-              isLive: true,
-              serverSource: serverId,
-            });
-          }
+      if (hasExplicitBoxes) {
+        for (const [cleanKey, cleanLink] of Object.entries(cleanedLinks)) {
+          map.set(cleanKey, {
+            id: cleanKey,
+            label: `${cleanKey} ${cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver'}`,
+            badge: cleanKey.includes('1080') ? 'Full HD' : cleanKey.includes('720') ? 'HD' : cleanKey.includes('480') ? 'Standard' : 'Data Saver',
+            movieSizeMb: 0,
+            epSizeMb: 0,
+            bandwidth: 0,
+            url: cleanLink,
+            isLive: true,
+            serverSource: serverId,
+          });
         }
       }
 
@@ -676,6 +701,8 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
           const qId = String(q?.id || '').trim();
           if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
           const existing = map.get(qId);
+          // If Admin configured explicit quality boxes, only keep verified qualities that match those boxes
+          if (hasExplicitBoxes && !existing) continue;
           const realMb = Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : (existing?.movieSizeMb || 0);
           const cleanUrl = SmartStreamService.sanitizeStreamUrl(existing?.url || q?.url || '');
           map.set(qId, {
@@ -692,16 +719,19 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
         }
       }
 
-      // 3. Merge live probed HLS manifest variants (preserving explicit per-quality link URL when present)
+      // 3. Merge live probed HLS manifest variants:
+      // STRICT RULE: If Admin configured explicit boxes or verified qualities (map.size > 0),
+      // NEVER inject unconfigured qualities (e.g. never add 1080p when Admin only entered 720p & 480p).
+      // Only use liveMeta to fill in missing real MB sizes for already-configured qualities,
+      // OR when map.size === 0 (legacy single-URL item with no quality boxes).
       if (liveMeta && Array.isArray(liveMeta.downloadQualities)) {
+        const allowNewVariants = map.size === 0;
         for (const q of liveMeta.downloadQualities) {
           const qId = String(q?.id || '').trim();
           if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
           const existing = map.get(qId);
-          // If admin configured explicit quality boxes, don't add unconfigured sub-variants unless map was empty or matches box
-          if (linksDict && Object.keys(linksDict).length > 0 && !existing && map.size > 0) {
-            // Still allow if the single master link genuinely contains multiple variants
-            if (Object.keys(linksDict).length > 1) continue;
+          if (!existing && !allowNewVariants) {
+            continue;
           }
           const realMb = existing?.movieSizeMb && existing.movieSizeMb > 0
             ? existing.movieSizeMb
@@ -720,6 +750,22 @@ export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = ({
             isLive: true,
             serverSource: serverId,
           });
+        }
+      }
+
+      // If any configured box still has 0 MB and liveMeta returned a single variant size for that box's URL, fill it in
+      if (liveMeta && Array.isArray(liveMeta.downloadQualities) && liveMeta.downloadQualities.length > 0) {
+        const fallbackProbeMb = Number(liveMeta.downloadQualities[0]?.sizeMb || 0);
+        if (fallbackProbeMb > 0 && map.size === 1) {
+          for (const [k, v] of map.entries()) {
+            if (v.movieSizeMb <= 0) {
+              map.set(k, {
+                ...v,
+                movieSizeMb: Math.round(fallbackProbeMb),
+                epSizeMb: Math.round(fallbackProbeMb),
+              });
+            }
+          }
         }
       }
 
