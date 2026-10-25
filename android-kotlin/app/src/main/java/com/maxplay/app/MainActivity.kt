@@ -1045,8 +1045,10 @@ class MainActivity : AppCompatActivity() {
                 topBar.addView(labelView)
                 topBar.addView(closeBtn)
 
+                var triedFallback = false
+
                 val adWeb = WebView(this).apply {
-                    setBackgroundColor(Color.WHITE)
+                    setBackgroundColor(Color.parseColor("#0A0A0A"))
                     layoutParams = android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         0,
@@ -1104,6 +1106,65 @@ class MainActivity : AppCompatActivity() {
                             return true
                         }
 
+                        private fun handleMainFrameError(view: WebView?, failingUrl: String?) {
+                            try {
+                                view?.stopLoading()
+                                // Immediately hide default Android WebView "Web page not available (net::ERR_SSL_PROTOCOL_ERROR)" page
+                                view?.loadDataWithBaseURL(
+                                    null,
+                                    "<html><body style='background:#0A0A0A;color:#71717A;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:13px;'>Loading sponsored content...</body></html>",
+                                    "text/html",
+                                    "UTF-8",
+                                    null
+                                )
+                            } catch (_: Exception) {}
+
+                            val target = (failingUrl ?: cleanUrl).trim()
+                            if (!triedFallback && target.isNotBlank()) {
+                                triedFallback = true
+                                Thread {
+                                    var recoveredHtml: String? = null
+                                    var recoveredBaseUrl: String = target
+                                    try {
+                                        recoveredHtml = InbuiltStreamScraper.fetchTextCorsFree(
+                                            target,
+                                            mapOf("User-Agent" to InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                                        )
+                                        if (recoveredHtml.isNullOrBlank() && target.startsWith("https://", ignoreCase = true)) {
+                                            val httpUrl = "http://" + target.substring(8)
+                                            recoveredBaseUrl = httpUrl
+                                            recoveredHtml = InbuiltStreamScraper.fetchTextCorsFree(
+                                                httpUrl,
+                                                mapOf("User-Agent" to InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                                            )
+                                        }
+                                    } catch (_: Exception) {}
+
+                                    runOnUiThread {
+                                        if (popunderDialog?.isShowing != true) return@runOnUiThread
+                                        if (!recoveredHtml.isNullOrBlank() && recoveredHtml.length > 64) {
+                                            try {
+                                                view?.loadDataWithBaseURL(
+                                                    recoveredBaseUrl,
+                                                    recoveredHtml,
+                                                    "text/html",
+                                                    "UTF-8",
+                                                    null
+                                                )
+                                            } catch (_: Exception) {
+                                                closeNativePopunderAd()
+                                            }
+                                        } else {
+                                            // ISP completely blocked the ad domain — close silently so user never sees an error screen
+                                            closeNativePopunderAd()
+                                        }
+                                    }
+                                }.start()
+                            } else {
+                                closeNativePopunderAd()
+                            }
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: android.webkit.WebResourceRequest?
@@ -1114,6 +1175,26 @@ class MainActivity : AppCompatActivity() {
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             return handleAdUrl(view, url)
+                        }
+
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?,
+                            error: android.webkit.WebResourceError?
+                        ) {
+                            if (request == null || request.isForMainFrame) {
+                                handleMainFrameError(view, request?.url?.toString())
+                            }
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun onReceivedError(
+                            view: WebView?,
+                            errorCode: Int,
+                            description: String?,
+                            failingUrl: String?
+                        ) {
+                            handleMainFrameError(view, failingUrl)
                         }
 
                         @SuppressLint("WebViewClientOnReceivedSslError")

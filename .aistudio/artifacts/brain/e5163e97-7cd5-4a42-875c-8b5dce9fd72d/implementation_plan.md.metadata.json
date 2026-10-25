@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for MaxPlay Admin APK compilation with Native Kotlin scraper verification, multi-box per-quality metadata auto-fill (real MB/GB, duration, audio languages), and smart cross-server & multi-episode download selection with zero fake sizes or dummy qualities.",
-  "updatedAt":  "2026-10-24T14:20:20.446391839Z",
+  "summary":  "Implementation plan for the overhauled Series & Movie Download System (pill-shaped global filters, vertical episode list with live filter badges, smart cross-server & fallback resolution with red warning + unselect on confirmation screen, strict per-episode audio isolation on Server 2, and native popunder ad SSL error protection).",
+  "updatedAt":  "2026-10-25T14:40:26.753710393Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

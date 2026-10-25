@@ -342,41 +342,9 @@ class DownloadManagerService {
     const secondUrl = preferSecondary && task.secondaryVideoUrl ? task.videoUrl : task.secondaryVideoUrl;
 
     const primaryResolved = await tryResolveUrl(firstUrl);
-    if (primaryResolved && secondUrl && task.language && task.language !== 'Default') {
-      try {
-        const primaryMeta =
-          SmartStreamService.getCachedStreamMeta(firstUrl || '') ||
-          (await ClientHlsDownloader.probeMasterPlaylist(primaryResolved.streamUrl, 0));
-        if (
-          primaryMeta &&
-          Array.isArray(primaryMeta.audioTracks) &&
-          primaryMeta.audioTracks.length > 0 &&
-          !primaryMeta.audioTracks.some(
-            (l) => l.toLowerCase() === task.language!.toLowerCase()
-          )
-        ) {
-          const secondaryResolved = await tryResolveUrl(secondUrl);
-          if (secondaryResolved) {
-            const secMeta =
-              SmartStreamService.getCachedStreamMeta(secondUrl) ||
-              (await ClientHlsDownloader.probeMasterPlaylist(secondaryResolved.streamUrl, 0));
-            if (
-              secMeta &&
-              Array.isArray(secMeta.audioTracks) &&
-              secMeta.audioTracks.some(
-                (l) => l.toLowerCase() === task.language!.toLowerCase()
-              )
-            ) {
-              return secondaryResolved;
-            }
-          }
-        }
-      } catch {}
-    }
-
     if (primaryResolved) return primaryResolved;
 
-    if (secondUrl) {
+    if (secondUrl && secondUrl !== firstUrl) {
       const secondaryResolved = await tryResolveUrl(secondUrl);
       if (secondaryResolved) return secondaryResolved;
     }
