@@ -1123,20 +1123,28 @@ class MainActivity : AppCompatActivity() {
                             if (!triedFallback && target.isNotBlank()) {
                                 triedFallback = true
                                 Thread {
+                                    fun fetchAdFallbackHtml(urlToFetch: String): String? {
+                                        return try {
+                                            val req = okhttp3.Request.Builder()
+                                                .url(urlToFetch)
+                                                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                                                .build()
+                                            InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { res ->
+                                                if (res.isSuccessful) res.body?.string() else null
+                                            }
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+                                    }
+
                                     var recoveredHtml: String? = null
                                     var recoveredBaseUrl: String = target
                                     try {
-                                        recoveredHtml = InbuiltStreamScraper.fetchTextCorsFree(
-                                            target,
-                                            mapOf("User-Agent" to InbuiltStreamScraper.DEFAULT_USER_AGENT)
-                                        )
+                                        recoveredHtml = fetchAdFallbackHtml(target)
                                         if (recoveredHtml.isNullOrBlank() && target.startsWith("https://", ignoreCase = true)) {
                                             val httpUrl = "http://" + target.substring(8)
                                             recoveredBaseUrl = httpUrl
-                                            recoveredHtml = InbuiltStreamScraper.fetchTextCorsFree(
-                                                httpUrl,
-                                                mapOf("User-Agent" to InbuiltStreamScraper.DEFAULT_USER_AGENT)
-                                            )
+                                            recoveredHtml = fetchAdFallbackHtml(httpUrl)
                                         }
                                     } catch (_: Exception) {}
 
